@@ -1,5 +1,29 @@
 # 📦 更新记录
 
+## v2.4.94 (借贷系统关键修复 - TIMESTAMP 崩溃 + 事务安全 + 数据一致性)
+
+- **🔴 修复致命崩溃 (TIMESTAMP 解析)**：
+  - **根因**：`loans` 表使用 `TIMESTAMP` 列类型，搭配 `detect_types=PARSE_DECLTYPES` 后，Python 内置的 `convert_timestamp()` 只接受 `"YYYY-MM-DD HH:MM:SS"` 格式，遇到 ISO 8601 的 `T` 分隔符或带微秒的格式时直接崩溃 `ValueError: not enough values to unpack`。
+  - **影响**：转账、擦弹、查金币等涉及借贷查询的命令全部崩溃。
+  - **修复**：移除 `sqlite_loan_repo.py` 中的 `detect_types`，重写 `_parse_datetime()` 手动解析，兼容空格分隔、ISO T、微秒、纯日期、bytes、带时区等所有格式。
+
+- **🔴 修复事务安全漏洞**：
+  - **`force_collect()` 无事务保护**：强制收款的三步操作（更新借条、扣款、加款）各自独立提交，中途崩溃将导致数据不一致。现已封装为单一 `with conn:` 事务。
+  - **`borrow_from_system()` 非原子操作**：系统借款先发钱后记账，若记账失败则凭空产生金币。现已封装为单一事务，发钱与记账同成功同失败。
+  - **`_update_coins()` 竞态条件**：旧实现使用「读取→修改→整体写回」模式，并发操作可能互相覆盖。新增 `_atomic_update_coins(cursor, user_id, amount)` 方法，在同一事务 cursor 内执行原子 SQL `UPDATE ... SET coins = MAX(0, coins + ?)`。
+
+- **🟡 修复逾期借条不可见**：
+  - `get_user_loans_summary()`、`get_all_loans_list()`、`get_total_debt()` 原本只查询 `status='active'`，导致已标记为 `overdue` 的借条在汇总、列表、总债务中完全消失。
+  - 新增 `_get_active_and_overdue_loans()` 辅助方法，统一查询 `active` + `overdue` 两种状态。
+
+- **🟡 修复一键还债余额覆盖**：
+  - `repay_all_loans()` 原使用 `SET coins = ?`（绝对余额覆写），并发场景下会丢失其他操作的金币变动。改为 `SET coins = MAX(0, coins - ?)` 原子扣减。
+
+- **🟡 移除读操作中的隐藏写入**：
+  - `get_total_debt()` 原本在查询总债务时悄悄更新逾期状态，导致只读调用产生数据库写入。已简化为纯查询。
+
+- **🧪 新增 24 项自动化测试**：覆盖崩溃重现、格式兼容性、源码模式验证、事务回滚、逾期可见性、原子扣减等场景。
+
 ## v2.4.93 (帮助菜单补全：借贷系统入口)
 
 - **📘 帮助菜单补全**：帮助图片新增“💵 借贷系统”分区，集中展示借贷相关指令与别名。

@@ -29,20 +29,21 @@ class LoanService:
         self.system_loan_ratio = system_loan_ratio  # 系统借款比例（历史最高金币的10%）
         self.system_loan_days = system_loan_days  # 系统借款期限（天）
 
-    def _update_coins(self, user_id: str, amount: int) -> bool:
-        """更新用户金币的辅助方法"""
-        user = self.user_repo.get_by_id(user_id)
-        if not user:
+    def _atomic_update_coins(self, cursor, user_id: str, amount: int) -> bool:
+        """在给定的 cursor（同一事务）内原子更新用户金币"""
+        cursor.execute(
+            "UPDATE users SET coins = MAX(0, coins + ?) WHERE user_id = ?",
+            (amount, user_id)
+        )
+        if cursor.rowcount == 0:
             return False
-        user.coins += amount
-        if user.coins < 0:
-            user.coins = 0
-        try:
-            self.user_repo.update(user)
-            return True
-        except Exception as e:
-            logger.error(f"更新用户 {user_id} 金币失败: {e}")
-            return False
+        # 同步更新 max_coins
+        if amount > 0:
+            cursor.execute(
+                "UPDATE users SET max_coins = coins WHERE user_id = ? AND coins > max_coins",
+                (user_id,)
+            )
+        return True
 
     def create_loan(
         self,
@@ -271,8 +272,8 @@ class LoanService:
                     lender_name = "系统" if loan.is_system_loan() else f"玩家({loan.lender_id})"
                     repaid_details.append(f"#{loan.loan_id}({lender_name}): {repay_amount:,}")
 
-                # 扣除借款人余额
-                cursor.execute("UPDATE users SET coins = ? WHERE user_id = ?", (remaining_balance, borrower_id))
+                # 原子扣减借款人金币（而非覆盖余额，防止并发覆盖）
+                cursor.execute("UPDATE users SET coins = MAX(0, coins - ?) WHERE user_id = ?", (total_repaid, borrower_id))
 
             msg = f"🏦 **一键还债结算**\n"
             msg += f"💰 总计偿还：{total_repaid:,} 金币\n"
@@ -397,111 +398,126 @@ class LoanService:
         amount: int = None
     ) -> Tuple[bool, str]:
         """
-        放贷人强制收款
+        放贷人强制收款（事务保护）
         
         amount为None时收取全部欠款
         返回: (成功标志, 消息)
         """
-        # 获取两人之间的进行中借条
-        active_loans = self.loan_repo.get_active_loans_between_users(lender_id, borrower_id)
-        if not active_loans:
-            return False, f"❌ 对方没有欠你的借条"
-
-        # 计算总欠款
-        total_debt = sum(loan.remaining_amount() for loan in active_loans)
-        
-        # 确定收款金额
-        if amount is None:
-            collect_amount = total_debt
-        else:
-            if amount <= 0:
-                return False, "❌ 收款金额必须大于0"
-            collect_amount = min(amount, total_debt)
-
-        # 检查借款人余额
-        borrower = self.user_repo.get_by_id(borrower_id)
-        if not borrower:
-            return False, "❌ 借款人账户不存在"
-        
-        # 实际能收到的金额（不能超过借款人余额）
-        actual_collect = min(collect_amount, borrower.coins)
-        
-        if actual_collect <= 0:
-            return False, f"❌ 对方金币余额为0，无法收款"
-
-        # 按照借款时间排序，优先收最早的借条
-        active_loans.sort(key=lambda x: x.borrowed_at)
-        
-        total_collected = 0
-        paid_off_loans = []
-        remaining_amount = actual_collect
-
         try:
-            for loan in active_loans:
-                if remaining_amount <= 0:
-                    break
+            with self.user_repo._get_connection() as conn:
+                cursor = conn.cursor()
 
-                # 计算这笔借条还需要还多少
-                remaining_debt = loan.remaining_amount()
-                
-                # 计算这次能收多少
-                collect_this_loan = min(remaining_amount, remaining_debt)
-                
-                # 更新借条的已还金额
-                new_repaid_amount = loan.repaid_amount + collect_this_loan
-                new_status = "paid" if new_repaid_amount >= loan.due_amount else "active"
-                
-                self.loan_repo.update_loan_repayment(loan.loan_id, new_repaid_amount, new_status)
-                
-                # 更新统计
-                total_collected += collect_this_loan
-                remaining_amount -= collect_this_loan
-                
-                if new_status == "paid":
-                    paid_off_loans.append(loan.loan_id)
+                # 获取借条
+                cursor.execute("""
+                    SELECT * FROM loans
+                    WHERE lender_id = ? AND borrower_id = ? AND status = 'active'
+                    ORDER BY borrowed_at ASC
+                """, (lender_id, borrower_id))
+                rows = cursor.fetchall()
+                if not rows:
+                    return False, "❌ 对方没有欠你的借条"
 
-            # 扣除借款人金币
-            success = self._update_coins(borrower_id, -total_collected)
-            if not success:
-                return False, "❌ 扣除借款人金币失败"
+                active_loans = [self.loan_repo._row_to_loan(r) for r in rows]
 
-            # 增加放贷人金币
-            success = self._update_coins(lender_id, total_collected)
-            if not success:
-                # 回滚借款人金币
-                self._update_coins(borrower_id, total_collected)
-                return False, "❌ 增加放贷人金币失败"
+                # 计算总欠款
+                total_debt = sum(loan.remaining_amount() for loan in active_loans)
+
+                # 确定收款金额
+                if amount is None:
+                    collect_amount = total_debt
+                else:
+                    if amount <= 0:
+                        return False, "❌ 收款金额必须大于0"
+                    collect_amount = min(amount, total_debt)
+
+                # 检查借款人余额
+                cursor.execute("SELECT coins FROM users WHERE user_id = ?", (borrower_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return False, "❌ 借款人账户不存在"
+                borrower_coins = row[0]
+
+                # 实际能收到的金额
+                actual_collect = min(collect_amount, borrower_coins)
+                if actual_collect <= 0:
+                    return False, "❌ 对方金币余额为0，无法收款"
+
+                total_collected = 0
+                paid_off_loans = []
+                remaining_amount = actual_collect
+
+                for loan in active_loans:
+                    if remaining_amount <= 0:
+                        break
+
+                    remaining_debt = loan.remaining_amount()
+                    collect_this_loan = min(remaining_amount, remaining_debt)
+
+                    new_repaid_amount = loan.repaid_amount + collect_this_loan
+                    new_status = "paid" if new_repaid_amount >= loan.due_amount else "active"
+
+                    cursor.execute("""
+                        UPDATE loans SET repaid_amount = ?, status = ?, updated_at = ? WHERE loan_id = ?
+                    """, (new_repaid_amount, new_status, datetime.now(), loan.loan_id))
+
+                    total_collected += collect_this_loan
+                    remaining_amount -= collect_this_loan
+
+                    if new_status == "paid":
+                        paid_off_loans.append(loan.loan_id)
+
+                # 原子扣减/增加金币
+                cursor.execute("UPDATE users SET coins = MAX(0, coins - ?) WHERE user_id = ?", (total_collected, borrower_id))
+                cursor.execute("UPDATE users SET coins = coins + ? WHERE user_id = ?", (total_collected, lender_id))
+                cursor.execute("UPDATE users SET max_coins = coins WHERE user_id = ? AND coins > max_coins", (lender_id,))
 
             logger.info(f"强制收款成功: {lender_id} <- {borrower_id}, 金额: {total_collected}")
-            
+
             msg = f"✅ 强制收款成功！\n💰 已收：{total_collected:,} 金币"
             if paid_off_loans:
                 msg += f"\n🎉 已还清借条：{', '.join([f'#{lid}' for lid in paid_off_loans])}"
-            
-            # 检查是否还有未还清的借条
+
+            # 事务已提交，可安全查询剩余欠款
             remaining_loans = self.loan_repo.get_active_loans_between_users(lender_id, borrower_id)
             if remaining_loans:
                 total_remaining = sum(loan.remaining_amount() for loan in remaining_loans)
                 msg += f"\n📋 剩余欠款：{total_remaining:,} 金币"
-            
+
             if actual_collect < collect_amount:
                 msg += f"\n⚠️ 对方余额不足，仅收到 {actual_collect:,} / {collect_amount:,} 金币"
-            
+
             return True, msg
 
         except Exception as e:
             logger.error(f"强制收款失败: {e}")
             return False, f"❌ 强制收款失败：{str(e)}"
 
+    def _get_active_and_overdue_loans(self, user_id: str, role: str) -> List[Loan]:
+        """获取用户的活跃+逾期借条（统一查询避免遗漏）"""
+        if role == "lender":
+            active = self.loan_repo.get_loans_by_lender(user_id, status="active")
+            overdue = self.loan_repo.get_loans_by_lender(user_id, status="overdue")
+        else:
+            active = self.loan_repo.get_loans_by_borrower(user_id, status="active")
+            overdue = self.loan_repo.get_loans_by_borrower(user_id, status="overdue")
+        # 去重合并
+        seen = set()
+        result = []
+        for loan in active + overdue:
+            if loan.loan_id not in seen:
+                seen.add(loan.loan_id)
+                result.append(loan)
+        return result
+
     def get_user_loans_summary(self, user_id: str) -> str:
         """获取用户借贷汇总信息"""
-        # 作为放贷人的借条
-        lent_loans = self.loan_repo.get_loans_by_lender(user_id, status="active")
+        # 作为放贷人的借条（包含逾期）
+        lent_loans = self._get_active_and_overdue_loans(user_id, "lender")
         total_lent = sum(loan.principal for loan in lent_loans)
         total_receivable = sum(loan.remaining_amount() for loan in lent_loans)
 
-        # 作为借款人的借条
-        borrowed_loans = self.loan_repo.get_loans_by_borrower(user_id, status="active")
+        # 作为借款人的借条（包含逾期）
+        borrowed_loans = self._get_active_and_overdue_loans(user_id, "borrower")
         total_borrowed = sum(loan.principal for loan in borrowed_loans)
         total_payable = sum(loan.remaining_amount() for loan in borrowed_loans)
 
@@ -516,10 +532,10 @@ class LoanService:
         return msg
 
     def get_all_loans_list(self, user_id: str = None) -> str:
-        """获取所有借条列表（可选过滤某个用户）"""
+        """获取所有借条列表（可选过滤某个用户，包含逾期借条）"""
         if user_id:
-            lent_loans = self.loan_repo.get_loans_by_lender(user_id, status="active")
-            borrowed_loans = self.loan_repo.get_loans_by_borrower(user_id, status="active")
+            lent_loans = self._get_active_and_overdue_loans(user_id, "lender")
+            borrowed_loans = self._get_active_and_overdue_loans(user_id, "borrower")
             all_loans = lent_loans + borrowed_loans
             
             # 去重（避免同一笔借条出现两次）
@@ -645,14 +661,28 @@ class LoanService:
         )
 
         try:
-            # 增加借款人金币
-            success = self._update_coins(borrower_id, amount)
-            if not success:
-                return False, "❌ 系统借款失败：无法发放金币", None
+            # 事务保护：发钱 + 记账必须同时成功
+            with self.user_repo._get_connection() as conn:
+                cursor = conn.cursor()
 
-            # 保存借条
-            loan_id = self.loan_repo.create_loan(loan)
-            loan.loan_id = loan_id
+                # 原子增加借款人金币
+                self._atomic_update_coins(cursor, borrower_id, amount)
+
+                # 保存借条
+                now = datetime.now()
+                cursor.execute("""
+                    INSERT INTO loans (
+                        lender_id, borrower_id, principal, interest_rate,
+                        borrowed_at, due_amount, repaid_amount, status,
+                        due_date, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    loan.lender_id, loan.borrower_id, loan.principal, loan.interest_rate,
+                    loan.borrowed_at, loan.due_amount, loan.repaid_amount, loan.status,
+                    loan.due_date, now, now
+                ))
+                loan_id = cursor.lastrowid
+                loan.loan_id = loan_id
 
             logger.info(f"系统借款成功: {borrower_id}, 金额: {amount}, 期限: {self.system_loan_days}天")
             
@@ -710,15 +740,5 @@ class LoanService:
         
         返回: 总欠款金额
         """
-        borrowed_loans = self.loan_repo.get_loans_by_borrower(user_id, status="active")
-        
-        # 实时检查并更新逾期状态
-        for loan in borrowed_loans:
-            if loan.is_overdue() and loan.status == "active":
-                self.loan_repo.update_loan_repayment(loan.loan_id, loan.repaid_amount, "overdue")
-        
-        # 重新获取（包括刚标记为逾期的）
-        all_borrowed = self.loan_repo.get_loans_by_borrower(user_id)
-        active_borrowed = [loan for loan in all_borrowed if loan.status in ('active', 'overdue')]
-        
-        return sum(loan.remaining_amount() for loan in active_borrowed)
+        all_borrowed = self._get_active_and_overdue_loans(user_id, "borrower")
+        return sum(loan.remaining_amount() for loan in all_borrowed)

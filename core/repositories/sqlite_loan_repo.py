@@ -22,7 +22,11 @@ class SqliteLoanRepository:
     def _get_connection(self) -> sqlite3.Connection:
         conn = getattr(self._local, "connection", None)
         if conn is None:
-            conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
+            # 不使用 detect_types：loans 表列类型为 TIMESTAMP，
+            # Python 内置 convert_timestamp 解析器极度脆弱，
+            # 任何非 "YYYY-MM-DD HH:MM:SS" 格式都会崩溃。
+            # 改为在 _row_to_loan → _parse_datetime 中手动解析。
+            conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA foreign_keys = ON;")
             self._local.connection = conn
@@ -51,20 +55,34 @@ class SqliteLoanRepository:
         )
 
     def _parse_datetime(self, dt_val):
-        """解析日期时间"""
+        """安全解析日期时间，兼容所有常见格式"""
+        if dt_val is None:
+            return None
         if isinstance(dt_val, datetime):
             return dt_val
-        if isinstance(dt_val, str):
-            try:
-                return datetime.fromisoformat(dt_val.replace("Z", "+00:00"))
-            except ValueError:
+        if isinstance(dt_val, (str, bytes)):
+            val = dt_val.decode('utf-8') if isinstance(dt_val, bytes) else dt_val
+            val = val.strip()
+            if not val:
+                return None
+            # 统一分隔符：ISO 8601 的 T → 空格
+            val = val.replace('T', ' ')
+            for fmt in (
+                "%Y-%m-%d %H:%M:%S.%f",
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d %H:%M",
+                "%Y-%m-%d",
+            ):
                 try:
-                    return datetime.strptime(dt_val, "%Y-%m-%d %H:%M:%S.%f")
+                    return datetime.strptime(val, fmt)
                 except ValueError:
-                    try:
-                        return datetime.strptime(dt_val, "%Y-%m-%d %H:%M:%S")
-                    except ValueError:
-                        return None
+                    continue
+            # 最后尝试 fromisoformat（兼容带时区的格式）
+            try:
+                return datetime.fromisoformat(dt_val if isinstance(dt_val, str) else val)
+            except (ValueError, TypeError):
+                pass
+            logger.warning(f"无法解析日期时间值: {dt_val!r}")
         return None
 
     def create_loan(self, loan: Loan) -> int:
