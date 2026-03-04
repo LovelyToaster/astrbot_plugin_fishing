@@ -641,17 +641,17 @@ class InventoryService:
             if rod_instance.is_equipped or rod_instance.is_locked:
                 continue
             rod_template = self.item_template_repo.get_rod_by_id(rod_instance.rod_id)
-            if rod_template and rod_template.rarity < 5:  # 只计算小于5星的鱼竿
-                sell_price = self.game_mechanics_service.calculate_sell_price(
-                    item_type="rod",
-                    rarity=rod_template.rarity,
-                    refine_level=rod_instance.refine_level,
+            # if rod_template and rod_template.rarity < 5:  # 只计算小于5星的鱼竿
+            sell_price = self.game_mechanics_service.calculate_sell_price(
+                item_type="rod",
+                rarity=rod_template.rarity,
+                refine_level=rod_instance.refine_level,
                 )
-                total_value += sell_price
-                rods_to_sell.append(rod_instance)
+            total_value += sell_price
+            rods_to_sell.append(rod_instance)
         
         if total_value == 0:
-            return {"success": False, "message": "❌ 没有可以卖出的鱼竿（已自动保留锁定、已装备或5星以上的鱼竿）"}
+            return {"success": False, "message": "❌ 没有可以卖出的鱼竿（已自动保留锁定、已装备的鱼竿）"}
         
         # 逐个删除可以卖出的鱼竿
         for rod_instance in rods_to_sell:
@@ -723,17 +723,17 @@ class InventoryService:
             if accessory_instance.is_equipped or accessory_instance.is_locked:
                 continue
             accessory_template = self.item_template_repo.get_accessory_by_id(accessory_instance.accessory_id)
-            if accessory_template and accessory_template.rarity < 5:  # 只计算小于5星的饰品
-                sell_price = self.game_mechanics_service.calculate_sell_price(
-                    item_type="accessory",
-                    rarity=accessory_template.rarity,
-                    refine_level=accessory_instance.refine_level,
-                )
-                total_value += sell_price
-                accessories_to_sell.append(accessory_instance)
+            # if accessory_template and accessory_template.rarity < 5:  # 只计算小于5星的饰品
+            sell_price = self.game_mechanics_service.calculate_sell_price(
+                item_type="accessory",
+                rarity=accessory_template.rarity,
+                refine_level=accessory_instance.refine_level,
+            )
+            total_value += sell_price
+            accessories_to_sell.append(accessory_instance)
 
         if total_value == 0:
-            return {"success": False, "message": "❌ 没有可以卖出的饰品（已自动保留锁定、已装备或5星以上的饰品）"}
+            return {"success": False, "message": "❌ 没有可以卖出的饰品（已自动保留锁定、已装备的饰品）"}
 
         # 逐个删除可以卖出的饰品
         for accessory_instance in accessories_to_sell:
