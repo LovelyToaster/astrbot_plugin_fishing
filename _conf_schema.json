@@ -209,6 +209,11 @@
         "type": "int",
         "default": 10000,
         "description": "稀有度5的出售价格"
+      },
+      "by_rarity_6": {
+        "type": "int",
+        "default": 20000,
+        "description": "稀有度6的出售价格"
       }
     }
   },
