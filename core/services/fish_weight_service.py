@@ -2,8 +2,9 @@ import random
 
 class FishWeightService:
     """处理鱼类权重计算与期望价值拟合的服务"""
-    def __init__(self):
+    def __init__(self, max_cache_size=1000):
         self.weight_cache = {}
+        self.max_cache_size = max_cache_size # 新增：设定最大缓存条目数
 
     def _calculate_ev(self, fish_list, weights):
         total_weight = sum(weights)
@@ -14,7 +15,10 @@ class FishWeightService:
     def get_weights(self, fish_list, coins_chance):
         cache_key = (tuple(f.fish_id for f in fish_list), round(coins_chance, 6))
         if cache_key in self.weight_cache:
-            return self.weight_cache[cache_key]
+            # 把它弹出来再重新塞进去，它就会自动跑到字典的最末尾（也就是“最新鲜”的位置）
+            weights = self.weight_cache.pop(cache_key)
+            self.weight_cache[cache_key] = weights
+            return weights
 
         base_weights = [1.0 for _ in fish_list] 
         base_ev = self._calculate_ev(fish_list, base_weights)
@@ -52,6 +56,14 @@ class FishWeightService:
                 final_weights = temp_weights 
 
         self.weight_cache[cache_key] = final_weights
+        
+        # 核心淘汰逻辑：如果塞入后超过了设定的最大容量
+        if len(self.weight_cache) > self.max_cache_size:
+            # 获取字典里最老的那个 Key（即排在字典最开头的元素）
+            oldest_key = next(iter(self.weight_cache))
+            # 无情抹杀
+            del self.weight_cache[oldest_key]
+
         return final_weights
 
     def choose_fish(self, new_fish_list, coins_chance):
