@@ -77,7 +77,7 @@ def test_real_fish_ev(service, rarity, coins_chance):
     for f, w in sorted_fishes[:3]:  # 最贵的
         prob = (w / total_weight) * 100 if total_weight > 0 else 0
         print(f"  [高价] {f.name[:10]:<10} (价值:{f.base_value:<6}): {prob:5.2f}%")
-    if len(sorted_fishes) > 4:
+    if len(sorted_fishes) > 6:
         print("  ...")
     for f, w in sorted_fishes[-3:]: # 最便宜的
         prob = (w / total_weight) * 100 if total_weight > 0 else 0

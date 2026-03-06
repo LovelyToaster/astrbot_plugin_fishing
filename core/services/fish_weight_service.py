@@ -18,7 +18,8 @@ class FishWeightService:
 
         base_weights = [1.0 for _ in fish_list] 
         base_ev = self._calculate_ev(fish_list, base_weights)
-        target_ev = base_ev * (1 + coins_chance)
+        target_ev = base_ev + abs(base_ev) * coins_chance # 修正负数期望的边界条件
+        safe_base_ev = max(abs(base_ev), 1.0) # 修正价值为0物品的边界条件
         max_value = max(f.base_value for f in fish_list)
 
         if target_ev >= max_value:
@@ -26,10 +27,14 @@ class FishWeightService:
         else:
             low, high = 0.0, 10.0
             final_weights = base_weights
+            i = 0
             for _ in range(50):
                 mid = (low + high) / 2.0
                 try:
-                    temp_weights = [w * ((f.base_value / base_ev) ** mid) for f, w in zip(fish_list, base_weights)]
+                    # 3. 核心底数保护：max(f.base_value, 1)
+                    # 这样负数物品的数学权重计算会被强制视为 1
+                    # 意味着当 mid 增大时，负数物品会被系统视为“最低价值的垃圾”，受到最大程度的概率打压
+                    temp_weights = [w * ((max(f.base_value, 1) / safe_base_ev) ** mid) for f, w in zip(fish_list, base_weights)]
                 except OverflowError:
                     high = mid
                     continue
