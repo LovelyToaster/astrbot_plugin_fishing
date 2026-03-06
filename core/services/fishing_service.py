@@ -40,6 +40,7 @@ class FishingService:
         self.item_template_repo = item_template_repo
         self.log_repo = log_repo
         self.buff_repo = buff_repo
+        self.fish_weight_service = fish_weight_service
         self.fishing_zone_service = fishing_zone_service
         self.config = config
 
