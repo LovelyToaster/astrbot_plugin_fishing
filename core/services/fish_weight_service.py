@@ -8,7 +8,7 @@ class FishWeightService:
     def __init__(self, max_cache_size=1000):
         self.weight_cache = OrderedDict() # 核心改动：采用正规的有序字典
         self.max_cache_size = max_cache_size # 设定最大缓存条目数
-        self._cache_lock = threading.Lock() # 新增：缓存读写互斥锁
+        self._cache_lock = threading.Lock() # 缓存读写互斥锁
 
     def _calculate_ev(self, fish_list, weights):
         total_weight = sum(weights)
@@ -23,23 +23,25 @@ class FishWeightService:
             if cache_key in self.weight_cache:
                 # 直接把该键移动到最末尾（标记为最新鲜）
                 self.weight_cache.move_to_end(cache_key)
-                return self.weight_cache[cache_key]
+                return list(self.weight_cache[cache_key]) # 修改：返回一个新的列表，避免外部修改缓存中的数据
 
         base_weights = [1.0 for _ in fish_list] 
         base_ev = self._calculate_ev(fish_list, base_weights)
         target_ev = base_ev + abs(base_ev) * coins_chance # 修正负数期望的边界条件
         safe_base_ev = max(abs(base_ev), 1.0) # 修正价值为0物品的边界条件
         max_value = max(f.base_value for f in fish_list)
-        min_value = min(f.base_value for f in fish_list) # 新增：找到池子里最便宜的鱼
+        min_value = min(f.base_value for f in fish_list) # 找到池子里最便宜的鱼
 
         if target_ev >= max_value:
             final_weights = [1.0 if f.base_value == max_value else 0.0 for f in fish_list]
-        elif target_ev <= min_value: # 新增：期望下界保护
+        elif target_ev <= min_value: # 期望下界保护
             final_weights = [1.0 if f.base_value == min_value else 0.0 for f in fish_list]
         else:
-            low, high = -50.0, 50.0 # 修改：扩大搜索范围
+            low, high = -50.0, 50.0 # 扩大搜索范围
             final_weights = base_weights
-            for _ in range(80):
+            temp_weights = base_weights # 处理第一次迭代就overflow的情况
+            
+            for _ in range(100):
                 mid = (low + high) / 2.0
                 try:
                     # 3. 核心底数保护：max(f.base_value, 1)
@@ -61,8 +63,6 @@ class FishWeightService:
                     high = mid
             else:
                 final_weights = temp_weights 
-
-        self.weight_cache[cache_key] = final_weights
         
         # 淘汰逻辑：如果塞入后超过了设定的最大容量
         with self._cache_lock:
@@ -76,8 +76,8 @@ class FishWeightService:
                 # 弹出最老的键值对
                 self.weight_cache.popitem(last=False)
                 
-        # 锁释放后，安全返回局部变量
-        return final_weights
+        # 修改：锁释放后，返回副本，确保外部修改不会影响缓存中的数据
+        return list(final_weights)
 
     def choose_fish(self, new_fish_list, coins_chance):
         """替代原来的 get_fish_template 函数"""
