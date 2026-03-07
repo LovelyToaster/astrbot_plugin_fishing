@@ -4,7 +4,7 @@ from typing import Optional
 from PIL import Image, ImageDraw
 from astrbot.api import logger
 
-async def get_user_avatar(user_id: str, data_dir: str, avatar_size: int = 50) -> Optional[Image.Image]:
+async def get_user_avatar(user_id: str, data_dir: str, avatar_size: int = 50, matrix_config: dict = None) -> Optional[Image.Image]:
     """
     获取用户头像并处理为圆形
     
@@ -12,6 +12,7 @@ async def get_user_avatar(user_id: str, data_dir: str, avatar_size: int = 50) ->
         user_id: 用户ID
         data_dir: 插件的数据目录
         avatar_size: 头像尺寸
+        matrix_config: Matrix配置字典，包含server_url和access_token
     
     Returns:
         处理后的头像图像，如果失败返回None
@@ -40,25 +41,63 @@ async def get_user_avatar(user_id: str, data_dir: str, avatar_size: int = 50) ->
                     avatar_image = Image.open(avatar_cache_path).convert('RGBA')
             except:
                 pass
-        
+
         # 如果没有缓存或缓存过期，重新下载
         if avatar_image is None:
-            avatar_url = f"https://q4.qlogo.cn/headimg_dl?dst_uin={user_id}&spec=640"
-            try:
-                # 增加超时时间并添加重试机制
-                timeout = aiohttp.ClientTimeout(total=10, connect=5)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(avatar_url) as response:
-                        if response.status == 200:
-                            content = await response.read()
-                            avatar_image = Image.open(BytesIO(content)).convert('RGBA')
-                            # 保存到缓存
-                            avatar_image.save(avatar_cache_path, 'PNG')
-            except Exception as e:
-                # 如果下载失败，记录日志但不抛出异常
-                logger.warning(f"头像下载失败: {e}")
-                return None
-        
+            # 检查是否为Matrix用户ID（以@开头）
+            if user_id.startswith('@') and matrix_config:
+                # 从Matrix获取头像
+                server_url = matrix_config.get('server_url', '')
+                access_token = matrix_config.get('access_token', '')
+
+                if server_url and access_token:
+                    try:
+                        # 使用Matrix API获取用户头像
+                        timeout = aiohttp.ClientTimeout(total=10, connect=5)
+                        async with aiohttp.ClientSession(timeout=timeout) as session:
+                            # 获取用户信息
+                            profile_url = f"{server_url}/_matrix/client/v3/profile/{user_id}"
+
+                            async with session.get(profile_url) as response:
+                                if response.status == 200:
+                                    profile_data = await response.json()
+                                    avatar_url = profile_data.get('avatar_url', '')
+
+                                    if avatar_url:
+                                        # 下载头像
+                                        # 从 mxc://server/media_id 格式中提取服务器和媒体ID
+                                        mxc_parts = avatar_url.replace('mxc://', '').split('/')
+                                        media_server = mxc_parts[0]
+                                        media_id = mxc_parts[1]
+                                        media_url = f"{server_url}/_matrix/client/v1/media/download/{media_server}/{media_id}"
+
+                                        headers={"Authorization": f"Bearer {access_token}"}
+                                        async with session.get(media_url, headers=headers) as avatar_response:
+                                            if avatar_response.status == 200:
+                                                content = await avatar_response.read()
+                                                avatar_image = Image.open(BytesIO(content)).convert('RGBA')
+                                                # 保存到缓存
+                                                avatar_image.save(avatar_cache_path, 'PNG')
+                    except Exception as e:
+                        logger.warning(f"[Matrix Avatar] Matrix头像下载失败: {e}")
+            else:
+                # 使用QQ头像API
+                avatar_url = f"https://q4.qlogo.cn/headimg_dl?dst_uin={user_id}&spec=640"
+                try:
+                    # 增加超时时间并添加重试机制
+                    timeout = aiohttp.ClientTimeout(total=10, connect=5)
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.get(avatar_url) as response:
+                            if response.status == 200:
+                                content = await response.read()
+                                avatar_image = Image.open(BytesIO(content)).convert('RGBA')
+                                # 保存到缓存
+                                avatar_image.save(avatar_cache_path, 'PNG')
+                except Exception as e:
+                    # 如果下载失败，记录日志但不抛出异常
+                    logger.warning(f"QQ头像下载失败: {e}")
+                    return None
+
         if avatar_image:
             return avatar_postprocess(avatar_image, avatar_size)
         
