@@ -356,5 +356,23 @@
         "hint": "超过此期限未还款将标记为逾期，并禁止参与骰宝和擦弹游戏"
       }
     }
+  },
+  "matrix": {
+    "description": "Matrix协议配置",
+    "type": "object",
+    "items": {
+      "server_url": {
+        "type": "string",
+        "default": "",
+        "description": "Matrix服务器地址",
+        "hint": "例如: https://matrix.org"
+      },
+      "access_token": {
+        "type": "string",
+        "default": "",
+        "description": "Matrix访问令牌",
+        "hint": "用于访问Matrix API的访问令牌"
+      }
+    }
   }
 }

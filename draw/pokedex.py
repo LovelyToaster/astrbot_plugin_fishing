@@ -63,7 +63,7 @@ def draw_rounded_rectangle(draw, bbox, radius, fill=None, outline=None, width=1)
         draw.arc([x2 - 2*radius, y2 - 2*radius, x2, y2], 0, 90, fill=outline, width=width)     # 右下角
 
 
-async def draw_pokedex(pokedex_data: Dict[str, Any], user_info: Dict[str, Any], output_path: str, page: int = 1, data_dir: str = None):
+async def draw_pokedex(pokedex_data: Dict[str, Any], user_info: Dict[str, Any], output_path: str, page: int = 1, data_dir: str = None, matrix_config: dict = None):
     """
     绘制图鉴图片
     """
@@ -103,7 +103,7 @@ async def draw_pokedex(pokedex_data: Dict[str, Any], user_info: Dict[str, Any], 
     
     # 绘制用户头像 - 参考背包做法
     if data_dir and user_info.get('user_id'):
-        if avatar_image := await get_user_avatar(user_info['user_id'], data_dir, avatar_size):
+        if avatar_image := await get_user_avatar(user_info['user_id'], data_dir, avatar_size, matrix_config):
             img.paste(avatar_image, (header_x, header_y), avatar_image)
             header_x += avatar_size + 20  # 头像存在时，标题向右偏移
     
