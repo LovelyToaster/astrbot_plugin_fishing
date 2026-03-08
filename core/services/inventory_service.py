@@ -1857,3 +1857,70 @@ class InventoryService:
             "success": True,
             "message": f"🔓 成功解锁【{accessory_name}】，该饰品现在可以正常操作"
         }
+    
+    def repair_rod(self, user_id: str, rod_instance_id: int) -> Dict[str, Any]:
+        """
+        修复鱼竿耐久度，恢复到最大值。
+
+        Args:
+            user_id: 用户ID
+            rod_instance_id: 鱼竿实例ID
+        """
+        user = self.user_repo.get_by_id(user_id)
+        if not user:
+            return {"success": False, "message": "用户不存在"}
+
+        # 获取鱼竿实例
+        rod_instance = self.inventory_repo.get_user_rod_instance_by_id(user_id, rod_instance_id)
+        if not rod_instance:
+            return {"success": False, "message": "鱼竿不存在或不属于你"}
+
+        # 获取鱼竿模板
+        rod_template = self.item_template_repo.get_rod_by_id(rod_instance.rod_id)
+        if not rod_template:
+            return {"success": False, "message": "找不到鱼竿的基础信息"}
+
+        # 检查是否为无限耐久
+        if rod_instance.current_durability is None:
+            return {"success": False, "message": "该鱼竿具有无限耐久，无需修复"}
+
+        # 检查是否有耐久度限制
+        if rod_template.durability is None:
+            return {"success": False, "message": "该鱼竿不支持耐久度"}
+
+        # 计算精炼后的最大耐久度
+        refine_bonus_multiplier = (1.5 ** (rod_instance.refine_level - 1))
+        max_durability = int(rod_template.durability * refine_bonus_multiplier)
+
+        # 检查当前耐久度是否已满
+        if rod_instance.current_durability >= max_durability:
+            return {"success": False, "message": "该鱼竿耐久度已满，无需修复"}
+
+        # 计算修复费用：按照星级决定每点耐久度的修复费用
+        durability_to_repair = max_durability - rod_instance.current_durability
+
+        # 使用公式计算修复费用：基础1金币，每高1星增加0.5金币，最高10金币
+        # 公式：每点费用 = 1 + (星级 - 1) × 0.5，上限10金币
+        base_cost_per_point = 1.0  # 1星基础费用
+        rarity_bonus = max(0, (rod_template.rarity - 1) * 0.5)  # 星级加成
+        cost_per_point = min(10.0, base_cost_per_point + rarity_bonus)  # 最高10金币/点
+
+        # 计算总修复费用
+        repair_cost = int(durability_to_repair * cost_per_point)
+
+        # 检查金币是否足够
+        if not user.can_afford(repair_cost):
+            return {"success": False, "message": f"金币不足，修复需要 {repair_cost} 金币"}
+
+        # 执行修复
+        user.coins -= repair_cost
+        rod_instance.current_durability = max_durability
+        self.inventory_repo.update_rod_instance(rod_instance)
+        self.user_repo.update(user)
+
+        return {
+            "success": True,
+            "message": f"✅ 成功修复【{rod_template.name}】，耐久度已恢复至 {max_durability}！消耗 {repair_cost} 金币",
+            "new_durability": max_durability,
+            "repair_cost": repair_cost
+        }

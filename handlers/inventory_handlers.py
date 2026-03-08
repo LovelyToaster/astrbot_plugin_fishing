@@ -966,3 +966,65 @@ async def premium(plugin: "FishingPlugin", event: AstrMessageEvent):
         yield event.plain_result(f"💎 您的高级货币余额：{user.premium_currency}")
     else:
         yield event.plain_result("❌ 您还没有注册，请先使用 /注册 命令注册。")
+
+async def repair_rod(plugin: "FishingPlugin", event: AstrMessageEvent):
+    """修复鱼竿耐久度"""
+    user_id = plugin._get_effective_user_id(event)
+    args = event.message_str.split(" ")
+
+    # 检查参数
+    if len(args) < 2:
+        # 显示帮助信息
+        help_message = """🔧 鱼竿修复系统
+
+══════════════════════════════════
+📖 修复规则
+══════════════════════════════════
+
+• 修复费用：每恢复1点耐久度需要 1.5 金币
+• 修复目标：将鱼竿耐久度恢复到当前最大值
+• 精炼影响：精炼等级越高，最大耐久度越高
+
+══════════════════════════════════
+📝 命令用法
+══════════════════════════════════
+
+• /修复 [鱼竿ID]
+• 示例：/修复 R1A2B
+
+💡 提示：
+• 使用 /鱼竿 查看您的鱼竿列表和ID
+• 精炼成功会自动恢复耐久度
+• 5星及以上鱼竿精炼到10级可获得无限耐久
+"""
+        yield event.plain_result(help_message)
+        return
+
+    token = args[1].strip().upper()
+
+    # 检查是否为数字ID（旧格式）
+    if token.isdigit():
+        yield event.plain_result(
+            "❌ 请使用正确的鱼竿ID！\n\n📝 短码格式：\n• R开头：鱼竿（如 R2N9C）\n\n💡 提示：使用 /鱼竿 查看您的鱼竿短码"
+        )
+        return
+
+    # 检查是否为鱼竿
+    if not token.startswith("R"):
+        yield event.plain_result("❌ 只能修复鱼竿，请使用R开头的鱼竿ID")
+        return
+
+    # 解析鱼竿实例ID
+    instance_id = plugin.inventory_service.resolve_rod_instance_id(user_id, token)
+
+    if instance_id is None:
+        yield event.plain_result("❌ 无效的鱼竿ID，请检查后重试。")
+        return
+
+    # 修复鱼竿
+    result = plugin.inventory_service.repair_rod(user_id, int(instance_id))
+
+    if result["success"]:
+        yield event.plain_result(result["message"])
+    else:
+        yield event.plain_result(f"❌ 修复失败：{result['message']}")

@@ -615,6 +615,12 @@ class FishingPlugin(Star):
         async for r in inventory_handlers.refine_equipment(self, event):
             yield r
 
+    @filter.command("修复", alias={"修复鱼竿"})
+    async def repair_rod(self, event: AstrMessageEvent):
+        """修复鱼竿耐久度。用法：修复 [鱼竿ID]"""
+        async for r in inventory_handlers.repair_rod(self, event):
+            yield r
+
     @filter.command("出售", alias={"卖出"})
     async def sell_equipment(self, event: AstrMessageEvent):
         """出售装备换取金币。用法：出售 装备编号"""
