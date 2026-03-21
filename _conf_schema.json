@@ -379,5 +379,81 @@
         "hint": "用于访问Matrix API的访问令牌"
       }
     }
+  },
+  "bank": {
+    "description": "银行系统配置",
+    "type": "object",
+    "items": {
+      "bank_current_interest_rate": {
+        "description": "活期基础利率",
+        "type": "float",
+        "hint": "活期存款的每日基础利率，例如：0.001 表示 0.1%",
+        "default": 0.001,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "bank_min_interest_rate": {
+        "description": "最低活期利率",
+        "type": "float",
+        "hint": "活期存款利率下限，例如：0.0008 表示 0.08%",
+        "default": 0.0008,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "bank_max_interest_rate": {
+        "description": "最高活期利率",
+        "type": "float",
+        "hint": "活期存款利率上限，例如：0.005 表示 0.5%",
+        "default": 0.005,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "bank_rate_volatility": {
+        "description": "利率波动幅度",
+        "type": "float",
+        "hint": "利率每日变化的最大幅度，例如：0.0003 表示 0.03%",
+        "default": 0.0003,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "bank_base_fixed_rate": {
+        "description": "基础定期利率",
+        "type": "float",
+        "hint": "定期存款的每日基础利率，例如：0.003 表示 0.3%",
+        "default": 0.003,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "bank_max_fixed_rate": {
+        "description": "最高定期利率",
+        "type": "float",
+        "hint": "定期存款的最高利率（存期越长越接近此值），例如：0.15 表示 15%",
+        "default": 0.15,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "bank_pool_base_amount": {
+        "description": "资金池基准值",
+        "type": "int",
+        "hint": "用于计算利率的资金池基准值，例如：10000000 表示 1000万",
+        "default": 10000000
+      },
+      "bank_pool_exponent": {
+        "description": "资金池影响指数",
+        "type": "float",
+        "hint": "资金池对利率的影响指数，控制利率随资金池变化的敏感度",
+        "default": 0.3,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "bank_pool_factor_min": {
+        "description": "资金池因子最小值",
+        "type": "float",
+        "hint": "资金池因子的最小值，利率不会低于 base_rate * min_factor",
+        "default": 0.7,
+        "min": 0.0,
+        "max": 1.0
+      }
+    }
   }
 }

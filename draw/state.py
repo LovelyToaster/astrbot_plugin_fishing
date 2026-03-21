@@ -1,4 +1,4 @@
-import os
+﻿import os
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -374,10 +374,10 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, matrix_conf
     draw.text((card_margin, current_y), status_title, font=subtitle_font, fill=primary_medium)
     current_y += 30
 
-    # 状态卡片 - 扩展高度容纳更多信息
-    status_card_height = 120
-    draw_rounded_rectangle(draw, 
-                         (card_margin, current_y, width - card_margin, current_y + status_card_height), 
+    # 状态卡片 - 扩展高度容纳第七行信息
+    status_card_height = 175
+    draw_rounded_rectangle(draw,
+                         (card_margin, current_y, width - card_margin, current_y + status_card_height),
                          8, fill=card_bg)
 
     # 定义状态信息的网格位置 - 多行两列布局
@@ -387,6 +387,9 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, matrix_conf
     status_row2_y = current_y + 35      # 第二行
     status_row3_y = current_y + 58      # 第三行
     status_row4_y = current_y + 81      # 第四行 (鱼塘信息)
+    status_row5_y = current_y + 104     # 第五行 (银行活期 - 左)
+    status_row6_y = current_y + 127     # 第六行 (银行活期 - 右/定期左)
+    status_row7_y = current_y + 150     # 第七行 (银行定期/倒计时)
 
     # 左列第一行：签到状态
     signed_today = user_data.get('signed_in_today', False)
@@ -465,6 +468,40 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, matrix_conf
         pond_empty_text = "鱼塘里什么都没有..."
         draw.text((status_col1_x, status_row4_y), pond_empty_text, font=content_font, fill=text_muted)
 
+    # 第五行：银行活期信息（左列）
+    has_bank_account = user_data.get('has_bank_account', False)
+    bank_current_balance = user_data.get('bank_current_balance', 0)
+    settlement_countdown = user_data.get('settlement_countdown', '')
+
+    if has_bank_account:
+        bank_current_text = f"活期：{bank_current_balance:,} 金币"
+        draw.text((status_col1_x, status_row5_y), bank_current_text, font=content_font, fill=text_primary)
+    else:
+        bank_no_account_text = "暂无银行账户"
+        draw.text((status_col1_x, status_row5_y), bank_no_account_text, font=content_font, fill=text_muted)
+
+    # 第六行：下次结息倒计时（左列）
+    if has_bank_account and settlement_countdown:
+        settlement_text = f"下次结息：{settlement_countdown}"
+        draw.text((status_col1_x, status_row6_y), settlement_text, font=content_font, fill=text_secondary)
+
+    # 第七行：银行定期信息（左列）
+    bank_fixed_balance = user_data.get('bank_fixed_balance', 0)
+    matured_fixed_count = user_data.get('matured_fixed_count', 0)
+
+    if has_bank_account:
+        if matured_fixed_count > 0:
+            # 有已到期的定期存款
+            bank_fixed_text = f"定期：{matured_fixed_count}笔已到期"
+            draw.text((status_col1_x, status_row7_y), bank_fixed_text, font=content_font, fill=warning_color)
+        else:
+            # 没有到期的定期存款
+            bank_fixed_text = "定期：暂无到期的定期存款"
+            draw.text((status_col1_x, status_row7_y), bank_fixed_text, font=content_font, fill=text_muted)
+    else:
+        # 没有银行账户时显示提示
+        bank_tip_text = "使用「存款 活期 金额」命令开户"
+        draw.text((status_col1_x, status_row7_y), bank_tip_text, font=content_font, fill=text_secondary)
 
     # 10. 底部信息 - 调整位置
     current_y += status_card_height + 15
@@ -486,7 +523,7 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, matrix_conf
     return image
 
 
-def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo, buff_repo, game_config, user_id: str) -> Optional[Dict[str, Any]]:
+def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo, buff_repo, game_config, user_id: str, bank_service=None) -> Optional[Dict[str, Any]]:
     """
     获取用户状态数据
     
@@ -697,7 +734,33 @@ def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo,
     except Exception as e:
         # 如果获取鱼塘信息失败，设置为默认值
         pond_info = {'total_count': 0, 'total_value': 0}
-    
+
+    # 获取银行信息
+    bank_current_balance = 0  # 活期余额
+    bank_fixed_balance = 0  # 定期余额
+    settlement_countdown = ""  # 下次结算倒计时
+    matured_fixed_count = 0  # 到期定期存款笔数
+    has_bank_account = False  # 是否有银行账户
+
+    if bank_service:
+        try:
+            account = bank_service.bank_repo.get_account(user_id)
+            if account:
+                has_bank_account = True
+                bank_current_balance = account.current_balance
+                bank_fixed_balance = account.fixed_balance
+                settlement_countdown = bank_service._get_settlement_countdown()
+
+                # 检查定期存款到期情况
+                from ..core.domain.bank_models import DepositType
+                fixed_records = bank_service.bank_repo.get_deposit_records_by_user(
+                    user_id, DepositType.FIXED, "active"
+                )
+                matured_fixed_count = sum(1 for r in fixed_records if r.is_matured())
+        except Exception as e:
+            # 获取银行信息失败，使用默认值
+            pass
+
     return {
         'user_id': user.user_id,
         'nickname': user.nickname or user.user_id,
@@ -717,4 +780,9 @@ def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo,
         'wipe_bomb_remaining': wipe_bomb_remaining,
         'pond_info': pond_info,
         'wof_remaining_plays': wof_remaining_plays,
+        'bank_current_balance': bank_current_balance,  # 活期余额
+        'bank_fixed_balance': bank_fixed_balance,  # 定期余额
+        'settlement_countdown': settlement_countdown,  # 下次结算倒计时
+        'matured_fixed_count': matured_fixed_count,  # 到期定期存款笔数
+        'has_bank_account': has_bank_account,  # 是否有银行账户
     }

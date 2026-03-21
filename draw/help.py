@@ -226,6 +226,17 @@ def draw_help_image():
         ("清仓", "卖出所有库存"),
     ]
 
+    bank = [
+        ("银行", "查看银行帮助信息"),
+        ("银行账户", "查看我的\n银行账户"),
+        ("利率信息", "查看当前\n银行利率"),
+        ("存款详情", "查看存款\n详细信息"),
+        ("存款 活期 [金额]", "存入金币到\n活期账户"),
+        ("存款 定期 [金额] [天数]", "存入金币到\n定期账户"),
+        ("取款 活期 [金额]", "从活期账户\n取出金币"),
+        ("取款 定期", "取出所有已到期\n定期存款"),
+    ]
+
     admin = [
         ("修改金币 [用户ID] [数量]", "修改用户金币"),
         ("奖励金币 [用户ID] [数量]", "奖励用户金币\n支持中文数字"),
@@ -277,6 +288,7 @@ def draw_help_image():
     y0_est += section_delta(len(sicbo), 3)
     y0_est += section_delta(len(social), 2)
     y0_est += section_delta(len(exchange), 2)
+    y0_est += section_delta(len(bank), 3)
     y0_est += section_delta(len(admin), 2)
     y0_est += section_delta(len(loan), 2)
     footer_y_est = y0_est + 20
@@ -321,6 +333,7 @@ def draw_help_image():
     y0 = draw_section("🎲 骰宝游戏", sicbo, y0, cols=3)
     y0 = draw_section("👥 社交功能", social, y0, cols=2)
     y0 = draw_section("📈 大宗商品交易所", exchange, y0, cols=2)
+    y0 = draw_section("🏦 银行系统", bank, y0, cols=3)
     y0 = draw_section("⚙️ 管理后台（管理员）", admin, y0, cols=2)
     y0 = draw_section("💵 借贷系统", loan, y0, cols=2)
 

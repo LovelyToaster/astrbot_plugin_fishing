@@ -21,6 +21,7 @@ from .core.repositories.sqlite_user_buff_repo import SqliteUserBuffRepository
 from .core.repositories.sqlite_exchange_repo import SqliteExchangeRepository # 新增交易所Repo
 from .core.repositories.sqlite_red_packet_repo import SqliteRedPacketRepository # 新增红包Repo
 from .core.repositories.sqlite_loan_repo import SqliteLoanRepository # 新增借贷Repo
+from .core.repositories.sqlite_bank_repo import SqliteBankRepository # 新增银行Repo
 
 from .core.services.data_setup_service import DataSetupService
 from .core.services.item_template_service import ItemTemplateService
@@ -38,6 +39,7 @@ from .core.services.exchange_service import ExchangeService # 新增交易所Ser
 from .core.services.sicbo_service import SicboService # 新增骰宝Service
 from .core.services.red_packet_service import RedPacketService # 新增红包Service
 from .core.services.loan_service import LoanService # 新增借贷Service
+from .core.services.bank_service import BankService # 新增银行Service
 
 from .core.database.migration import run_migrations
 
@@ -56,10 +58,12 @@ from .handlers import (
     sicbo_handlers,
     red_packet_handlers,
     loan_handlers,
+    bank_handlers,
 )
 from .handlers.fishing_handlers import FishingHandlers
 from .handlers.exchange_handlers import ExchangeHandlers
 from .handlers.loan_handlers import LoanHandlers
+from .handlers.bank_handlers import BankHandlers
 
 
 class FishingPlugin(Star):
@@ -229,6 +233,7 @@ class FishingPlugin(Star):
         self.achievement_repo = SqliteAchievementRepository(db_path)
         self.buff_repo = SqliteUserBuffRepository(db_path)
         self.exchange_repo = SqliteExchangeRepository(db_path)
+        self.bank_repo = SqliteBankRepository(db_path)
 
         # --- 3. 组合根：实例化所有服务层，并注入依赖 ---
         # 3.1 核心服务必须在效果管理器之前实例化，以解决依赖问题
@@ -295,12 +300,39 @@ class FishingPlugin(Star):
             system_loan_ratio=loan_config.get("system_loan_ratio", 0.10),
             system_loan_days=loan_config.get("system_loan_days", 7)
         )
+
+        # 初始化银行服务
+        self.bank_service = BankService(
+            self.bank_repo,
+            self.user_repo,
+            log_repo=self.log_repo,  # 日志仓储，用于记录税收
+            # 活期利率配置
+            current_interest_rate=self.game_config.get("bank_current_interest_rate", 0.001),  # 活期基础利率
+            min_interest_rate=self.game_config.get("bank_min_interest_rate", 0.0008),  # 最低活期利率
+            max_interest_rate=self.game_config.get("bank_max_interest_rate", 0.005),  # 最高活期利率
+            rate_volatility=self.game_config.get("bank_rate_volatility", 0.0003),  # 利率波动幅度
+            # 定期利率配置
+            base_fixed_rate=self.game_config.get("bank_base_fixed_rate", 0.003),  # 基础定期利率
+            max_fixed_rate=self.game_config.get("bank_max_fixed_rate", 0.15),  # 最高定期利率
+            # 资金池影响参数
+            pool_base_amount=self.game_config.get("bank_pool_base_amount", 10000000),  # 资金池基准值
+            pool_exponent=self.game_config.get("bank_pool_exponent", 0.3),  # 资金池影响指数
+            pool_factor_min=self.game_config.get("bank_pool_factor_min", 0.7),  # 资金池因子最小值
+            # 游戏时间配置
+            game_day_hours=1.0,  # 1 游戏日 = 1 现实小时
+            daily_reset_hour=self.game_config.get("daily_reset_hour", 0),
+            # 税收配置（统一使用税收系统的配置）
+            tax_config=tax_config,  # 税收系统配置，包括银行利息税开关、起征点、税率
+        )
         
         # 初始化交易所处理器
         self.exchange_handlers = ExchangeHandlers(self)
         
         # 初始化借贷处理器
         self.loan_handlers = LoanHandlers(self.loan_service, self.user_service)
+        
+        # 初始化银行处理器
+        self.bank_handlers = BankHandlers(self.bank_service, self.user_service)
         
         #初始化钓鱼处理器
         self.fishing_handlers = FishingHandlers(self)
@@ -332,6 +364,9 @@ class FishingPlugin(Star):
         self.achievement_service.start_achievement_check_task()
         self.exchange_service.start_daily_price_update_task() # 启动交易所后台任务
         
+        # 启动银行利息结算任务
+        self.bank_service.start_interest_settlement_task()
+
         # 启动红包清理任务
         self._red_packet_cleanup_task = asyncio.create_task(self._red_packet_cleanup_scheduler())
 
@@ -1107,6 +1142,50 @@ class FishingPlugin(Star):
         async for r in social_handlers.tax_record(self, event):
             yield r
             
+    # =========== 银行系统 ==========
+
+    @filter.command("银行", alias={"银行帮助"})
+    async def bank_main(self, event: AstrMessageEvent):
+        """查看银行帮助信息和所有可用命令"""
+        async for r in self.bank_handlers.bank_help(event):
+            yield r
+
+    @filter.command("银行账户", alias={"我的银行账户", "查看银行账户"})
+    async def bank_account(self, event: AstrMessageEvent):
+        """查看你的银行账户信息"""
+        async for r in self.bank_handlers.bank_info(event):
+            yield r
+
+    @filter.command("利率信息", alias={"查看利率", "银行利率"})
+    async def bank_interest_rate(self, event: AstrMessageEvent):
+        """查看当前银行利率信息"""
+        async for r in self.bank_handlers.interest_rate_info(event):
+            yield r
+
+    @filter.command("存款")
+    async def bank_deposit(self, event: AstrMessageEvent):
+        """存款操作（支持活期和定期）"""
+        async for r in self.bank_handlers.deposit(event):
+            yield r
+
+    @filter.command("取款")
+    async def bank_withdraw(self, event: AstrMessageEvent):
+        """取款操作（支持活期和定期）"""
+        async for r in self.bank_handlers.withdraw(event):
+            yield r
+
+    @filter.command("存款详情", alias={"查看存款详情", "我的存款详情"})
+    async def bank_deposit_details(self, event: AstrMessageEvent):
+        """查看存款详情（包含本金、利息和平均利率）"""
+        async for r in self.bank_handlers.deposit_details(event):
+            yield r
+
+    @filter.command("存款记录")
+    async def bank_deposit_records(self, event: AstrMessageEvent):
+        """查看存款记录"""
+        async for r in self.bank_handlers.deposit_records(event):
+            yield r
+
     # =========== 交易所 ==========
 
     @filter.command("交易所")
@@ -1371,11 +1450,12 @@ class FishingPlugin(Star):
         self.fishing_service.stop_daily_tax_task()  # 终止独立的税收线程
         self.achievement_service.stop_achievement_check_task()
         self.exchange_service.stop_daily_price_update_task() # 终止交易所后台任务
-        
+        self.bank_service.stop_interest_settlement_task()  # 终止银行利息结算任务
+
         # 取消红包清理任务
         if hasattr(self, '_red_packet_cleanup_task') and self._red_packet_cleanup_task:
             self._red_packet_cleanup_task.cancel()
-            
+
         if self.web_admin_task:
             self.web_admin_task.cancel()
         logger.info("钓鱼插件已成功终止。")
