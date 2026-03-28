@@ -87,7 +87,7 @@ def calculate_dynamic_height(user_data: Dict[str, Any]) -> int:
     total_height = base_height + rod_height + accessory_height + bait_height + item_height + section_spacing
     return max(total_height, 600)  # 最小高度600
 
-async def draw_backpack_image(user_data: Dict[str, Any], data_dir: str, matrix_config: dict = None) -> Image.Image:
+async def draw_backpack_image(user_data: Dict[str, Any], data_dir: str, avatar_config: dict = None) -> Image.Image:
     """
     绘制用户背包图像
     
@@ -116,13 +116,13 @@ async def draw_backpack_image(user_data: Dict[str, Any], data_dir: str, matrix_c
     timeout = 20.0 if total_items > 100 else 30.0
     
     try:
-        return await asyncio.wait_for(_draw_backpack_image_impl(user_data, data_dir, matrix_config), timeout=timeout)
+        return await asyncio.wait_for(_draw_backpack_image_impl(user_data, data_dir, avatar_config), timeout=timeout)
     except asyncio.TimeoutError:
         # 超时时返回简化版本
         return _create_fallback_image(user_data)
 
 
-async def _draw_backpack_image_impl(user_data: Dict[str, Any], data_dir: str, matrix_config: dict = None) -> Image.Image:
+async def _draw_backpack_image_impl(user_data: Dict[str, Any], data_dir: str, avatar_config: dict = None) -> Image.Image:
     """
     背包图片生成的实际实现
     """
@@ -318,7 +318,7 @@ async def _draw_backpack_image_impl(user_data: Dict[str, Any], data_dir: str, ma
 
     # 绘制用户头像 - 如有
     if user_id := user_data.get('user_id'):
-        if avatar_image := await get_user_avatar(user_id, data_dir, avatar_size, matrix_config):
+        if avatar_image := await get_user_avatar(user_id, data_dir, avatar_size, avatar_config):
             image.paste(avatar_image, (col1_x, row1_y), avatar_image)
             col1_x = col1_x_with_avatar # 更新 col1_x 以适应头像位置
             col2_x = col1_x + 300  # 头像存在时，第二列起点随之右移

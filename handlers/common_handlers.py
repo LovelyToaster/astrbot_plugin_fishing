@@ -29,7 +29,7 @@ async def sign_in(self: "FishingPlugin", event: AstrMessageEvent):
 async def state(self: "FishingPlugin", event: AstrMessageEvent):
     """查看用户状态"""
     user_id = self._get_effective_user_id(event)
-    matrix_config = self.game_config.get("matrix_config", {})
+    avatar_config = self.game_config.get("avatar_config", {})
     # 调用新的数据获取函数
     user_data = get_user_state_data(
         self.user_repo,
@@ -45,7 +45,7 @@ async def state(self: "FishingPlugin", event: AstrMessageEvent):
         yield event.plain_result('❌ 用户不存在，请先发送"注册"来开始游戏')
         return
     # 生成状态图像
-    image = await draw_state_image(user_data, self.data_dir, matrix_config)
+    image = await draw_state_image(user_data, self.data_dir, avatar_config)
     # 保存图像到临时文件
     image_path = os.path.join(self.tmp_dir, "user_status.png")
     image.save(image_path)
