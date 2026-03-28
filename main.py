@@ -125,7 +125,7 @@ class FishingPlugin(Star):
         market_config = config.get("market", {})
         sell_prices_config = config.get("sell_prices", {})
         loan_config = config.get("loan", {})  # 新增借贷配置
-        matrix_config = config.get("matrix", {})  # 新增Matrix配置
+        avatar_config = config.get("avatar_config", {})
         
         # 直接从框架获取 exchange 配置（不重建）
         exchange_config = config.get("exchange", {})
@@ -218,9 +218,10 @@ class FishingPlugin(Star):
                     "6": 25.0, "7": 55.0, "8": 125.0, "9": 280.0, "10": 660.0
                 },
             },
-            "matrix_config": {
-                "server_url": matrix_config.get("server_url"),
-                "access_token": matrix_config.get("access_token"),
+            "avatar_config": {
+                "source": avatar_config.get("source", "qq"),
+                "server_url": avatar_config.get("server_url"),
+                "access_token": avatar_config.get("access_token"),
             },
             "exchange": exchange_config  # 直接使用框架的配置
         }

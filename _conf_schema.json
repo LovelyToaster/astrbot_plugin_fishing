@@ -378,21 +378,28 @@
       }
     }
   },
-  "matrix": {
-    "description": "Matrix协议配置",
+  "avatar_config": {
+    "description": "头像获取配置",
     "type": "object",
     "items": {
+      "source": {
+        "type": "string",
+        "default": "qq",
+        "description": "头像来源",
+        "hint": "来源: matrix 或 qq",
+        "options": ["qq", "matrix"]
+      },
       "server_url": {
         "type": "string",
         "default": "",
         "description": "Matrix服务器地址",
-        "hint": "例如: https://matrix.org"
+        "hint": "当来源为matrix时需要填写"
       },
       "access_token": {
         "type": "string",
         "default": "",
         "description": "Matrix访问令牌",
-        "hint": "用于访问Matrix API的访问令牌"
+        "hint": "当来源为matrix时需要填写"
       }
     }
   },
