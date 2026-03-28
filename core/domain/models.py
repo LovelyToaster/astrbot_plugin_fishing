@@ -557,8 +557,8 @@ class RedPacket:
     remaining_amount: int
     remaining_count: int
     password: Optional[str] = None  # 口令红包的口令
-    created_at: datetime = None
-    expires_at: datetime = None
+    created_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
     is_expired: bool = False
 
 @dataclass
@@ -568,4 +568,97 @@ class RedPacketRecord:
     packet_id: int
     user_id: str
     amount: int
-    claimed_at: datetime = None
+    claimed_at: Optional[datetime] = None
+
+
+@dataclass
+class CatTemplate:
+    cat_id: int
+    name: str
+    description: Optional[str] = None
+    icon_url: Optional[str] = None
+    base_hunger: int = 100
+    base_mood: int = 100
+    base_health: int = 100
+    fishing_bonus: float = 0.0
+    rare_bonus: float = 0.0
+    coin_bonus: float = 0.0
+
+
+@dataclass
+class UserCatInstance:
+    cat_instance_id: int
+    user_id: str
+    cat_id: int
+    nickname: str
+    obtained_at: datetime
+    hunger: int = 100
+    mood: int = 100
+    health: int = 100
+    level: int = 1
+    exp: int = 0
+    star: int = 1
+    rare_bonus_extra: float = 0.0
+    coin_bonus_extra: float = 0.0
+    last_feed_time: Optional[datetime] = None
+    last_play_time: Optional[datetime] = None
+    color: str = "橙色"
+    pattern: str = "纯色"
+
+
+@dataclass
+class CatDisease:
+    disease_id: int
+    name: str
+    description: str
+    symptom: str
+    min_health_threshold: int = 0
+    min_hunger_threshold: int = 0
+    min_mood_threshold: int = 0
+    onset_chance: float = 0.1
+    treatment_cost: int = 0
+    health_decay_per_hour: int = 0
+    fishing_bonus_modifier: float = 0.0
+
+
+@dataclass
+class UserCatDisease:
+    id: int
+    user_id: str
+    cat_instance_id: int
+    disease_id: int
+    disease_name: str
+    started_at: datetime
+    is_treated: bool = False
+    treatment_start: Optional[datetime] = None
+
+
+@dataclass
+class CatEvent:
+    event_id: int
+    name: str
+    description: str
+    event_type: str
+    trigger_actions: List[str]
+    weight: int
+    reward_type: Optional[str] = None
+    reward_value: Optional[int] = None
+    reward_item_id: Optional[str] = None
+    penalty_type: Optional[str] = None
+    penalty_value: Optional[int] = None
+    buff_type: Optional[str] = None
+    buff_duration_minutes: Optional[int] = None
+    is_common: bool = False
+
+
+@dataclass
+class UserCatEventRecord:
+    record_id: int
+    user_id: str
+    cat_instance_id: int
+    event_id: int
+    event_name: str
+    event_type: str
+    description: str
+    triggered_at: datetime
+    reward_info: Optional[str] = None

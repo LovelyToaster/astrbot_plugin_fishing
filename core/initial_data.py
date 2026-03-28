@@ -459,3 +459,379 @@ SHOP_DATA = [
     (2, "七海珍宝阁", "传闻中收藏着来自七个海洋的奇珍异宝。", "premium", True, None, None, 200),
     (3, "幽灵船黑市", "一艘神出鬼没的幽灵船，只在特定的时间出现。", "limited", True, "1492-10-12 00:00:00", "1492-10-12 23:59:59", 300),
 ]
+
+
+ITEMS = [
+    {
+        "item_id": "cold_medicine",
+        "name": "感冒药",
+        "rarity": 2,
+        "description": "治疗猫咪普通感冒",
+        "effect_description": "使用后治愈普通感冒",
+        "item_type": "cat_medicine",
+        "cost": 80,
+        "is_consumable": True,
+    },
+    {
+        "item_id": "stomach_medicine",
+        "name": "肠胃药",
+        "rarity": 2,
+        "description": "治疗猫咪肠胃炎",
+        "effect_description": "使用后治愈肠胃炎",
+        "item_type": "cat_medicine",
+        "cost": 150,
+        "is_consumable": True,
+    },
+    {
+        "item_id": "skin_cream",
+        "name": "皮肤病药膏",
+        "rarity": 2,
+        "description": "治疗猫咪皮肤病",
+        "effect_description": "使用后治愈皮肤病",
+        "item_type": "cat_medicine",
+        "cost": 200,
+        "is_consumable": True,
+    },
+    {
+        "item_id": "nutrient_supplement",
+        "name": "营养补充剂",
+        "rarity": 2,
+        "description": "治疗猫咪营养不良",
+        "effect_description": "使用后治愈营养不良",
+        "item_type": "cat_medicine",
+        "cost": 100,
+        "is_consumable": True,
+    },
+    {
+        "item_id": "cat_food_premium",
+        "name": "高级猫粮",
+        "rarity": 3,
+        "description": "优质猫粮，猫咪非常爱吃",
+        "effect_description": "恢复50点饱食度，附带少量经验",
+        "item_type": "cat_food",
+        "cost": 50,
+        "is_consumable": True,
+    },
+    {
+        "item_id": "small_fish",
+        "name": "小鱼干",
+        "rarity": 1,
+        "description": "猫咪经常能找到的小零食",
+        "effect_description": "猫咪的零嘴",
+        "item_type": "cat_food",
+        "cost": 10,
+        "is_consumable": True,
+    },
+]
+
+
+CATS = [
+    {
+        "cat_id": 1,
+        "name": "小橘猫",
+        "description": "温顺的小橘猫，天生好运",
+        "icon_url": None,
+        "base_hunger": 100,
+        "base_mood": 100,
+        "base_health": 100,
+        "fishing_bonus": 0.0,
+        "rare_bonus": 0.0,
+        "coin_bonus": 0.0,
+    },
+    {
+        "cat_id": 2,
+        "name": "狸花猫",
+        "description": "捕鱼高手，对鱼有敏锐直觉",
+        "icon_url": None,
+        "base_hunger": 100,
+        "base_mood": 100,
+        "base_health": 100,
+        "fishing_bonus": 0.0,
+        "rare_bonus": 0.0,
+        "coin_bonus": 0.0,
+    },
+    {
+        "cat_id": 3,
+        "name": "奶牛猫",
+        "description": "猫中哈士奇，活泼好动",
+        "icon_url": None,
+        "base_hunger": 100,
+        "base_mood": 100,
+        "base_health": 100,
+        "fishing_bonus": 0.0,
+        "rare_bonus": 0.0,
+        "coin_bonus": 0.0,
+    },
+    {
+        "cat_id": 4,
+        "name": "布偶猫",
+        "description": "温柔治愈系，钓鱼时陪伴在旁",
+        "icon_url": None,
+        "base_hunger": 100,
+        "base_mood": 100,
+        "base_health": 100,
+        "fishing_bonus": 0.0,
+        "rare_bonus": 0.0,
+        "coin_bonus": 0.0,
+    },
+    {
+        "cat_id": 5,
+        "name": "黑猫",
+        "description": "神秘使者，据说能带来好运",
+        "icon_url": None,
+        "base_hunger": 100,
+        "base_mood": 100,
+        "base_health": 100,
+        "fishing_bonus": 0.0,
+        "rare_bonus": 0.0,
+        "coin_bonus": 0.0,
+    },
+]
+
+
+CAT_DISEASES = [
+    {
+        "disease_id": 1,
+        "name": "普通感冒",
+        "description": "猫咪流鼻涕、打喷嚏",
+        "symptom": "流鼻涕、精神萎靡",
+        "min_health_threshold": 0,
+        "min_hunger_threshold": 0,
+        "min_mood_threshold": 30,
+        "onset_chance": 0.15,
+        "treatment_cost": 100,
+        "health_decay_per_hour": 2,
+        "fishing_bonus_modifier": -0.10,
+    },
+    {
+        "disease_id": 2,
+        "name": "肠胃炎",
+        "description": "猫咪食欲不振",
+        "symptom": "食欲不振、偶尔呕吐",
+        "min_health_threshold": 0,
+        "min_hunger_threshold": 20,
+        "min_mood_threshold": 0,
+        "onset_chance": 0.10,
+        "treatment_cost": 200,
+        "health_decay_per_hour": 3,
+        "fishing_bonus_modifier": -0.15,
+    },
+    {
+        "disease_id": 3,
+        "name": "皮肤病",
+        "description": "猫咪不停抓痒",
+        "symptom": "频繁抓痒、皮肤红斑",
+        "min_health_threshold": 0,
+        "min_hunger_threshold": 0,
+        "min_mood_threshold": 20,
+        "onset_chance": 0.12,
+        "treatment_cost": 300,
+        "health_decay_per_hour": 1,
+        "fishing_bonus_modifier": -0.05,
+    },
+    {
+        "disease_id": 4,
+        "name": "抑郁症",
+        "description": "猫咪整天趴着不动",
+        "symptom": "整天趴着、对一切失去兴趣",
+        "min_health_threshold": 0,
+        "min_hunger_threshold": 0,
+        "min_mood_threshold": 10,
+        "onset_chance": 0.08,
+        "treatment_cost": 150,
+        "health_decay_per_hour": 1,
+        "fishing_bonus_modifier": -0.20,
+    },
+    {
+        "disease_id": 5,
+        "name": "营养不良",
+        "description": "猫咪明显消瘦",
+        "symptom": "明显消瘦、毛发暗淡",
+        "min_health_threshold": 0,
+        "min_hunger_threshold": 10,
+        "min_mood_threshold": 0,
+        "onset_chance": 0.20,
+        "treatment_cost": 150,
+        "health_decay_per_hour": 2,
+        "fishing_bonus_modifier": -0.10,
+    },
+]
+
+
+CAT_EVENTS = [
+    {
+        "event_id": 1,
+        "name": "猫咪分享猎物",
+        "description": "猫咪消失一会儿，回来时叼着一条小鱼！",
+        "event_type": "positive",
+        "trigger_actions": ["feed"],
+        "weight": 15,
+        "reward_type": "item",
+        "reward_item_id": "small_fish",
+        "reward_value": 1,
+    },
+    {
+        "event_id": 2,
+        "name": "完美消化",
+        "description": "猫咪吃了猫粮，感觉状态特别好！",
+        "event_type": "positive",
+        "trigger_actions": ["feed"],
+        "weight": 20,
+        "reward_type": "buff",
+        "buff_type": "CAT_HEALTH_BOOST",
+        "buff_duration_minutes": 60,
+    },
+    {
+        "event_id": 3,
+        "name": "挑食抗议",
+        "description": "猫咪嫌弃地闻了闻，转身走开了...",
+        "event_type": "negative",
+        "trigger_actions": ["feed"],
+        "weight": 10,
+        "penalty_type": "mood",
+        "penalty_value": -5,
+    },
+    {
+        "event_id": 4,
+        "name": "吃太快吐了",
+        "description": "猫咪狼吞虎咽结果吃太快全吐了...",
+        "event_type": "negative",
+        "trigger_actions": ["feed"],
+        "weight": 8,
+        "penalty_type": "health",
+        "penalty_value": -10,
+    },
+    {
+        "event_id": 5,
+        "name": "捕虫高手",
+        "description": "猫咪展现了惊人的狩猎本能，抓到一只虫子！",
+        "event_type": "positive",
+        "trigger_actions": ["play"],
+        "weight": 15,
+        "reward_type": "coins",
+        "reward_value": 30,
+    },
+    {
+        "event_id": 6,
+        "name": "呼噜呼噜",
+        "description": "猫咪被撸得直打呼噜，整个世界都美好了~",
+        "event_type": "positive",
+        "trigger_actions": ["play"],
+        "weight": 25,
+        "reward_type": "exp",
+        "reward_value": 10,
+    },
+    {
+        "event_id": 7,
+        "name": "心情愉悦",
+        "description": "和猫咪玩耍后，它心情大好，在家狂奔三圈！",
+        "event_type": "positive",
+        "trigger_actions": ["play"],
+        "weight": 20,
+        "reward_type": "buff",
+        "buff_type": "CAT_MOOD_BOOST",
+        "buff_duration_minutes": 120,
+    },
+    {
+        "event_id": 8,
+        "name": "被抓伤了",
+        "description": "猫咪玩嗨了给了你一爪子...",
+        "event_type": "negative",
+        "trigger_actions": ["play"],
+        "weight": 12,
+        "penalty_type": "coins",
+        "penalty_value": -100,
+    },
+    {
+        "event_id": 9,
+        "name": "打翻花盆",
+        "description": "猫咪玩耍时不小心打翻了花盆...",
+        "event_type": "negative",
+        "trigger_actions": ["play"],
+        "weight": 10,
+        "penalty_type": "coins",
+        "penalty_value": -200,
+    },
+    {
+        "event_id": 10,
+        "name": "玩累了",
+        "description": "猫咪玩了一会儿就趴下不动了",
+        "event_type": "negative",
+        "trigger_actions": ["play"],
+        "weight": 15,
+        "penalty_type": "mood",
+        "penalty_value": -15,
+    },
+]
+
+
+def load_initial_data(conn=None):
+    initial_data = {
+        "fish": FISH_DATA,
+        "bait": BAIT_DATA,
+        "rod": ROD_DATA,
+        "accessory": ACCESSORY_DATA,
+        "title": TITLE_DATA,
+        "gacha_pool": GACHA_POOL,
+        "item": ITEM_DATA,
+        "shop": SHOP_DATA,
+        "cats": CATS,
+        "cat_diseases": CAT_DISEASES,
+        "cat_events": CAT_EVENTS,
+    }
+
+    if conn is not None:
+        cursor = conn.cursor()
+
+        def table_exists(table_name):
+            cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+                (table_name,),
+            )
+            return cursor.fetchone() is not None
+
+        if table_exists("cats"):
+            cursor.execute("SELECT COUNT(*) FROM cats")
+            row = cursor.fetchone()
+            existing_count = int(row[0]) if row else 0
+            if existing_count == 0:
+                cursor.executemany(
+                    """
+                    INSERT INTO cats (
+                        cat_id, name, rarity, description, icon_url,
+                        base_hunger, base_mood, base_health,
+                        fishing_bonus, rare_bonus, coin_bonus
+                    ) VALUES (
+                        :cat_id, :name, :rarity, :description, :icon_url,
+                        :base_hunger, :base_mood, :base_health,
+                        :fishing_bonus, :rare_bonus, :coin_bonus
+                    )
+                    """,
+                    CATS,
+                )
+
+        if table_exists("cat_diseases"):
+            cursor.execute("SELECT COUNT(*) FROM cat_diseases")
+            row = cursor.fetchone()
+            existing_count = int(row[0]) if row else 0
+            if existing_count == 0:
+                cursor.executemany(
+                    """
+                    INSERT INTO cat_diseases (
+                        disease_id, name, description, symptom,
+                        min_health_threshold, min_hunger_threshold, min_mood_threshold,
+                        onset_chance, treatment_cost, treatment_item_id,
+                        health_decay_per_hour, fishing_bonus_modifier
+                    ) VALUES (
+                        :disease_id, :name, :description, :symptom,
+                        :min_health_threshold, :min_hunger_threshold, :min_mood_threshold,
+                        :onset_chance, :treatment_cost, :treatment_item_id,
+                        :health_decay_per_hour, :fishing_bonus_modifier
+                    )
+                    """,
+                    CAT_DISEASES,
+                )
+
+        conn.commit()
+
+    return initial_data

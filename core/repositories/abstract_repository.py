@@ -11,7 +11,8 @@ from ..domain.models import (
     FishingRecord, GachaRecord, WipeBombLog, MarketListing, TaxRecord,
     GachaPool, GachaPoolItem, FishingZone, UserBuff, AquariumUpgrade,
     ShopOffer, ShopOfferCost, ShopOfferReward,
-    Commodity, Exchange, UserCommodity  # 新增交易所模型导入
+    Commodity, Exchange, UserCommodity,
+    CatTemplate, UserCatInstance, CatDisease, UserCatDisease, UserCatEventRecord
 )
 
 # 定义用户成就进度的数据结构
@@ -348,6 +349,90 @@ class AbstractInventoryRepository(ABC):
 
     @abstractmethod
     def decrease_item_quantity(self, user_id: str, item_id: int, quantity: int):
+        pass
+
+
+class AbstractCatRepository(ABC):
+    """猫咪相关的数据仓库接口"""
+
+    @abstractmethod
+    def get_all_cats(self) -> List[CatTemplate]:
+        """获取所有猫咪模板"""
+        pass
+
+    @abstractmethod
+    def get_cat_by_id(self, cat_id: int) -> Optional[CatTemplate]:
+        """根据ID获取猫咪模板"""
+        pass
+
+    @abstractmethod
+    def get_user_cats(self, user_id: str) -> List[UserCatInstance]:
+        """获取用户的所有猫咪"""
+        pass
+
+    @abstractmethod
+    def get_cat_instance(self, cat_instance_id: int) -> Optional[UserCatInstance]:
+        """获取猫咪实例"""
+        pass
+
+    @abstractmethod
+    def add_cat_instance(self, cat: UserCatInstance) -> int:
+        """添加猫咪实例，返回实例ID"""
+        pass
+
+    @abstractmethod
+    def update_cat_instance(self, cat: UserCatInstance):
+        """更新猫咪实例"""
+        pass
+
+    @abstractmethod
+    def remove_cat_instance(self, cat_instance_id: int):
+        """删除猫咪实例"""
+        pass
+
+    @abstractmethod
+    def get_user_cat_count(self, user_id: str) -> int:
+        """获取用户猫咪数量"""
+        pass
+
+    @abstractmethod
+    def get_all_cat_instances(self) -> List[UserCatInstance]:
+        """获取所有猫咪实例（用于后台任务）"""
+        pass
+
+    @abstractmethod
+    def get_all_diseases(self) -> List[CatDisease]:
+        """获取所有疾病模板"""
+        pass
+
+    @abstractmethod
+    def get_disease_by_id(self, disease_id: int) -> Optional[CatDisease]:
+        """获取疾病模板"""
+        pass
+
+    @abstractmethod
+    def get_active_disease(self, cat_instance_id: int) -> Optional[UserCatDisease]:
+        """获取猫咪当前疾病"""
+        pass
+
+    @abstractmethod
+    def add_cat_disease(self, disease: UserCatDisease):
+        """添加猫咪疾病记录"""
+        pass
+
+    @abstractmethod
+    def update_cat_disease(self, disease: UserCatDisease):
+        """更新猫咪疾病"""
+        pass
+
+    @abstractmethod
+    def add_cat_event(self, event: UserCatEventRecord):
+        """添加事件记录"""
+        pass
+
+    @abstractmethod
+    def get_recent_events(self, user_id: str, cat_instance_id: int, limit: int = 5) -> List[UserCatEventRecord]:
+        """获取最近事件"""
         pass
 
 

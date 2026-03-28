@@ -184,3 +184,14 @@ async def aquarium_help(self: "FishingPlugin", event: AstrMessageEvent):
 💡 提示：使用「水族箱」命令查看鱼ID"""
     
     yield event.plain_result(message)
+
+
+class AquariumHandlers:
+    """水族箱处理器包装器（兼容处理器注册流程）。"""
+
+    def __init__(self, plugin: "FishingPlugin"):
+        self.plugin = plugin
+
+    def register_handlers(self):
+        """当前水族箱命令已由主类装饰器注册，此处保留兼容接口。"""
+        return None

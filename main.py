@@ -22,6 +22,7 @@ from .core.repositories.sqlite_exchange_repo import SqliteExchangeRepository
 from .core.repositories.sqlite_red_packet_repo import SqliteRedPacketRepository
 from .core.repositories.sqlite_loan_repo import SqliteLoanRepository
 from .core.repositories.sqlite_bank_repo import SqliteBankRepository
+from .core.repositories.sqlite_cat_repo import SQLiteCatRepository
 
 from .core.services.data_setup_service import DataSetupService
 from .core.services.item_template_service import ItemTemplateService
@@ -41,8 +42,10 @@ from .core.services.red_packet_service import RedPacketService
 from .core.services.loan_service import LoanService
 from .core.services.bank_service import BankService
 from .core.services.fish_weight_service import FishWeightService
+from .core.services.cat_service import CatService
 
 from .core.database.migration import run_migrations
+from .core.database.connection_manager import DatabaseConnectionManager
 
 # ==========================================================
 # 导入所有指令函数
@@ -62,15 +65,18 @@ from .handlers import (
     bank_handlers,
 )
 from .handlers.fishing_handlers import FishingHandlers
+from .handlers.aquarium_handlers import AquariumHandlers
 from .handlers.exchange_handlers import ExchangeHandlers
 from .handlers.loan_handlers import LoanHandlers
 from .handlers.bank_handlers import BankHandlers
+from .handlers.cat_handlers import CatHandlers
 
 
 class FishingPlugin(Star):
 
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
+        self.config = config
 
         # --- 1. 加载配置 ---
         # 从新的嵌套结构中读取配置
@@ -101,6 +107,7 @@ class FishingPlugin(Star):
 
         db_path = os.path.join(self.data_dir, "fish.db")
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        self.db_manager = DatabaseConnectionManager(db_path)
         
         # --- 1.2. 配置数据完整性检查注释 ---
         # 以下配置项必须在此处从 AstrBotConfig 中提取并放入 game_config，
@@ -235,6 +242,7 @@ class FishingPlugin(Star):
         self.buff_repo = SqliteUserBuffRepository(db_path)
         self.exchange_repo = SqliteExchangeRepository(db_path)
         self.bank_repo = SqliteBankRepository(db_path)
+        self.cat_repo = SQLiteCatRepository(self.db_manager)
 
         # --- 3. 组合根：实例化所有服务层，并注入依赖 ---
         # 3.1 核心服务必须在效果管理器之前实例化，以解决依赖问题
@@ -327,6 +335,18 @@ class FishingPlugin(Star):
             # 税收配置（统一使用税收系统的配置）
             tax_config=tax_config,  # 税收系统配置，包括银行利息税开关、起征点、税率
         )
+
+        self.cat_service = CatService(
+            cat_repo=self.cat_repo,
+            user_repo=self.user_repo,
+            inventory_repo=self.inventory_repo,
+            item_template_repo=self.item_template_repo,
+            log_repo=self.log_repo,
+            buff_repo=self.buff_repo,
+            config=self.config,
+        )
+        
+        self.fishing_service.cat_service = self.cat_service
         
         # 初始化交易所处理器
         self.exchange_handlers = ExchangeHandlers(self)
@@ -339,6 +359,8 @@ class FishingPlugin(Star):
         
         #初始化钓鱼处理器
         self.fishing_handlers = FishingHandlers(self)
+        self.aquarium_handlers = AquariumHandlers(self)
+        self.cat_handlers = CatHandlers(self)
 
 
         # 3.2 实例化效果管理器并自动注册所有效果（需要在fishing_service之后）
@@ -369,6 +391,9 @@ class FishingPlugin(Star):
         
         # 启动银行利息结算任务
         self.bank_service.start_interest_settlement_task()
+
+        # 启动猫咪属性衰减任务
+        self.cat_service.start_cat_decay_task()
 
         # 启动红包清理任务
         self._red_packet_cleanup_task = asyncio.create_task(self._red_packet_cleanup_scheduler())
@@ -639,6 +664,51 @@ class FishingPlugin(Star):
     async def upgrade_aquarium(self, event: AstrMessageEvent):
         """升级水族箱容量，可以展示更多珍贵鱼类"""
         async for r in aquarium_handlers.upgrade_aquarium(self, event):
+            yield r
+
+    @filter.command("养猫帮助")
+    async def cat_help(self, event: AstrMessageEvent):
+        async for r in self.cat_handlers.cat_help(event):
+            yield r
+
+    @filter.command("领养猫咪")
+    async def adopt_cat(self, event: AstrMessageEvent):
+        async for r in self.cat_handlers.adopt_cat(event):
+            yield r
+
+    @filter.command("我的猫咪")
+    async def my_cats(self, event: AstrMessageEvent):
+        async for r in self.cat_handlers.my_cats(event):
+            yield r
+
+    @filter.command("猫咪状态")
+    async def cat_status(self, event: AstrMessageEvent):
+        async for r in self.cat_handlers.cat_status(event):
+            yield r
+
+    @filter.command("喂猫")
+    async def feed_cat(self, event: AstrMessageEvent):
+        async for r in self.cat_handlers.feed_cat(event):
+            yield r
+
+    @filter.command("逗猫")
+    async def play_with_cat(self, event: AstrMessageEvent):
+        async for r in self.cat_handlers.play_with_cat(event):
+            yield r
+
+    @filter.command("治疗猫咪")
+    async def treat_cat(self, event: AstrMessageEvent):
+        async for r in self.cat_handlers.treat_cat(event):
+            yield r
+
+    @filter.command("猫咪改名")
+    async def rename_cat(self, event: AstrMessageEvent):
+        async for r in self.cat_handlers.rename_cat(event):
+            yield r
+
+    @filter.command("放生猫咪")
+    async def release_cat(self, event: AstrMessageEvent):
+        async for r in self.cat_handlers.release_cat(event):
             yield r
 
     @filter.command("鱼竿")
@@ -1454,6 +1524,7 @@ class FishingPlugin(Star):
         self.achievement_service.stop_achievement_check_task()
         self.exchange_service.stop_daily_price_update_task() # 终止交易所后台任务
         self.bank_service.stop_interest_settlement_task()  # 终止银行利息结算任务
+        self.cat_service.stop_cat_decay_task()  # 终止猫咪属性衰减任务
 
         # 取消红包清理任务
         if hasattr(self, '_red_packet_cleanup_task') and self._red_packet_cleanup_task:

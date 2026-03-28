@@ -43,6 +43,7 @@ class FishingService:
         self.fish_weight_service = fish_weight_service
         self.fishing_zone_service = fishing_zone_service
         self.config = config
+        self.cat_service: Any = None
 
         # 获取每日刷新时间配置
         self.daily_reset_hour = self.config.get("daily_reset_hour", 0)
@@ -95,6 +96,34 @@ class FishingService:
             return {"success": True, "message": "🎣 自动钓鱼已开启！"}
         else:
             return {"success": True, "message": "🚫 自动钓鱼已关闭！"}
+
+    def calculate_cat_fishing_bonus(self, user_id: str) -> Dict[str, float]:
+        """
+        计算用户所有猫咪提供的钓鱼加成
+
+        Returns:
+            Dict包含 rare_bonus 和 coin_bonus
+        """
+        bonus = {
+            "rare_bonus": 0.0,
+            "coin_bonus": 0.0,
+        }
+
+        try:
+            cat_service: Any = getattr(self, "cat_service", None)
+            if not cat_service:
+                return bonus
+
+            cats = cat_service.list_user_cats(user_id)
+            for cat in cats:
+                status = cat_service.get_cat_status(user_id, cat.cat_instance_id)
+                if status.get("success"):
+                    bonus["rare_bonus"] += status.get("fishing_bonus", 0.0)
+                    bonus["coin_bonus"] += status.get("coin_bonus", 0.0)
+        except Exception as e:
+            logger.error(f"计算猫咪加成失败: {e}")
+
+        return bonus
 
     def go_fish(self, user_id: str) -> Dict[str, Any]:
         """
@@ -276,6 +305,19 @@ class FishingService:
                 garbage_reduction_modifier = bait_template.garbage_reduction_modifier
                 coins_chance += bait_template.value_modifier - 1
         logger.debug(f"使用鱼饵加成后： base_success_rate={base_success_rate}, quality_modifier={quality_modifier}, quantity_modifier={quantity_modifier}, rare_chance={rare_chance}, coins_chance={coins_chance}")
+
+        # === 猫咪加成 ===
+        try:
+            cat_service: Any = getattr(self, "cat_service", None)
+            if cat_service:
+                cat_bonus = cat_service.calculate_cat_fishing_bonus(user_id)
+                rare_chance += cat_bonus.get("rare_bonus", 0.0)
+                coins_chance += cat_bonus.get("coin_bonus", 0.0)
+                logger.debug(f"猫咪加成后： rare_chance={rare_chance}, coins_chance={coins_chance}")
+        except Exception as e:
+            logger.error(f"获取猫咪加成失败: {e}")
+        # === 猫咪加成结束 ===
+
         # 3. 判断是否成功钓到
         if random.random() >= base_success_rate:
             # 失败逻辑

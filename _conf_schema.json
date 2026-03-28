@@ -169,6 +169,22 @@
       }
     }
   },
+  "cat": {
+    "description": "猫咪系统配置",
+    "type": "object",
+    "items": {
+      "max_cats_per_user": {
+        "description": "每用户最大猫咪数量",
+        "type": "int",
+        "default": 5
+      },
+      "adopt_cost": {
+        "description": "领养猫咪费用",
+        "type": "int",
+        "default": 500
+      }
+    }
+  },
   "market": {
     "description": "市场系统配置",
     "type": "object",
