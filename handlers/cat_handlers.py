@@ -394,7 +394,8 @@ class CatHandlers:
 
 共 {result['total_cats']} 只猫咪
 成功逗猫: {result['success_count']} 只
-跳过: {result['skip_count']} 只
+冷却跳过: {result['skip_count']} 只
+心情已满跳过: {result.get('skip_mood_full', 0)} 只
 
 """
         for detail in result["details"]:
@@ -430,8 +431,9 @@ class CatHandlers:
 
 共 {result['total_cats']} 只猫咪
 成功喂食: {result['success_count']} 只
-冷却中跳过: {result['skip_cooldown']} 只
+冷却跳过: {result['skip_cooldown']} 只
 无鱼跳过: {result['skip_no_fish']} 只
+饱食已满跳过: {result.get('skip_hunger_full', 0)} 只
 使用鱼类: {result['used_fish_count']} 条
 
 """
