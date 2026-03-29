@@ -109,6 +109,119 @@ class DeepSeaService:
             self.user_repo.update(user)
             return f"💰 获得: +{amount} 金币"
 
+    def _process_encounter(self, encounter_type: str, user_id: str, adventure: DeepSeaAdventure) -> Tuple[List[str], Optional[Any]]:
+        """处理单次遭遇并返回格式化消息"""
+        message_lines = []
+        fish_obtained = None
+
+        if encounter_type == "fish_school":
+            rarity_range = self._get_fish_by_depth(adventure.depth)
+            fish = self._select_fish(*rarity_range)
+            if fish:
+                message_lines.append(f"🐟 你发现了一群 {fish.name}！")
+                message_lines.append(self._add_fish_and_format(user_id, fish, adventure))
+                fish_obtained = fish
+            else:
+                message_lines.append("🐟 鱼群游走了，什么都没钓到...")
+
+        elif encounter_type == "treasure_chest":
+            treasure_value = random.randint(50, 200) * adventure.depth
+            message_lines.append(f"📦 发现宝箱！")
+            message_lines.append(self._add_coins_and_format(user_id, treasure_value, adventure))
+
+        elif encounter_type == "current":
+            user = self.user_repo.get_by_id(user_id)
+            loss = min(int(user.coins * 0.05), adventure.entry_fee * 2)
+            message_lines.append(f"🌀 遭遇暗流！")
+            message_lines.append(self._add_coins_and_format(user_id, -loss, adventure, is_loss=True))
+
+        elif encounter_type == "shark":
+            if random.random() < 0.5:
+                user = self.user_repo.get_by_id(user_id)
+                loss = min(int(user.coins * 0.03), adventure.entry_fee * 2)
+                message_lines.append(f"🦈 遭遇鲨鱼！你转身逃跑")
+                message_lines.append(self._add_coins_and_format(user_id, -loss, adventure, is_loss=True))
+            else:
+                if random.random() < 0.6:
+                    reward = random.randint(200, 500) * adventure.depth
+                    message_lines.append(f"🦈 遭遇鲨鱼！你选择搏斗")
+                    message_lines.append(f"⚔️ 成功了！")
+                    message_lines.append(self._add_coins_and_format(user_id, reward, adventure))
+                else:
+                    user = self.user_repo.get_by_id(user_id)
+                    loss = min(int(user.coins * 0.10), adventure.entry_fee * 3)
+                    message_lines.append(f"🦈 遭遇鲨鱼！你选择搏斗")
+                    message_lines.append(f"⚔️ 被咬伤了！")
+                    message_lines.append(self._add_coins_and_format(user_id, -loss, adventure, is_loss=True))
+
+        elif encounter_type == "giant_octopus":
+            user = self.user_repo.get_by_id(user_id)
+            loss = min(int(user.coins * 0.08), adventure.entry_fee * 2)
+            message_lines.append(f"🐙 遭遇巨型章鱼！")
+            message_lines.append(f"💨 被章鱼缠绕")
+            message_lines.append(self._add_coins_and_format(user_id, -loss, adventure, is_loss=True))
+
+        elif encounter_type == "deep_lord":
+            jackpot_multiplier = 30
+            jackpot_base = adventure.entry_fee * jackpot_multiplier
+            message_lines.append(f"🐉 遭遇【深海之主】！！！")
+            message_lines.append(f"JACKPOT!!! 深海之主被你的勇气所震撼！")
+            message_lines.append(self._add_coins_and_format(user_id, jackpot_base, adventure))
+
+            fish_rarity_roll = random.random()
+            if fish_rarity_roll < 0.01:
+                fish = self._select_fish(6)
+            elif fish_rarity_roll < 0.10:
+                fish = self._select_fish(5, 5)
+            else:
+                fish = self._select_fish(4, 4)
+
+            if fish:
+                message_lines.append(self._add_fish_and_format(user_id, fish, adventure))
+
+            message_lines.append("====================")
+
+        elif encounter_type == "mermaid":
+            if random.random() < 0.5:
+                reward = random.randint(100, 300) * 3
+                message_lines.append(f"🧜‍♀️ 人鱼公主向你微笑...")
+                message_lines.append(f"💨 她赠送了你3倍好运")
+                message_lines.append(self._add_coins_and_format(user_id, reward, adventure))
+            else:
+                rarity_range = self._get_fish_by_depth(adventure.depth)
+                fish = self._select_fish(*rarity_range)
+                if fish:
+                    message_lines.append(f"🧜‍♀️ 人鱼公主赠予你一条珍贵的鱼！")
+                    message_lines.append(self._add_fish_and_format(user_id, fish, adventure))
+                    fish_obtained = fish
+                else:
+                    message_lines.append(f"🧜‍♀️ 人鱼公主说：这里没有鱼能配得上你...")
+                    message_lines.append(self._add_coins_and_format(user_id, 100, adventure))
+
+        elif encounter_type == "volcano":
+            if random.random() < 0.30:
+                fish_rarity_roll = random.random()
+                if fish_rarity_roll < 0.01:
+                    fish = self._select_fish(6)
+                elif fish_rarity_roll < 0.10:
+                    fish = self._select_fish(5, 5)
+                else:
+                    fish = self._select_fish(4, 4)
+
+                message_lines.append(f"🌋 海底火山喷发！")
+                if fish:
+                    message_lines.append(self._add_fish_and_format(user_id, fish, adventure))
+                    fish_obtained = fish
+                else:
+                    message_lines.append("💨 你躲避及时，没有损失...")
+            else:
+                user = self.user_repo.get_by_id(user_id)
+                loss = min(int(user.coins * 0.15), adventure.entry_fee * 3)
+                message_lines.append(f"🌋 海底火山喷发！")
+                message_lines.append(self._add_coins_and_format(user_id, -loss, adventure, is_loss=True))
+
+        return message_lines, fish_obtained
+
     def _save_adventure(self, adventure: DeepSeaAdventure) -> None:
         """保存探险状态到数据库（使用 user_buffs 表）"""
         buff_type = "DEEP_SEA_ADVENTURE"
@@ -202,9 +315,9 @@ class DeepSeaService:
 
 {zone_desc.get(zone, '')}
 
-━━━━━━━━━━━━━━━
+============
 🏃 使用「下潜」/「上浮」/「左游」/「右游」命令开始探索！
-━━━━━━━━━━━━━━━
+============
 
 💡 提示: 每次移动都可能遭遇不同的事件（鱼群/宝箱/暗流/鲨鱼/巨型章鱼/深海之主/人鱼公主/海底火山）"""
 
@@ -220,145 +333,51 @@ class DeepSeaService:
             return {"success": False, "message": "❌ 无效的移动方向，请使用：下潜 / 上浮 / 左游 / 右游"}
 
         old_depth = adventure.depth
-
-        if direction == "下潜":
-            adventure.depth += 1
-            adventure.position_y += 1
-        elif direction == "上浮":
-            adventure.depth = max(0, adventure.depth - 1)
-            adventure.position_y = max(0, adventure.position_y - 1)
-        elif direction == "左游":
-            adventure.position_x -= 1
-        elif direction == "右游":
-            adventure.position_x += 1
-
-        adventure.moves += 1
-
-        encounter_type = self._select_encounter()
-        encounter_name = self.ENCOUNTERS[encounter_type]["name"]
-
-        message_lines = [f"""🌊【深海探险 - 移动】🌊
-
-📍 移动: {direction}
-📊 当前深度: {adventure.depth}m | 位置: ({adventure.position_x}, {adventure.position_y})
-🎲 移动步数: {adventure.moves}
-
-━━━━━━━━━━━━━━━
-⚡ 遭遇: {encounter_name}！
-━━━━━━━━━━━━━━━"""]
-
-        reward_amount = 0
-        loss_amount = 0
+        message_lines = []
         fish_obtained = None
 
-        if encounter_type == "fish_school":
-            rarity_range = self._get_fish_by_depth(adventure.depth)
-            fish = self._select_fish(*rarity_range)
-            if fish:
-                message_lines.append(f"🐟 你发现了一群 {fish.name}！")
-                message_lines.append(self._add_fish_and_format(user_id, fish, adventure))
-                fish_obtained = fish
-            else:
-                message_lines.append("🐟 鱼群游走了，什么都没钓到...")
-
-        elif encounter_type == "treasure_chest":
-            treasure_value = random.randint(50, 200) * adventure.depth
-            message_lines.append(f"📦 发现宝箱！")
-            message_lines.append(self._add_coins_and_format(user_id, treasure_value, adventure))
-
-        elif encounter_type == "current":
-            user = self.user_repo.get_by_id(user_id)
-            loss = min(int(user.coins * 0.05), adventure.entry_fee * 2)
-            message_lines.append(f"🌀 遭遇暗流！")
-            message_lines.append(self._add_coins_and_format(user_id, -loss, adventure, is_loss=True))
-
-        elif encounter_type == "shark":
-            shark_options = ["逃跑", "搏一搏"]
-            option = random.choice(shark_options)
-            if option == "逃跑":
-                user = self.user_repo.get_by_id(user_id)
-                loss = min(int(user.coins * 0.03), adventure.entry_fee * 2)
-                message_lines.append(f"🦈 遭遇鲨鱼！")
-                message_lines.append(f"💨 你选择逃跑")
-                message_lines.append(self._add_coins_and_format(user_id, -loss, adventure, is_loss=True))
-            else:
-                if random.random() < 0.6:
-                    reward = random.randint(200, 500) * adventure.depth
-                    message_lines.append(f"🦈 遭遇鲨鱼！")
-                    message_lines.append(f"⚔️ 你选择搏一搏... 成功了！")
-                    message_lines.append(self._add_coins_and_format(user_id, reward, adventure))
+        if direction in ["下潜", "上浮"]:
+            remaining = adventure.max_depth - adventure.depth if direction == "下潜" else adventure.depth
+            step = min(5, remaining)
+            for i in range(step):
+                if direction == "下潜":
+                    adventure.depth += 1
+                    adventure.position_y += 1
                 else:
-                    user = self.user_repo.get_by_id(user_id)
-                    loss = min(int(user.coins * 0.10), adventure.entry_fee * 3)
-                    message_lines.append(f"🦈 遭遇鲨鱼！")
-                    message_lines.append(f"⚔️ 你选择搏一搏... 被咬伤了！")
-                    message_lines.append(self._add_coins_and_format(user_id, -loss, adventure, is_loss=True))
+                    adventure.depth -= 1
+                    adventure.position_y -= 1
+                adventure.moves += 1
 
-        elif encounter_type == "giant_octopus":
-            user = self.user_repo.get_by_id(user_id)
-            loss = min(int(user.coins * 0.08), adventure.entry_fee * 2)
-            message_lines.append(f"🐙 遭遇巨型章鱼！")
-            message_lines.append(f"💨 被章鱼缠绕")
-            message_lines.append(self._add_coins_and_format(user_id, -loss, adventure, is_loss=True))
+                encounter_type = self._select_encounter()
+                encounter_messages, enc_fish = self._process_encounter(encounter_type, user_id, adventure)
+                if enc_fish:
+                    fish_obtained = enc_fish
 
-        elif encounter_type == "deep_lord":
-            jackpot_multiplier = 30
-            jackpot_base = adventure.entry_fee * jackpot_multiplier
-            message_lines.append(f"🐉 遭遇【深海之主】！！！")
-            message_lines.append(f"JACKPOT!!! 深海之主被你的勇气所震撼！")
-            message_lines.append(self._add_coins_and_format(user_id, jackpot_base, adventure))
+                step_prefix = f"第{i+1}/{step}步 " if step > 1 else ""
+                message_lines.append(f"\n{step_prefix}{direction}至 {adventure.depth}m")
+                message_lines.extend(encounter_messages)
 
-            fish_rarity_roll = random.random()
-            if fish_rarity_roll < 0.01:
-                fish = self._select_fish(6)
-            elif fish_rarity_roll < 0.10:
-                fish = self._select_fish(5, 5)
-            else:
-                fish = self._select_fish(4, 4)
+                if adventure.depth >= adventure.max_depth:
+                    break
+        else:
+            if direction == "左游":
+                adventure.position_x -= 1
+            elif direction == "右游":
+                adventure.position_x += 1
 
-            if fish:
-                message_lines.append(self._add_fish_and_format(user_id, fish, adventure))
+            adventure.moves += 1
+            encounter_type = self._select_encounter()
+            encounter_messages, enc_fish = self._process_encounter(encounter_type, user_id, adventure)
+            if enc_fish:
+                fish_obtained = enc_fish
+            message_lines.append(f"\n{direction}：{abs(adventure.position_x)}步")
+            message_lines.extend(encounter_messages)
 
-            message_lines.append("━━━━━━━━━━━━━━━━━━━━")
+        header_msg = f"""🌊【深海探险 - 移动】🌊
 
-        elif encounter_type == "mermaid":
-            if random.random() < 0.5:
-                reward = random.randint(100, 300) * 3
-                message_lines.append(f"🧜‍♀️ 人鱼公主向你微笑...")
-                message_lines.append(f"💨 她赠送了你3倍好运")
-                message_lines.append(self._add_coins_and_format(user_id, reward, adventure))
-            else:
-                rarity_range = self._get_fish_by_depth(adventure.depth)
-                fish = self._select_fish(*rarity_range)
-                if fish:
-                    message_lines.append(f"🧜‍♀️ 人鱼公主赠予你一条珍贵的鱼！")
-                    message_lines.append(self._add_fish_and_format(user_id, fish, adventure))
-                    fish_obtained = fish
-                else:
-                    message_lines.append(f"🧜‍♀️ 人鱼公主说：这里没有鱼能配得上你...")
-                    message_lines.append(self._add_coins_and_format(user_id, 100, adventure))
+📊 深度: {adventure.depth}m
 
-        elif encounter_type == "volcano":
-            if random.random() < 0.30:
-                fish_rarity_roll = random.random()
-                if fish_rarity_roll < 0.01:
-                    fish = self._select_fish(6)
-                elif fish_rarity_roll < 0.10:
-                    fish = self._select_fish(5, 5)
-                else:
-                    fish = self._select_fish(4, 4)
-
-                message_lines.append(f"🌋 海底火山喷发！")
-                if fish:
-                    message_lines.append(self._add_fish_and_format(user_id, fish, adventure))
-                    fish_obtained = fish
-                else:
-                    message_lines.append("💨 你躲避及时，没有损失...")
-            else:
-                user = self.user_repo.get_by_id(user_id)
-                loss = min(int(user.coins * 0.15), adventure.entry_fee * 3)
-                message_lines.append(f"🌋 海底火山喷发！")
-                message_lines.append(self._add_coins_and_format(user_id, -loss, adventure, is_loss=True))
+"""
 
         if adventure.depth >= adventure.max_depth:
             adventure.status = "completed"
@@ -369,30 +388,30 @@ class DeepSeaService:
                 self.user_repo.update(user)
 
             message_lines.append(f"""
-━━━━━━━━━━━━━━━
+============
 🏆 恭喜！你到达了{adventure.zone}的最深处！
 📊 探险结算:
    总收益: +{adventure.current_reward} 金币
    总损失: -{adventure.current_loss} 金币
    净收益: {net_profit:+.0f} 金币
-━━━━━━━━━━━━━━━""")
+============""")
             self._clear_adventure(user_id)
         else:
             self._save_adventure(adventure)
 
         profit = adventure.current_reward - adventure.current_loss
         message_lines.append(f"""
-━━━━━━━━━━━━━━━
+============
 📊 当前探险状态:
    当前收益: +{adventure.current_reward} 金币
    当前损失: -{adventure.current_loss} 金币
    净收益: {profit:+.0f} 金币
    剩余深度: {adventure.max_depth - adventure.depth}m
-━━━━━━━━━━━━━━━""")
+============""")
 
         return {
             "success": True,
-            "message": "\n".join(message_lines),
+            "message": header_msg + "\n".join(message_lines),
             "adventure": adventure,
             "fish_obtained": fish_obtained,
         }
@@ -416,11 +435,11 @@ class DeepSeaService:
         message = f"""🏃【深海探险 - 回头】🏃
 
 📊 探险结算:
-━━━━━━━━━━━━━━━
+============
 💰 入场费: {adventure.entry_fee} 金币
 📈 总收益: +{adventure.current_reward} 金币
 📉 总损失: -{adventure.current_loss} 金币
-━━━━━━━━━━━━━━━
+============
 💵 净收益: {net_profit:+.0f} 金币
 🐟 移动步数: {adventure.moves}
 ⏱️ 探险时长: {(get_now() - adventure.started_at).total_seconds():.0f} 秒
@@ -446,15 +465,15 @@ class DeepSeaService:
 📍 区域: {zone_emoji.get(adventure.zone, '')} {adventure.zone}
 📊 当前深度: {adventure.depth}m / {adventure.max_depth}m
 🎯 位置坐标: ({adventure.position_x}, {adventure.position_y})
-━━━━━━━━━━━━━━━
+============
 💰 入场费: {adventure.entry_fee} 金币
 📈 当前收益: +{adventure.current_reward} 金币
 📉 当前损失: -{adventure.current_loss} 金币
 💵 净收益: {profit:+.0f} 金币
-━━━━━━━━━━━━━━━
+============
 🎲 移动步数: {adventure.moves}
 ⏱️ 开始时间: {adventure.started_at.strftime('%H:%M:%S')}
-━━━━━━━━━━━━━━━
+============
 
 💡 继续使用「下潜」/「上浮」/「左游」/「右游」命令探索，或使用「回头」命令结束探险。"""
 

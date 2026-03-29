@@ -20,7 +20,7 @@ async def deep_sea_start(self: "FishingPlugin", event: AstrMessageEvent):
 
 请选择要探索的区域：
 
-━━━━━━━━━━━━━━━
+============
 1️⃣ 浅海区
    💰 入场费: 500-2000 金币
    📊 深度: 1-10m
@@ -38,7 +38,7 @@ async def deep_sea_start(self: "FishingPlugin", event: AstrMessageEvent):
    📊 深度: 21-30m
    🐟 鱼类稀有度: 3-5星
    ⚠️ 传说中的深海之主出没！
-━━━━━━━━━━━━━━━
+============
 
 💡 使用「深海 浅海区」/「深海 深海区」/「深海 深渊区」开始探险！"""
 
