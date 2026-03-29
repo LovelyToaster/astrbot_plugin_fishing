@@ -43,14 +43,16 @@ class CatHandlers:
 • /猫咪状态 [编号] - 查看指定猫咪的详细状态
 • /喂猫 [编号] [鱼ID] - 用鱼喂猫（高星级鱼可能触发升星）
 • /逗猫 [编号] - 陪猫咪玩耍恢复心情
+• /一键喂猫 - 自动用最高星鱼喂所有猫咪
+• /一键逗猫 - 逗所有猫咪恢复心情
 • /治疗猫咪 [编号] - 治疗生病的猫咪
 • /猫咪改名 [编号] [新名字] - 给猫咪改名
 • /放生猫咪 [编号] - 放生猫咪（不可恢复）
 • /养猫帮助 - 显示此帮助信息
 
 喂鱼效果（消耗1条鱼）：
-饱食度: 8 + 星级*2
-经验: 星级
+饱食度: 8 + 鱼稀有度*2
+经验: 鱼稀有度
 心情: 4星以上开始有
 
 使用「鱼塘」命令查看鱼ID"""
@@ -379,3 +381,78 @@ class CatHandlers:
         self.cat_service.cat_repo.remove_cat_instance(cat.cat_instance_id)
 
         yield event.plain_result(f"您放生了「{cat.nickname}」，愿它找到好的归宿")
+
+    async def batch_play_with_cats(self, event: AstrMessageEvent):
+        user_id = self.plugin._get_effective_user_id(event)
+        result = self.cat_service.batch_play_with_cats(user_id)
+
+        if not result["success"]:
+            yield event.plain_result(f"❌ {result['message']}")
+            return
+
+        msg = f"""【一键逗猫】
+
+共 {result['total_cats']} 只猫咪
+成功逗猫: {result['success_count']} 只
+跳过: {result['skip_count']} 只
+
+"""
+        for detail in result["details"]:
+            if detail["status"] == "success":
+                msg += f"✓ {detail['cat_name']}\n"
+                msg += f"  ↳ 心情 {detail['old_mood']}→{detail['new_mood']}(+{detail['mood_gain']})\n"
+                msg += f"  ↳ 经验 +{detail['exp_gain']}\n"
+                if detail.get("level_up"):
+                    msg += f"  ↳ 升级 Lv.{detail['level_up']}\n"
+                if detail.get("star_up"):
+                    msg += f"  ↳ ⭐ 升星! {detail['star_up']['old_star']}→{detail['star_up']['new_star']}★\n"
+                if detail.get("event"):
+                    emoji = "🎁" if detail.get("event_type") == "positive" else "😿"
+                    msg += f"  ↳ {emoji} 【{detail['event']}】{detail.get('event_desc', '')}\n"
+                if detail.get("disease"):
+                    msg += f"  ↳ 生病: {detail['disease']}\n"
+            else:
+                msg += f"✗ {detail['cat_name']}: {detail['reason']}\n"
+
+        msg += f"\n总计: 心情 +{result['total_mood_gain']}, 经验 +{result['total_exp_gain']}"
+
+        yield event.plain_result(msg)
+
+    async def batch_feed_cats(self, event: AstrMessageEvent):
+        user_id = self.plugin._get_effective_user_id(event)
+        result = self.cat_service.batch_feed_cats(user_id)
+
+        if not result["success"]:
+            yield event.plain_result(f"❌ {result['message']}")
+            return
+
+        msg = f"""【一键喂猫】
+
+共 {result['total_cats']} 只猫咪
+成功喂食: {result['success_count']} 只
+冷却中跳过: {result['skip_cooldown']} 只
+无鱼跳过: {result['skip_no_fish']} 只
+使用鱼类: {result['used_fish_count']} 条
+
+"""
+        for detail in result["details"]:
+            if detail["status"] == "success":
+                msg += f"✓ {detail['cat_name']}: 喂{detail['fish_name']}({detail['rarity']}星)\n"
+                msg += f"  ↳ 饱食 {detail['old_hunger']}→{detail['new_hunger']}(+{detail['hunger_gain']})\n"
+                msg += f"  ↳ 心情 {detail['old_mood']}→{detail['new_mood']}(+{detail['mood_gain']})\n"
+                msg += f"  ↳ 经验 +{detail['exp_gain']}\n"
+                if detail.get("star_up"):
+                    msg += f"  ↳ ⭐ 升星! {detail['star_up']['old_star']}→{detail['star_up']['new_star']}★\n"
+                if detail.get("level_up"):
+                    msg += f"  ↳ 升级 Lv.{detail['level_up']}\n"
+                if detail.get("event"):
+                    emoji = "🎁" if detail.get("event_type") == "positive" else "😿"
+                    msg += f"  ↳ {emoji} 【{detail['event']}】{detail.get('event_desc', '')}\n"
+                if detail.get("disease"):
+                    msg += f"  ↳ 生病: {detail['disease']}\n"
+            else:
+                msg += f"✗ {detail['cat_name']}: {detail['reason']}\n"
+
+        msg += f"\n总计: 饱食 +{result['total_hunger_gain']}, 心情 +{result['total_mood_gain']}, 经验 +{result['total_exp_gain']}"
+
+        yield event.plain_result(msg)

@@ -712,6 +712,16 @@ class FishingPlugin(Star):
         async for r in self.cat_handlers.release_cat(event):
             yield r
 
+    @filter.command("一键逗猫")
+    async def batch_play_with_cats(self, event: AstrMessageEvent):
+        async for r in self.cat_handlers.batch_play_with_cats(event):
+            yield r
+
+    @filter.command("一键喂猫")
+    async def batch_feed_cats(self, event: AstrMessageEvent):
+        async for r in self.cat_handlers.batch_feed_cats(event):
+            yield r
+
     @filter.command("鱼竿")
     async def rod(self, event: AstrMessageEvent):
         """查看你拥有的所有鱼竿"""

@@ -470,6 +470,246 @@ class CatService:
     def list_user_cats(self, user_id: str) -> List[UserCatInstance]:
         return self.cat_repo.get_user_cats(user_id)
 
+    def batch_play_with_cats(self, user_id: str) -> Dict[str, Any]:
+        cats = self.list_user_cats(user_id)
+        if not cats:
+            return {"success": False, "message": "您还没有领养猫咪"}
+
+        results = []
+        success_count = 0
+        skip_count = 0
+        total_mood_gain = 0
+        total_exp_gain = 0
+        star_up_count = 0
+
+        for cat in cats:
+            try:
+                last_play = cat.last_play_time or cat.obtained_at
+                cooldown_remaining = max(0, 60 - int((get_now() - last_play).total_seconds()))
+                if cooldown_remaining > 0:
+                    results.append({
+                        "cat_name": cat.nickname,
+                        "status": "skipped",
+                        "reason": f"冷却中({cooldown_remaining}秒)"
+                    })
+                    skip_count += 1
+                    continue
+
+                old_mood = cat.mood
+                mood_gain = random.randint(5, 15)
+                cat.mood = min(100, cat.mood + mood_gain)
+                cat.last_play_time = get_now()
+                cat.exp += 10
+
+                level_up, _, new_level = self._check_level_up(cat)
+                self.cat_repo.update_cat_instance(cat)
+
+                self._safe_log(
+                    user_id,
+                    "cat_play",
+                    f"批量逗猫: cat={cat.cat_instance_id}, mood={old_mood}->{cat.mood}",
+                )
+
+                event_result = self.trigger_random_event(user_id, cat.cat_instance_id, "play")
+
+                result_entry = {
+                    "cat_name": cat.nickname,
+                    "status": "success",
+                    "old_mood": old_mood,
+                    "new_mood": cat.mood,
+                    "mood_gain": mood_gain,
+                    "exp_gain": 10
+                }
+                if level_up:
+                    result_entry["level_up"] = new_level
+                if event_result:
+                    result_entry["event"] = event_result.get("name")
+                    result_entry["event_type"] = event_result.get("event_type")
+                    result_entry["event_desc"] = event_result.get("description", "")
+
+                disease_result = self.check_disease_onset(user_id, cat.cat_instance_id)
+                if disease_result:
+                    result_entry["disease"] = disease_result.get("name")
+
+                results.append(result_entry)
+                success_count += 1
+                total_mood_gain += mood_gain
+                total_exp_gain += 10
+
+            except Exception as e:
+                logger.warning(f"批量逗猫处理猫咪 {cat.cat_instance_id} 失败: {e}")
+                results.append({
+                    "cat_name": cat.nickname,
+                    "status": "error",
+                    "reason": "处理失败"
+                })
+
+        return {
+            "success": True,
+            "total_cats": len(cats),
+            "success_count": success_count,
+            "skip_count": skip_count,
+            "total_mood_gain": total_mood_gain,
+            "total_exp_gain": total_exp_gain,
+            "star_up_count": star_up_count,
+            "details": results
+        }
+
+    def batch_feed_cats(self, user_id: str) -> Dict[str, Any]:
+        cats = self.list_user_cats(user_id)
+        if not cats:
+            return {"success": False, "message": "您还没有领养猫咪"}
+
+        fish_inv = self.inventory_repo.get_fish_inventory(user_id)
+        if not fish_inv:
+            return {"success": False, "message": "您的鱼塘中没有鱼"}
+
+        fish_by_rarity = {}
+        for fish in fish_inv:
+            if fish.quantity > 0:
+                fish_tpl = self.item_template_repo.get_fish_by_id(fish.fish_id)
+                if fish_tpl:
+                    rarity = fish_tpl.rarity
+                    if rarity not in fish_by_rarity:
+                        fish_by_rarity[rarity] = []
+                    fish_by_rarity[rarity].append({
+                        "fish_id": fish.fish_id,
+                        "quality_level": fish.quality_level,
+                        "name": fish_tpl.name,
+                        "quantity": fish.quantity
+                    })
+
+        if not fish_by_rarity:
+            return {"success": False, "message": "您的鱼塘中没有可用的鱼"}
+
+        sorted_rarities = sorted(fish_by_rarity.keys(), reverse=True)
+
+        results = []
+        success_count = 0
+        skip_no_fish = 0
+        skip_cooldown = 0
+        total_hunger_gain = 0
+        total_mood_gain = 0
+        total_exp_gain = 0
+        used_fish_count = 0
+        star_up_count = 0
+
+        for cat in cats:
+            try:
+                last_feed = cat.last_feed_time or cat.obtained_at
+                cooldown_remaining = max(0, 60 - int((get_now() - last_feed).total_seconds()))
+                if cooldown_remaining > 0:
+                    results.append({
+                        "cat_name": cat.nickname,
+                        "status": "skipped",
+                        "reason": f"冷却中({cooldown_remaining}秒)"
+                    })
+                    skip_cooldown += 1
+                    continue
+
+                fish_to_use = None
+                fish_rarity = None
+                for rarity in sorted_rarities:
+                    for fish_info in fish_by_rarity[rarity]:
+                        if fish_info["quantity"] > 0:
+                            fish_to_use = fish_info
+                            fish_rarity = rarity
+                            break
+                    if fish_to_use:
+                        break
+
+                if not fish_to_use:
+                    results.append({
+                        "cat_name": cat.nickname,
+                        "status": "skipped",
+                        "reason": "没有可用的鱼"
+                    })
+                    skip_no_fish += 1
+                    continue
+
+                old_hunger = cat.hunger
+                old_mood = cat.mood
+                hunger_gain = 8 + fish_rarity * 2
+                mood_gain = max(0, fish_rarity - 3)
+                exp_gain = fish_rarity
+
+                cat.hunger = min(100, cat.hunger + hunger_gain)
+                cat.mood = min(100, cat.mood + mood_gain)
+                cat.last_feed_time = get_now()
+                cat.exp += exp_gain
+
+                level_up, _, new_level = self._check_level_up(cat)
+                star_up_result = self._check_star_up(cat, fish_rarity)
+                self.cat_repo.update_cat_instance(cat)
+
+                self.inventory_repo.update_fish_quantity(
+                    user_id, fish_to_use["fish_id"], -1, fish_to_use["quality_level"]
+                )
+                fish_to_use["quantity"] -= 1
+
+                self._safe_log(
+                    user_id,
+                    "cat_feed",
+                    f"批量喂猫: cat={cat.cat_instance_id}, fish={fish_to_use['fish_id']}(rarity={fish_rarity})",
+                )
+
+                event_result = self.trigger_random_event(user_id, cat.cat_instance_id, "feed")
+                disease_result = self.check_disease_onset(user_id, cat.cat_instance_id)
+
+                result_entry = {
+                    "cat_name": cat.nickname,
+                    "status": "success",
+                    "fish_name": fish_to_use["name"],
+                    "rarity": fish_rarity,
+                    "old_hunger": old_hunger,
+                    "new_hunger": cat.hunger,
+                    "hunger_gain": hunger_gain,
+                    "old_mood": old_mood,
+                    "new_mood": cat.mood,
+                    "mood_gain": mood_gain,
+                    "exp_gain": exp_gain
+                }
+                if level_up:
+                    result_entry["level_up"] = new_level
+                if star_up_result:
+                    result_entry["star_up"] = star_up_result
+                    star_up_count += 1
+                if event_result:
+                    result_entry["event"] = event_result.get("name")
+                    result_entry["event_type"] = event_result.get("event_type")
+                    result_entry["event_desc"] = event_result.get("description", "")
+                if disease_result:
+                    result_entry["disease"] = disease_result.get("name")
+
+                results.append(result_entry)
+                success_count += 1
+                total_hunger_gain += hunger_gain
+                total_mood_gain += mood_gain
+                total_exp_gain += exp_gain
+                used_fish_count += 1
+
+            except Exception as e:
+                logger.warning(f"批量喂猫处理猫咪 {cat.cat_instance_id} 失败: {e}")
+                results.append({
+                    "cat_name": cat.nickname,
+                    "status": "error",
+                    "reason": "处理失败"
+                })
+
+        return {
+            "success": True,
+            "total_cats": len(cats),
+            "success_count": success_count,
+            "skip_cooldown": skip_cooldown,
+            "skip_no_fish": skip_no_fish,
+            "total_hunger_gain": total_hunger_gain,
+            "total_mood_gain": total_mood_gain,
+            "total_exp_gain": total_exp_gain,
+            "used_fish_count": used_fish_count,
+            "star_up_count": star_up_count,
+            "details": results
+        }
+
     def calculate_cat_fishing_bonus(self, user_id: str) -> Dict[str, float]:
         bonus = {
             "rare_bonus": 0.0,
