@@ -165,7 +165,7 @@ class DeepSeaService:
             jackpot_multiplier = 30
             jackpot_base = adventure.entry_fee * jackpot_multiplier
             message_lines.append(f"🐉 遭遇【深海之主】！！！")
-            message_lines.append(f"JACKPOT!!! 深海之主被你的勇气所震撼！")
+            message_lines.append(f"头奖！！！ 深海之主被你的勇气所震撼！")
             message_lines.append(self._add_coins_and_format(user_id, jackpot_base, adventure))
 
             fish_rarity_roll = random.random()
@@ -178,8 +178,6 @@ class DeepSeaService:
 
             if fish:
                 message_lines.append(self._add_fish_and_format(user_id, fish, adventure))
-
-            message_lines.append("====================")
 
         elif encounter_type == "mermaid":
             if random.random() < 0.5:
@@ -315,11 +313,9 @@ class DeepSeaService:
 
 {zone_desc.get(zone, '')}
 
-============
-🏃 使用「下潜」/「上浮」/「左游」/「右游」命令开始探索！
-============
+🏃 使用「下潜」「上浮」「左游」「右游」开始探索！
 
-💡 提示: 每次移动都可能遭遇不同的事件（鱼群/宝箱/暗流/鲨鱼/巨型章鱼/深海之主/人鱼公主/海底火山）"""
+💡 提示: 每次移动都可能触发事件（鱼群/宝箱/暗流/鲨鱼/巨型章鱼/深海之主/人鱼公主/海底火山）"""
 
         return {"success": True, "message": message}
 
@@ -354,8 +350,9 @@ class DeepSeaService:
                     fish_obtained = enc_fish
 
                 step_prefix = f"第{i+1}/{step}步 " if step > 1 else ""
-                message_lines.append(f"\n{step_prefix}{direction}至 {adventure.depth}m")
+                message_lines.append(f"{step_prefix}{direction}至 {adventure.depth}m")
                 message_lines.extend(encounter_messages)
+                message_lines.append("")
 
                 if adventure.depth >= adventure.max_depth:
                     break
@@ -370,13 +367,11 @@ class DeepSeaService:
             encounter_messages, enc_fish = self._process_encounter(encounter_type, user_id, adventure)
             if enc_fish:
                 fish_obtained = enc_fish
-            message_lines.append(f"\n{direction}：{abs(adventure.position_x)}步")
             message_lines.extend(encounter_messages)
 
         header_msg = f"""🌊【深海探险 - 移动】🌊
 
 📊 深度: {adventure.depth}m
-
 """
 
         if adventure.depth >= adventure.max_depth:
@@ -387,27 +382,22 @@ class DeepSeaService:
                 user.coins += net_profit
                 self.user_repo.update(user)
 
-            message_lines.append(f"""
-============
-🏆 恭喜！你到达了{adventure.zone}的最深处！
-📊 探险结算:
-   总收益: +{adventure.current_reward} 金币
-   总损失: -{adventure.current_loss} 金币
-   净收益: {net_profit:+.0f} 金币
-============""")
+            message_lines.append(f"""🏆 恭喜！你到达了{adventure.zone}最深处！
+总收益: +{adventure.current_reward} 金币
+总损失: -{adventure.current_loss} 金币
+净收益: {net_profit:+.0f} 金币""")
             self._clear_adventure(user_id)
         else:
             self._save_adventure(adventure)
 
         profit = adventure.current_reward - adventure.current_loss
-        message_lines.append(f"""
-============
-📊 当前探险状态:
-   当前收益: +{adventure.current_reward} 金币
-   当前损失: -{adventure.current_loss} 金币
-   净收益: {profit:+.0f} 金币
-   剩余深度: {adventure.max_depth - adventure.depth}m
-============""")
+
+        message_lines.append("")
+        message_lines.append(f"""📊 探险状态:
+收益: +{adventure.current_reward}
+损失: -{adventure.current_loss}
+净收益: {profit:+.0f}
+剩余: {adventure.max_depth - adventure.depth}m""")
 
         return {
             "success": True,
@@ -434,17 +424,13 @@ class DeepSeaService:
 
         message = f"""🏃【深海探险 - 回头】🏃
 
-📊 探险结算:
-============
 💰 入场费: {adventure.entry_fee} 金币
 📈 总收益: +{adventure.current_reward} 金币
 📉 总损失: -{adventure.current_loss} 金币
-============
 💵 净收益: {net_profit:+.0f} 金币
-🐟 移动步数: {adventure.moves}
 ⏱️ 探险时长: {(get_now() - adventure.started_at).total_seconds():.0f} 秒
 
-✅ 结算完成，金币已{("返还" if net_profit > 0 else "扣除")}到你的账户！"""
+结算完成，金币已从你的账户{("返还" if net_profit > 0 else "扣除")}！"""
 
         self._clear_adventure(user_id)
 
@@ -463,18 +449,13 @@ class DeepSeaService:
         message = f"""🌊【深海探险 - 状态】🌊
 
 📍 区域: {zone_emoji.get(adventure.zone, '')} {adventure.zone}
-📊 当前深度: {adventure.depth}m / {adventure.max_depth}m
-🎯 位置坐标: ({adventure.position_x}, {adventure.position_y})
-============
+📊 深度: {adventure.depth}m / {adventure.max_depth}m
 💰 入场费: {adventure.entry_fee} 金币
-📈 当前收益: +{adventure.current_reward} 金币
-📉 当前损失: -{adventure.current_loss} 金币
+📈 收益: +{adventure.current_reward} 金币
+📉 损失: -{adventure.current_loss} 金币
 💵 净收益: {profit:+.0f} 金币
-============
-🎲 移动步数: {adventure.moves}
 ⏱️ 开始时间: {adventure.started_at.strftime('%H:%M:%S')}
-============
 
-💡 继续使用「下潜」/「上浮」/「左游」/「右游」命令探索，或使用「回头」命令结束探险。"""
+💡 使用「下潜」「上浮」「左游」「右游」继续探索，「回头」结束探险。"""
 
         return {"success": True, "message": message, "adventure": adventure}
