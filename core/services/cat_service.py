@@ -362,11 +362,11 @@ class CatService:
         diseases = self._get_cat_diseases()
         for disease in diseases:
             conditions_met = True
-            if disease.get("min_health_threshold", 0) > 0 and cat.health >= int(disease["min_health_threshold"]):
+            if disease.get("min_health_threshold", 0) > 0 and cat.health <= int(disease["min_health_threshold"]):
                 conditions_met = False
-            if disease.get("min_hunger_threshold", 0) > 0 and cat.hunger >= int(disease["min_hunger_threshold"]):
+            if disease.get("min_hunger_threshold", 0) > 0 and cat.hunger <= int(disease["min_hunger_threshold"]):
                 conditions_met = False
-            if disease.get("min_mood_threshold", 0) > 0 and cat.mood >= int(disease["min_mood_threshold"]):
+            if disease.get("min_mood_threshold", 0) > 0 and cat.mood <= int(disease["min_mood_threshold"]):
                 conditions_met = False
 
             if conditions_met and random.random() < float(disease.get("onset_chance", 0.1)):
@@ -659,8 +659,11 @@ class CatService:
                 cat.last_feed_time = get_now()
                 cat.exp += exp_gain
 
-                level_up, _, new_level = self._check_level_up(cat)
-                star_up_result = self._check_star_up(cat, fish_rarity)
+                level_up, did_star_up_from_level, new_level = self._check_level_up(cat)
+                if did_star_up_from_level or cat.star >= 10:
+                    star_up_result = None
+                else:
+                    star_up_result = self._check_star_up(cat, fish_rarity)
                 self.cat_repo.update_cat_instance(cat)
 
                 self.inventory_repo.update_fish_quantity(
@@ -969,13 +972,11 @@ class CatService:
                 if hours_since_feed >= 1:
                     hunger_decay = int(hours_since_feed) * 5
                     cat.hunger = max(0, cat.hunger - hunger_decay)
-                    cat.last_feed_time = now
                     changed = True
                     
                 if hours_since_play >= 2:
                     mood_decay = int(hours_since_play / 2) * 3
                     cat.mood = max(0, cat.mood - mood_decay)
-                    cat.last_play_time = now
                     changed = True
                 
                 if changed:
