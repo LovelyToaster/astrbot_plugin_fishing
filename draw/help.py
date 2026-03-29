@@ -207,6 +207,16 @@ def draw_help_image():
         ("骰宝模式 [模式]", "管理员设置\n消息模式(image/text)"),
     ]
 
+    deep_sea = [
+        ("深海 [区域]", "开始深海探险\n区域:浅海/深海/深渊"),
+        ("下潜", "下潜移动\n可能遭遇鱼群"),
+        ("上浮", "上浮移动\n往浅处走"),
+        ("左游", "左游移动\n水平探索"),
+        ("右游", "右游移动\n水平探索"),
+        ("回头", "结束探险\n结算收益"),
+        ("深海状态", "查看当前\n探险状态"),
+    ]
+
     social = [
         ("排行榜 [类型]", "查看排行榜\n类型: 历史/数量/重量"),
         ("偷鱼 [@用户]", "偷取指定用户\n的一条鱼"),
@@ -297,6 +307,7 @@ def draw_help_image():
     y0_est += section_delta(len(market), 3)
     y0_est += section_delta(len(gacha), 3)
     y0_est += section_delta(len(sicbo), 3)
+    y0_est += section_delta(len(deep_sea), 3)
     y0_est += section_delta(len(social), 2)
     y0_est += section_delta(len(exchange), 2)
     y0_est += section_delta(len(bank), 3)
@@ -342,6 +353,7 @@ def draw_help_image():
     y0 = draw_section("🛒 商店与市场", market, y0, cols=3)
     y0 = draw_section("🎰 抽卡与概率玩法", gacha, y0, cols=3)
     y0 = draw_section("🎲 骰宝游戏", sicbo, y0, cols=3)
+    y0 = draw_section("🌊 深海探险", deep_sea, y0, cols=3)
     y0 = draw_section("👥 社交功能", social, y0, cols=2)
     y0 = draw_section("📈 大宗商品交易所", exchange, y0, cols=2)
     y0 = draw_section("🏦 银行系统", bank, y0, cols=3)

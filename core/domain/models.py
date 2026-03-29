@@ -662,3 +662,24 @@ class UserCatEventRecord:
     description: str
     triggered_at: datetime
     reward_info: Optional[str] = None
+
+
+# ---------------------------------
+# 深海探险实体 (Deep Sea Adventure Entities)
+# ---------------------------------
+
+@dataclass
+class DeepSeaAdventure:
+    """深海探险状态"""
+    user_id: str
+    zone: str  # "浅海区" / "深海区" / "深渊区"
+    entry_fee: int
+    depth: int
+    current_reward: int
+    current_loss: int
+    started_at: datetime
+    max_depth: int
+    status: str  # "active" / "completed" / "failed"
+    position_x: int = 0  # 水平位置
+    position_y: int = 0  # 垂直位置
+    moves: int = 0  # 移动步数

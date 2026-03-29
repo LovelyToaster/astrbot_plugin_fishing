@@ -44,6 +44,16 @@ from .core.services.bank_service import BankService
 from .core.services.fish_weight_service import FishWeightService
 from .core.services.cat_service import CatService
 
+from .handlers.deep_sea_handlers import (
+    deep_sea_start,
+    deep_sea_move_down,
+    deep_sea_move_up,
+    deep_sea_move_left,
+    deep_sea_move_right,
+    deep_sea_retreat,
+    deep_sea_status,
+)
+
 from .core.database.migration import run_migrations
 from .core.database.connection_manager import DatabaseConnectionManager
 
@@ -362,6 +372,17 @@ class FishingPlugin(Star):
         self.fishing_handlers = FishingHandlers(self)
         self.aquarium_handlers = AquariumHandlers(self)
         self.cat_handlers = CatHandlers(self)
+
+        # 初始化深海探险服务
+        from .core.services.deep_sea_service import DeepSeaService
+        self.deep_sea_service = DeepSeaService(
+            user_repo=self.user_repo,
+            inventory_repo=self.inventory_repo,
+            item_template_repo=self.item_template_repo,
+            log_repo=self.log_repo,
+            buff_repo=self.buff_repo,
+            config=self.game_config,
+        )
 
 
         # 3.2 实例化效果管理器并自动注册所有效果（需要在fishing_service之后）
@@ -1174,6 +1195,50 @@ class FishingPlugin(Star):
     async def sicbo_odds(self, event: AstrMessageEvent):
         """查看骰宝赔率详情"""
         async for r in sicbo_handlers.sicbo_odds(self, event):
+            yield r
+
+    # =========== 深海探险 ==========
+
+    @filter.command("深海", alias={"深海探险"})
+    async def deep_sea(self, event: AstrMessageEvent):
+        """开始深海探险。选择区域：浅海区/深海区/深渊区"""
+        async for r in deep_sea_start(self, event):
+            yield r
+
+    @filter.command("下潜")
+    async def deep_sea_down(self, event: AstrMessageEvent):
+        """下潜移动"""
+        async for r in deep_sea_move_down(self, event):
+            yield r
+
+    @filter.command("上浮")
+    async def deep_sea_up(self, event: AstrMessageEvent):
+        """上浮移动"""
+        async for r in deep_sea_move_up(self, event):
+            yield r
+
+    @filter.command("左游")
+    async def deep_sea_left(self, event: AstrMessageEvent):
+        """左游移动"""
+        async for r in deep_sea_move_left(self, event):
+            yield r
+
+    @filter.command("右游")
+    async def deep_sea_right(self, event: AstrMessageEvent):
+        """右游移动"""
+        async for r in deep_sea_move_right(self, event):
+            yield r
+
+    @filter.command("回头")
+    async def deep_sea_retreat(self, event: AstrMessageEvent):
+        """回头，结束深海探险"""
+        async for r in deep_sea_retreat(self, event):
+            yield r
+
+    @filter.command("深海状态", alias={"探险状态"})
+    async def deep_sea_status(self, event: AstrMessageEvent):
+        """查看当前深海探险状态"""
+        async for r in deep_sea_status(self, event):
             yield r
 
     # =========== 社交 ==========
