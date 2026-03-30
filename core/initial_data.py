@@ -666,8 +666,7 @@ CAT_EVENTS = [
         "event_type": "positive",
         "trigger_actions": ["feed"],
         "weight": 15,
-        "reward_type": "item",
-        "reward_item_id": "small_fish",
+        "reward_type": "fish",
         "reward_value": 1,
     },
     {
@@ -820,12 +819,12 @@ def load_initial_data(conn=None):
                     INSERT INTO cat_diseases (
                         disease_id, name, description, symptom,
                         min_health_threshold, min_hunger_threshold, min_mood_threshold,
-                        onset_chance, treatment_cost, treatment_item_id,
+                        onset_chance, treatment_cost,
                         health_decay_per_hour, fishing_bonus_modifier
                     ) VALUES (
                         :disease_id, :name, :description, :symptom,
                         :min_health_threshold, :min_hunger_threshold, :min_mood_threshold,
-                        :onset_chance, :treatment_cost, :treatment_item_id,
+                        :onset_chance, :treatment_cost,
                         :health_decay_per_hour, :fishing_bonus_modifier
                     )
                     """,

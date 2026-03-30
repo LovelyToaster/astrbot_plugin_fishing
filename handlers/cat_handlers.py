@@ -248,6 +248,12 @@ class CatHandlers:
                 item_tpl = self.item_template_repo.get_item_by_id(ev["reward_item_id"])
                 item_name = item_tpl.name if item_tpl else ev["reward_item_id"]
                 msg += f"\n获得 {item_name} x{ev.get('reward_value', 1)}"
+            elif ev.get("reward_type") == "fish":
+                fish_info = ev.get("reward_info", {}).get("fish")
+                if fish_info:
+                    msg += f"\n获得 {fish_info['name']} ⭐{fish_info['rarity']}星"
+                else:
+                    msg += f"\n获得 {ev.get('reward_value', 1)} 条鱼"
             elif ev.get("reward_type") == "coins":
                 msg += f"\n获得 {ev['reward_value']} 金币"
 

@@ -300,6 +300,14 @@ class CatService:
                 reward_info["item"] = item_id
                 reward_info["quantity"] = quantity
 
+        elif reward_type == "fish" and reward_value:
+            fish = self._roll_fish_by_zone(user_id)
+            if fish:
+                self.inventory_repo.add_fish_to_inventory(user_id, fish.fish_id, quantity=1, quality_level=0)
+                reward_info["fish"] = {"fish_id": fish.fish_id, "name": fish.name, "rarity": fish.rarity}
+            else:
+                logger.warning("无法获取鱼")
+
         elif reward_type == "buff" and selected.get("buff_type"):
             buff = UserBuff(
                 id=0,
@@ -348,7 +356,7 @@ class CatService:
             f"触发猫咪事件: cat={cat_instance_id}, event={selected.get('name', 'unknown')}",
         )
 
-        return {**selected, "message": result_msg}
+        return {**selected, "message": result_msg, "reward_info": reward_info}
 
     def check_disease_onset(self, user_id: str, cat_instance_id: int) -> Optional[Dict[str, Any]]:
         cat = self.cat_repo.get_cat_instance(cat_instance_id)
@@ -900,6 +908,60 @@ class CatService:
             return
         if hasattr(self.cat_repo, "add_user_disease"):
             getattr(self.cat_repo, "add_user_disease")(disease)
+
+    def _select_fish_by_rarity(self, rarity: int) -> Optional[Any]:
+        """根据稀有度选择一条鱼"""
+        fish = self.item_template_repo.get_random_fish(rarity)
+        if not fish:
+            fishes = self.item_template_repo.get_fishes_by_rarity(rarity)
+            if fishes:
+                fish = random.choice(fishes)
+        return fish
+
+    def _roll_fish_by_zone(self, user_id: str) -> Optional[Any]:
+        """根据用户当前钓鱼区域的稀有度分布随机获取一条鱼"""
+        user = self.user_repo.get_by_id(user_id)
+        if not user:
+            return None
+
+        zone = self.inventory_repo.get_zone_by_id(user.fishing_zone_id)
+        if not zone:
+            return None
+
+        zone_config = zone.configs or {}
+        rarity_dist = list(zone_config.get("rarity_distribution", [0.3, 0.3, 0.2, 0.15, 0.04, 0.01]))
+
+        while len(rarity_dist) < 6:
+            rarity_dist.append(0.0)
+        rarity_dist = rarity_dist[:6]
+
+        is_rare_fish_available = zone.rare_fish_caught_today < zone.daily_rare_fish_quota
+
+        if not is_rare_fish_available:
+            if len(rarity_dist) >= 4:
+                rarity_dist[3] = 0.0
+            if len(rarity_dist) >= 5:
+                rarity_dist[4] = 0.0
+            if len(rarity_dist) >= 6:
+                rarity_dist[5] = 0.0
+            total = sum(rarity_dist)
+            if total > 0:
+                rarity_dist = [x / total for x in rarity_dist]
+
+        roll = random.random()
+        cumsum = 0.0
+        rarity = 1
+        for i, prob in enumerate(rarity_dist):
+            cumsum += prob
+            if roll < cumsum:
+                rarity = i + 1
+                break
+
+        fish = self._select_fish_by_rarity(rarity)
+        if fish and is_rare_fish_available and rarity >= 4:
+            zone.rare_fish_caught_today += 1
+            self.inventory_repo.update_fishing_zone(zone)
+        return fish
 
     def _update_cat_disease_record(self, disease: UserCatDisease) -> None:
         if hasattr(self.cat_repo, "update_cat_disease"):
