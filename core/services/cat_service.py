@@ -135,10 +135,8 @@ class CatService:
         if not cat or cat.user_id != user_id:
             return {"success": False, "message": "猫咪不存在"}
 
-        last_feed = cat.last_feed_time or cat.obtained_at
-        cooldown_remaining = max(0, 60 - int((get_now() - last_feed).total_seconds()))
-        if cooldown_remaining > 0:
-            return {"success": False, "message": f"喂食冷却中，请 {cooldown_remaining} 秒后再喂"}
+        if cat.hunger >= 100:
+            return {"success": False, "message": "猫咪饱食度已满，无法再喂食"}
 
         fish_template = self.item_template_repo.get_fish_by_id(fish_id)
         if not fish_template:
@@ -212,10 +210,8 @@ class CatService:
         if not cat or cat.user_id != user_id:
             return {"success": False, "message": "猫咪不存在"}
 
-        last_play = cat.last_play_time or cat.obtained_at
-        cooldown_remaining = max(0, 60 - int((get_now() - last_play).total_seconds()))
-        if cooldown_remaining > 0:
-            return {"success": False, "message": f"逗猫冷却中，请 {cooldown_remaining} 秒后再逗"}
+        if cat.mood >= 100:
+            return {"success": False, "message": "猫咪心情已满，无法再逗猫"}
 
         old_mood = cat.mood
         mood_gain = random.randint(5, 15)
@@ -485,7 +481,6 @@ class CatService:
 
         results = []
         success_count = 0
-        skip_count = 0
         skip_mood_full = 0
         total_mood_gain = 0
         total_exp_gain = 0
@@ -500,17 +495,6 @@ class CatService:
                         "reason": "心情已满"
                     })
                     skip_mood_full += 1
-                    continue
-
-                last_play = cat.last_play_time or cat.obtained_at
-                cooldown_remaining = max(0, 60 - int((get_now() - last_play).total_seconds()))
-                if cooldown_remaining > 0:
-                    results.append({
-                        "cat_name": cat.nickname,
-                        "status": "skipped",
-                        "reason": f"冷却中({cooldown_remaining}秒)"
-                    })
-                    skip_count += 1
                     continue
 
                 old_mood = cat.mood
@@ -566,7 +550,6 @@ class CatService:
             "success": True,
             "total_cats": len(cats),
             "success_count": success_count,
-            "skip_count": skip_count,
             "skip_mood_full": skip_mood_full,
             "total_mood_gain": total_mood_gain,
             "total_exp_gain": total_exp_gain,
@@ -606,7 +589,6 @@ class CatService:
         results = []
         success_count = 0
         skip_no_fish = 0
-        skip_cooldown = 0
         skip_hunger_full = 0
         total_hunger_gain = 0
         total_mood_gain = 0
@@ -623,17 +605,6 @@ class CatService:
                         "reason": "饱食度已满"
                     })
                     skip_hunger_full += 1
-                    continue
-
-                last_feed = cat.last_feed_time or cat.obtained_at
-                cooldown_remaining = max(0, 60 - int((get_now() - last_feed).total_seconds()))
-                if cooldown_remaining > 0:
-                    results.append({
-                        "cat_name": cat.nickname,
-                        "status": "skipped",
-                        "reason": f"冷却中({cooldown_remaining}秒)"
-                    })
-                    skip_cooldown += 1
                     continue
 
                 fish_to_use = None
@@ -732,7 +703,6 @@ class CatService:
             "success": True,
             "total_cats": len(cats),
             "success_count": success_count,
-            "skip_cooldown": skip_cooldown,
             "skip_no_fish": skip_no_fish,
             "skip_hunger_full": skip_hunger_full,
             "total_hunger_gain": total_hunger_gain,
