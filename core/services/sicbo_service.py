@@ -40,6 +40,9 @@ class SicboGame:
     session_id: Optional[str] = None  # 会话ID
     session_info: Optional[Dict[str, Any]] = None  # 完整会话信息用于主动发送
     chat_id: Optional[str] = None  # 群聊ID
+    # 玩家开庄相关
+    banker_user_id: Optional[str] = None  # 庄家玩家ID，None表示系统开庄
+    banker_nickname: Optional[str] = None  # 庄家昵称
 
 
 class SicboService:
@@ -56,6 +59,7 @@ class SicboService:
         self.min_bet = sicbo_config.get("min_bet", 100)  # 最小下注
         self.max_bet = sicbo_config.get("max_bet", 1000000)  # 最大下注
         self.message_mode = sicbo_config.get("message_mode", "image")  # 消息模式：image(图片) 或 text(文本)
+        self.min_banker_coins = sicbo_config.get("min_banker_coins", 1000000)  # 玩家开庄最低金币余额，默认100万
         
         # 多会话游戏支持
         self.games: Dict[str, SicboGame] = {}  # session_id -> SicboGame
@@ -141,8 +145,15 @@ class SicboService:
         """判断是否为图片模式"""
         return self.message_mode == "image"
     
-    def start_new_game(self, session_id: str, session_info: Dict[str, Any] = None) -> Dict[str, Any]:
-        """开启新的骰宝游戏"""
+    def start_new_game(self, session_id: str, session_info: Dict[str, Any] = None, 
+                        banker_user_id: str = None) -> Dict[str, Any]:
+        """开启新的骰宝游戏
+        
+        Args:
+            session_id: 会话ID
+            session_info: 会话信息
+            banker_user_id: 庄家用户ID，None表示系统开庄
+        """
         # 检查当前会话是否已有游戏
         current_game = self.games.get(session_id)
         if current_game and current_game.is_active:
@@ -152,6 +163,20 @@ class SicboService:
                     "success": False,
                     "message": f"❌ 当前会话已有游戏进行中，剩余时间 {int(remaining_time)} 秒"
                 }
+        
+        # 玩家开庄检查
+        banker_nickname = None
+        if banker_user_id:
+            banker = self.user_repo.get_by_id(banker_user_id)
+            if not banker:
+                return {"success": False, "message": "❌ 庄家用户不存在，请先注册"}
+            if banker.coins < self.min_banker_coins:
+                return {
+                    "success": False, 
+                    "message": f"❌ 玩家开庄需要至少 {self.min_banker_coins:,} 金币\n"
+                              f"💰 你当前余额：{banker.coins:,} 金币"
+                }
+            banker_nickname = banker.nickname or banker_user_id
         
         # 创建新游戏
         now = get_now()
@@ -166,7 +191,9 @@ class SicboService:
             is_active=True,
             is_settled=False,
             session_id=session_id,
-            session_info=session_info
+            session_info=session_info,
+            banker_user_id=banker_user_id,
+            banker_nickname=banker_nickname
         )
         
         # 保存游戏到会话字典
@@ -180,11 +207,13 @@ class SicboService:
         # 启动新的倒计时任务
         self.countdown_tasks[session_id] = asyncio.create_task(self._countdown_task(session_id))
         
-        logger.info(f"开启骰宝游戏: {game_id}, 会话: {session_id}, 倒计时 {self.countdown_seconds} 秒")
+        banker_info = f"🏦 庄家：{banker_nickname}" if banker_user_id else "🏦 庄家：系统"
+        logger.info(f"开启骰宝游戏: {game_id}, 会话: {session_id}, 庄家: {banker_nickname or '系统'}, 倒计时 {self.countdown_seconds} 秒")
         
         return {
             "success": True,
-            "message": f"🎲 骰宝游戏开庄！倒计时 {self.countdown_seconds} 秒\n\n"
+            "message": f"🎲 骰宝游戏开庄！倒计时 {self.countdown_seconds} 秒\n"
+                      f"{banker_info}\n\n"
                       f"📋 下注说明：\n"
                       f"• 鸭大/小：/鸭大 金额 或 /鸭小 金额\n"
                       f"• 鸭单/双：/鸭单 金额 或 /鸭双 金额\n"
@@ -194,7 +223,9 @@ class SicboService:
                       f"💰 下注范围：{self.min_bet:,} - {self.max_bet:,} 金币\n"
                       f"⏰ 倒计时结束后自动开奖！",
             "game_id": game_id,
-            "end_time": new_game.end_time
+            "end_time": new_game.end_time,
+            "is_player_banker": banker_user_id is not None,
+            "banker_nickname": banker_nickname
         }
     
     def place_bet(self, user_id: str, bet_type: str, amount: int, session_id: str) -> Dict[str, Any]:
@@ -213,6 +244,10 @@ class SicboService:
         user = self.user_repo.get_by_id(user_id)
         if not user:
             return {"success": False, "message": "❌ 用户不存在，请先注册"}
+        
+        # 玩家开庄时，庄家不能给自己下注
+        if current_game.banker_user_id and user_id == current_game.banker_user_id:
+            return {"success": False, "message": "❌ 庄家不能给自己下注"}
         
         # 验证下注金额
         if amount < self.min_bet:
@@ -398,7 +433,7 @@ class SicboService:
         return result
     
     async def _settle_game(self, session_id: str) -> Dict[str, Any]:
-        """结算游戏"""
+        """结算游戏，支持系统庄家和玩家庄家两种模式"""
         game = self.games.get(session_id)
         if not game or game.is_settled:
             return {"success": False, "message": "游戏已结算或不存在"}
@@ -413,9 +448,10 @@ class SicboService:
         # 判断各种结果
         results = self._analyze_dice_result(dice, total)
         
-        # 结算所有下注
+        # 第一遍：计算所有下注的理论派彩
         settlement_info = []
         total_payout = 0
+        total_bets = sum(bet.amount for bet in game.bets)
         
         for bet in game.bets:
             win = self._check_bet_win(bet, results)
@@ -423,27 +459,20 @@ class SicboService:
             
             if win:
                 if bet.bet_type in ["一点", "二点", "三点", "四点", "五点", "六点"]:
-                    # 点数下注根据出现次数计算赔率
                     point = int(bet.bet_type[0]) if bet.bet_type[0].isdigit() else {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6}[bet.bet_type[0]]
                     count = dice.count(point)
                     if count == 1:
-                        payout = bet.amount * 2  # 1:1
+                        payout = bet.amount * 2
                     elif count == 2:
-                        payout = bet.amount * 3  # 1:2
+                        payout = bet.amount * 3
                     elif count == 3:
-                        payout = bet.amount * 4  # 1:3
+                        payout = bet.amount * 4
                     else:
-                        payout = bet.amount  # 返还本金
+                        payout = bet.amount
                 else:
-                    payout = bet.amount * (1 + bet.odds)  # 本金 + 奖金
+                    payout = bet.amount * (1 + bet.odds)
                 
                 total_payout += payout
-                
-                # 给用户加钱
-                user = self.user_repo.get_by_id(bet.user_id)
-                if user:
-                    user.coins += payout
-                    self.user_repo.update(user)
             
             settlement_info.append({
                 "user_id": bet.user_id,
@@ -454,6 +483,53 @@ class SicboService:
                 "profit": payout - bet.amount if win else -bet.amount
             })
         
+        # 玩家庄家模式：检查庄家是否能支付所有派彩
+        payout_ratio = 1.0
+        banker_net_change = 0
+        is_player_banker = game.banker_user_id is not None
+        
+        if is_player_banker:
+            banker = self.user_repo.get_by_id(game.banker_user_id)
+            if banker:
+                # 庄家的可用资金池 = 庄家现有金币 + 所有下注金额（这些钱理论上归庄家）
+                banker_pool = banker.coins + total_bets
+                
+                if total_payout > banker_pool:
+                    # 总派彩超过庄家资金池，按比例缩减
+                    payout_ratio = banker_pool / total_payout if total_payout > 0 else 0
+                    logger.warning(
+                        f"庄家资金不足！庄家余额: {banker.coins:,}, 总下注: {total_bets:,}, "
+                        f"理论派彩: {total_payout:,}, 缩减比例: {payout_ratio:.4f}"
+                    )
+        
+        # 第二遍：按实际比例结算
+        actual_total_payout = 0
+        for info in settlement_info:
+            if info["win"] and info["payout"] > 0:
+                actual_payout = int(info["payout"] * payout_ratio)
+                info["payout"] = actual_payout
+                info["profit"] = actual_payout - info["amount"]
+                actual_total_payout += actual_payout
+                
+                # 给获胜用户加钱
+                user = self.user_repo.get_by_id(info["user_id"])
+                if user:
+                    user.coins += actual_payout
+                    self.user_repo.update(user)
+            elif not info["win"]:
+                info["payout"] = 0
+                info["profit"] = -info["amount"]
+        
+        # 玩家庄家模式：结算庄家金币
+        if is_player_banker and banker:
+            # 庄家获得所有下注金额，支付所有派彩
+            # 庄家净变化 = 总下注 - 总实际派彩
+            banker_net_change = total_bets - actual_total_payout
+            banker.coins += banker_net_change
+            self.user_repo.update(banker)
+            logger.info(f"庄家 {game.banker_nickname} 结算: 收入下注 {total_bets:,}, "
+                       f"支出派彩 {actual_total_payout:,}, 净变化 {banker_net_change:,}")
+        
         game.is_settled = True
         
         # 生成结算消息
@@ -461,6 +537,8 @@ class SicboService:
         dice_str = " ".join([dice_emojis.get(d, str(d)) for d in dice])
         
         message = f"🎲 骰宝开奖结果\n"
+        if is_player_banker:
+            message += f"🏦 庄家：{game.banker_nickname}\n"
         message += f"🎯 骰子结果：{dice_str}\n"
         message += f"📊 总点数：{total} 点\n"
         message += f"🔍 判定：{'大' if total >= 11 else '小'}"
@@ -473,7 +551,12 @@ class SicboService:
         else:
             message += f", 单\n"
         
-        message += f"\n 参与人数：{len(set(bet.user_id for bet in game.bets))} 人\n\n"
+        message += f"\n👥 参与人数：{len(set(bet.user_id for bet in game.bets))} 人\n"
+        
+        if payout_ratio < 1.0:
+            message += f"\n⚠️ 庄家资金不足，派彩按 {payout_ratio:.1%} 比例发放\n"
+        
+        message += "\n"
         
         # 按用户统计总盈亏
         user_profits = {}
@@ -487,7 +570,7 @@ class SicboService:
         # 分别统计盈利和亏损的玩家
         winners = []
         losers = []
-        break_even = []  # 新增：持平的玩家
+        break_even = []
         for user_id, total_profit in user_profits.items():
             user = self.user_repo.get_by_id(user_id)
             nickname = user.nickname if user and user.nickname else user_id
@@ -496,10 +579,9 @@ class SicboService:
                 winners.append((nickname, total_profit))
             elif total_profit < 0:
                 losers.append((nickname, total_profit))
-            else:  # total_profit == 0
+            else:
                 break_even.append(nickname)
         
-        # 显示结果
         if winners:
             message += f"🎉 中奖玩家：\n"
             for nickname, profit in winners:
@@ -522,14 +604,26 @@ class SicboService:
         if not winners and not losers and not break_even:
             message += f"🤔 本局无人参与\n"
         
-        logger.info(f"骰宝游戏结算完成: {game.game_id}, 结果: {dice}, 总派彩: {total_payout}")
+        # 显示庄家盈亏
+        if is_player_banker:
+            message += f"\n{'='*20}\n"
+            if banker_net_change > 0:
+                message += f"🏦 庄家 {game.banker_nickname} 盈利：+{banker_net_change:,} 金币 💰"
+            elif banker_net_change < 0:
+                message += f"🏦 庄家 {game.banker_nickname} 亏损：{banker_net_change:,} 金币 💸"
+            else:
+                message += f"🏦 庄家 {game.banker_nickname} 持平 ⚖️"
+        
+        logger.info(f"骰宝游戏结算完成: {game.game_id}, 结果: {dice}, 总派彩: {actual_total_payout}")
         
         return {
             "success": True,
             "message": message,
             "dice": dice,
             "total": total,
-            "settlement": settlement_info
+            "settlement": settlement_info,
+            "banker_net_change": banker_net_change if is_player_banker else None,
+            "payout_ratio": payout_ratio
         }
     
     def _normalize_bet_type(self, bet_type: str) -> Optional[str]:

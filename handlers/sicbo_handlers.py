@@ -34,7 +34,7 @@ def _get_game_session_id(event: AstrMessageEvent) -> str:
 
 
 async def start_sicbo_game(plugin: "FishingPlugin", event: AstrMessageEvent):
-    """开庄命令"""
+    """开庄命令 - 系统开庄"""
     try:
         # 获取游戏会话ID
         game_session_id = _get_game_session_id(event)
@@ -56,19 +56,51 @@ async def start_sicbo_game(plugin: "FishingPlugin", event: AstrMessageEvent):
         
         if result["success"]:
             if plugin.sicbo_service.is_image_mode():
-                # 图片模式：生成开庄成功图片
                 countdown_seconds = plugin.sicbo_service.get_countdown_seconds()
                 image = draw_sicbo_game_start(countdown_seconds)
                 image_path = save_image_to_temp(image, "sicbo_start", plugin.data_dir)
                 yield event.image_result(image_path)
             else:
-                # 文本模式：发送文本消息
                 yield event.plain_result(result["message"])
         else:
-            # 失败时始终使用文本消息
             yield event.plain_result(result["message"])
     except Exception as e:
         yield event.plain_result(f"❌ 开庄失败：{str(e)}")
+
+
+async def start_sicbo_player_banker(plugin: "FishingPlugin", event: AstrMessageEvent):
+    """玩家开庄命令 - 发送者成为庄家"""
+    try:
+        game_session_id = _get_game_session_id(event)
+        user_id = plugin._get_effective_user_id(event)
+        
+        # 构建会话信息
+        session_info = {
+            'platform': getattr(event.platform_meta, 'platform_name', 'aiocqhttp'),
+            'session_id': event.session_id,
+            'sender_id': event.get_sender_id(),
+            'unified_msg_origin': event.unified_msg_origin,
+        }
+        
+        group_id = event.get_group_id()
+        if group_id:
+            session_info['group_id'] = group_id
+        
+        result = plugin.sicbo_service.start_new_game(game_session_id, session_info, banker_user_id=user_id)
+        
+        if result["success"]:
+            if plugin.sicbo_service.is_image_mode():
+                countdown_seconds = plugin.sicbo_service.get_countdown_seconds()
+                banker_nickname = result.get("banker_nickname", "未知")
+                image = draw_sicbo_game_start(countdown_seconds, banker_nickname=banker_nickname)
+                image_path = save_image_to_temp(image, "sicbo_start_player", plugin.data_dir)
+                yield event.image_result(image_path)
+            else:
+                yield event.plain_result(result["message"])
+        else:
+            yield event.plain_result(result["message"])
+    except Exception as e:
+        yield event.plain_result(f"❌ 玩家开庄失败：{str(e)}")
 
 
 async def place_bet(plugin: "FishingPlugin", event: AstrMessageEvent, bet_type: str):

@@ -14,9 +14,9 @@ from .styles import (
 )
 
 
-def draw_sicbo_game_start(countdown_seconds: int) -> Image.Image:
+def draw_sicbo_game_start(countdown_seconds: int, banker_nickname: str = None) -> Image.Image:
     """绘制骰宝游戏开始图片"""
-    width, height = 600, 400
+    width, height = 600, 440 if banker_nickname else 400
     
     # 创建渐变背景
     bg_top = (255, 182, 193)  # 浅粉红
@@ -34,14 +34,26 @@ def draw_sicbo_game_start(countdown_seconds: int) -> Image.Image:
     title_bbox = draw.textbbox((0, 0), title_text, font=title_font)
     title_width = title_bbox[2] - title_bbox[0]
     title_x = (width - title_width) // 2
-    draw.text((title_x, 50), title_text, fill=COLOR_TEXT_DARK, font=title_font)
+    draw.text((title_x, 30), title_text, fill=COLOR_TEXT_DARK, font=title_font)
+    
+    y_offset = 90
+    
+    # 绘制庄家信息
+    if banker_nickname:
+        banker_text = f"🏦 庄家：{banker_nickname}"
+        banker_bbox = draw.textbbox((0, 0), banker_text, font=subtitle_font)
+        banker_width = banker_bbox[2] - banker_bbox[0]
+        banker_x = (width - banker_width) // 2
+        draw.text((banker_x, y_offset), banker_text, fill=COLOR_GOLD, font=subtitle_font)
+        y_offset += 40
     
     # 绘制倒计时信息
     countdown_text = f"⏰ 倒计时：{countdown_seconds} 秒"
     countdown_bbox = draw.textbbox((0, 0), countdown_text, font=subtitle_font)
     countdown_width = countdown_bbox[2] - countdown_bbox[0]
     countdown_x = (width - countdown_width) // 2
-    draw.text((countdown_x, 120), countdown_text, fill=COLOR_WARNING, font=subtitle_font)
+    draw.text((countdown_x, y_offset), countdown_text, fill=COLOR_WARNING, font=subtitle_font)
+    y_offset += 50
     
     # 绘制提示信息
     tips = [
@@ -52,13 +64,12 @@ def draw_sicbo_game_start(countdown_seconds: int) -> Image.Image:
         "📊 指定点数 (高赔率)"
     ]
     
-    tip_y = 180
     for tip in tips:
         tip_bbox = draw.textbbox((0, 0), tip, font=content_font)
         tip_width = tip_bbox[2] - tip_bbox[0]
         tip_x = (width - tip_width) // 2
-        draw.text((tip_x, tip_y), tip, fill=COLOR_TEXT_DARK, font=content_font)
-        tip_y += 30
+        draw.text((tip_x, y_offset), tip, fill=COLOR_TEXT_DARK, font=content_font)
+        y_offset += 30
     
     return image
 

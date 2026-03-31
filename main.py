@@ -39,6 +39,7 @@ from .core.services.sicbo_service import SicboService
 from .core.services.red_packet_service import RedPacketService
 from .core.services.loan_service import LoanService
 from .core.services.fish_weight_service import FishWeightService # 新增钓鱼权重Service
+from .core.services.blackjack_service import BlackjackService  # 新增21点游戏Service
 
 from .core.database.migration import run_migrations
 
@@ -57,6 +58,7 @@ from .handlers import (
     sicbo_handlers,
     red_packet_handlers,
     loan_handlers,
+    blackjack_handlers,  # 新增21点游戏处理器
 )
 from .handlers.fishing_handlers import FishingHandlers
 from .handlers.exchange_handlers import ExchangeHandlers
@@ -206,7 +208,9 @@ class FishingPlugin(Star):
                     "6": 25.0, "7": 55.0, "8": 125.0, "9": 280.0, "10": 660.0
                 }
             },
-            "exchange": exchange_config  # 直接使用框架的配置
+            "exchange": exchange_config,  # 直接使用框架的配置
+            "sicbo": config.get("sicbo", {}),  # 骰宝配置
+            "blackjack": config.get("blackjack", {}),  # 21点配置
         }
         
         # 初始化数据库模式
@@ -279,6 +283,10 @@ class FishingPlugin(Star):
         
         # 设置骰宝服务的消息发送回调
         self.sicbo_service.set_message_callback(self._send_sicbo_announcement)
+        
+        # 初始化21点游戏服务
+        self.blackjack_service = BlackjackService(self.user_repo, self.log_repo, self.game_config)
+        self.blackjack_service.set_message_callback(self._send_blackjack_announcement)
         
         # 初始化红包服务
         self.red_packet_repo = SqliteRedPacketRepository(db_path)
@@ -466,6 +474,50 @@ class FishingPlugin(Star):
         except Exception as e:
             logger.error(f"主动发送消息时发生错误: {e}")
             return False
+
+    async def _send_blackjack_announcement(self, session_info: dict, result_data: dict):
+        """发送21点游戏结果公告"""
+        try:
+            if session_info and result_data.get("success"):
+                try:
+                    if self.blackjack_service.is_image_mode() and result_data.get("settled"):
+                        # 图片模式且是结算消息
+                        from .draw.blackjack import draw_blackjack_result, save_image_to_temp
+                        
+                        dealer_cards = result_data.get("dealer_cards", [])
+                        dealer_value = result_data.get("dealer_value", 0)
+                        results = result_data.get("results", [])
+                        banker_nickname = result_data.get("banker_nickname")
+                        banker_profit = result_data.get("banker_profit")
+                        
+                        image = draw_blackjack_result(
+                            dealer_cards, dealer_value,
+                            results, banker_nickname, banker_profit
+                        )
+                        image_path = save_image_to_temp(image, "blackjack_result", self.data_dir)
+                        
+                        success = await self._send_initiative_image(session_info, image_path)
+                        if success:
+                            logger.info("🃏 21点结果公告图片已主动发送")
+                            return
+                    
+                    # 文本模式或非结算消息
+                    message = result_data.get("message", "21点游戏结果")
+                    success = await self._send_initiative_message(session_info, message)
+                    if success:
+                        logger.info("🃏 21点结果公告已主动发送")
+                        return
+                except Exception as e:
+                    logger.error(f"发送21点结果失败: {e}")
+                    # 回退到文本消息
+                    message = result_data.get("message", "21点游戏结果")
+                    success = await self._send_initiative_message(session_info, message)
+                    if success:
+                        logger.info("🃏 21点结果公告文本已主动发送（回退）")
+                        return
+            logger.warning("无法发送21点公告：缺少会话信息")
+        except Exception as e:
+            logger.error(f"发送21点公告失败: {e}")
     
     async def _red_packet_cleanup_scheduler(self):
         """红包清理调度器 - 每小时清理一次过期红包"""
@@ -871,8 +923,14 @@ class FishingPlugin(Star):
 
     @filter.command("开庄")
     async def start_sicbo(self, event: AstrMessageEvent):
-        """开启骰宝游戏，倒计时120秒供玩家下注"""
+        """开启骰宝游戏（系统庄家），倒计时供玩家下注"""
         async for r in sicbo_handlers.start_sicbo_game(self, event):
+            yield r
+
+    @filter.command("玩家开庄", alias={"我来当庄", "我当庄"})
+    async def start_sicbo_player_banker(self, event: AstrMessageEvent):
+        """玩家当庄开启骰宝游戏，胜负结果从庄家账上结算"""
+        async for r in sicbo_handlers.start_sicbo_player_banker(self, event):
             yield r
 
     @filter.command("鸭大")
@@ -1047,6 +1105,80 @@ class FishingPlugin(Star):
     async def sicbo_odds(self, event: AstrMessageEvent):
         """查看骰宝赔率详情"""
         async for r in sicbo_handlers.sicbo_odds(self, event):
+            yield r
+
+    # =========== 21点游戏 ==========
+
+    @filter.command("21点", alias={"二十一点", "blackjack"})
+    async def blackjack(self, event: AstrMessageEvent):
+        """开始21点游戏（系统庄家）。用法：21点 [金额]"""
+        async for r in blackjack_handlers.start_blackjack(self, event):
+            yield r
+
+    @filter.command("21点开庄", alias={"21点当庄", "21点玩家开庄"})
+    async def blackjack_banker(self, event: AstrMessageEvent):
+        """玩家当庄开始21点游戏，其他人可加入"""
+        async for r in blackjack_handlers.start_blackjack_banker(self, event):
+            yield r
+
+    @filter.command("21点加入", alias={"加入21点"})
+    async def blackjack_join(self, event: AstrMessageEvent):
+        """加入21点游戏。用法：21点加入 [金额]"""
+        async for r in blackjack_handlers.join_blackjack(self, event):
+            yield r
+
+    @filter.command("抽牌", alias={"要牌", "拿牌"})
+    async def blackjack_hit(self, event: AstrMessageEvent):
+        """21点游戏中要一张牌"""
+        async for r in blackjack_handlers.blackjack_hit(self, event):
+            yield r
+
+    @filter.command("停牌", alias={"不要了", "不要牌"})
+    async def blackjack_stand(self, event: AstrMessageEvent):
+        """21点游戏中停止要牌"""
+        async for r in blackjack_handlers.blackjack_stand(self, event):
+            yield r
+
+    @filter.command("21点状态", alias={"21点查看"})
+    async def blackjack_status(self, event: AstrMessageEvent):
+        """查看当前21点游戏状态"""
+        async for r in blackjack_handlers.blackjack_status(self, event):
+            yield r
+
+    @filter.command("21点开始", alias={"21点强制开始"})
+    async def blackjack_force_start(self, event: AstrMessageEvent):
+        """跳过等待期直接开始21点游戏"""
+        async for r in blackjack_handlers.blackjack_force_start(self, event):
+            yield r
+
+    @filter.command("21点帮助", alias={"21点规则", "21点说明"})
+    async def blackjack_help(self, event: AstrMessageEvent):
+        """查看21点游戏帮助和规则"""
+        async for r in blackjack_handlers.blackjack_help(self, event):
+            yield r
+
+    @filter.command("加倍", alias={"21点加倍", "doubledown"})
+    async def blackjack_double_down(self, event: AstrMessageEvent):
+        """21点游戏中加倍下注，只能在初始两张牌时使用"""
+        async for r in blackjack_handlers.blackjack_double_down(self, event):
+            yield r
+
+    @filter.command("分牌", alias={"21点分牌", "split"})
+    async def blackjack_split(self, event: AstrMessageEvent):
+        """21点游戏中分牌，两张同点数牌时可用"""
+        async for r in blackjack_handlers.blackjack_split(self, event):
+            yield r
+
+    @filter.command("买保险", alias={"21点保险", "insurance"})
+    async def blackjack_buy_insurance(self, event: AstrMessageEvent):
+        """21点游戏中购买保险，庄家明牌为A时可用"""
+        async for r in blackjack_handlers.blackjack_buy_insurance(self, event):
+            yield r
+
+    @filter.command("赌博记录", alias={"赌博历史", "gambling_records"})
+    async def blackjack_gambling_records(self, event: AstrMessageEvent):
+        """查看最近的赌博历史记录"""
+        async for r in blackjack_handlers.blackjack_gambling_records(self, event):
             yield r
 
     # =========== 社交 ==========
