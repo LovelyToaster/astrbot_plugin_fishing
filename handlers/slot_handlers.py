@@ -10,7 +10,7 @@ from ..draw.slot import (
     draw_slot_result, draw_slot_multi_result, draw_slot_jackpot_info,
     draw_slot_history, draw_slot_help, save_image_to_temp
 )
-from ..utils import parse_amount
+
 
 if TYPE_CHECKING:
     from ..main import FishingPlugin
@@ -213,7 +213,7 @@ async def slot_help(plugin: "FishingPlugin", event: AstrMessageEvent):
 三海星 ×250 | 三宝石 ×120 | 三鲸鱼 ×60
 三鲨鱼 ×30  | 三章鱼 ×15  | 三螃蟹 ×8
 三小鱼 ×5
-两海星 ×5   | 两宝石/鲸鱼 ×3 | 其余两同 ×2
+两海星 ×5   | 两宝石 ×3 | 两鲸鱼 ×2 | 其余两同 ×1
 
 【档位】
 铜桌 1万/次 | 银桌 10万/次
