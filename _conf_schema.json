@@ -429,7 +429,7 @@
       },
       "message_mode": {
         "type": "string",
-        "default": "text",
+        "default": "image",
         "description": "21点消息模式",
         "hint": "image(图片)或text(文本)"
       },

@@ -436,6 +436,7 @@ async def sicbo_help(plugin: "FishingPlugin", event: AstrMessageEvent):
 • /骰宝状态 - 查看当前游戏状态
 • /我的下注 - 查看本局下注情况
 • /骰宝赔率 - 查看详细赔率表
+• /骰宝记录 - 查看当前群最近5期开奖记录
 • /骰宝倒计时 [秒数] - 管理员设置倒计时时间
 
 【特殊规则】
@@ -553,3 +554,27 @@ async def set_sicbo_mode(plugin: "FishingPlugin", event: AstrMessageEvent):
             yield event.plain_result(result["message"])
     except Exception as e:
         yield event.plain_result(f"❌ 设置失败：{str(e)}")
+
+
+async def sicbo_draw_history(plugin: "FishingPlugin", event: AstrMessageEvent):
+    """查看当前群的骰宝开奖记录"""
+    try:
+        game_session_id = _get_game_session_id(event)
+        
+        records = plugin.sicbo_service.get_draw_history(game_session_id, 5)
+        
+        if not records:
+            yield event.plain_result("📋 当前群暂无骰宝开奖记录")
+            return
+        
+        message = f"🎲 骰宝开奖记录（最近 {len(records)} 期）\n\n"
+        for i, r in enumerate(reversed(records), 1):
+            triple_tag = " 🎯豹子！" if r.get("is_triple") else ""
+            message += (f"{i}. {r['time']}\n"
+                       f"   {r['dice_display']}  总点 {r['total']}\n"
+                       f"   判定：{r['big_small']} / {r['odd_even']}{triple_tag}\n"
+                       f"   参与人数：{r['participants']} 人\n\n")
+        
+        yield event.plain_result(message)
+    except Exception as e:
+        yield event.plain_result(f"❌ 查询开奖记录失败：{str(e)}")

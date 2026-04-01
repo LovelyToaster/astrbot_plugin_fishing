@@ -288,6 +288,9 @@ class FishingPlugin(Star):
         self.blackjack_service = BlackjackService(self.user_repo, self.log_repo, self.game_config)
         self.blackjack_service.set_message_callback(self._send_blackjack_announcement)
         
+        # 让骰宝的记录也写入统一的读博记录
+        self.sicbo_service.set_gambling_record_callback(self.blackjack_service._add_gambling_record)
+        
         # 初始化红包服务
         self.red_packet_repo = SqliteRedPacketRepository(db_path)
         self.red_packet_service = RedPacketService(self.red_packet_repo, self.user_repo)
@@ -1175,10 +1178,17 @@ class FishingPlugin(Star):
         async for r in blackjack_handlers.blackjack_buy_insurance(self, event):
             yield r
 
-    @filter.command("赌博记录", alias={"赌博历史", "gambling_records"})
+    @filter.command("读博记录", alias={"读博历史", "gambling_records"})
     async def blackjack_gambling_records(self, event: AstrMessageEvent):
-        """查看最近的赌博历史记录"""
+        """查看最近的读博历史记录"""
         async for r in blackjack_handlers.blackjack_gambling_records(self, event):
+            yield r
+
+    @filter.permission_type(PermissionType.ADMIN)
+    @filter.command("21点模式")
+    async def set_blackjack_mode(self, event: AstrMessageEvent):
+        """[管理员] 设置21点消息模式（图片/文本）"""
+        async for r in blackjack_handlers.set_blackjack_mode(self, event):
             yield r
 
     # =========== 社交 ==========
@@ -1419,6 +1429,12 @@ class FishingPlugin(Star):
     async def set_sicbo_mode(self, event: AstrMessageEvent):
         """[管理员] 设置骰宝消息模式（图片/文本）"""
         async for r in sicbo_handlers.set_sicbo_mode(self, event):
+            yield r
+
+    @filter.command("骰宝记录", alias={"骰宝开奖记录"})
+    async def sicbo_draw_history(self, event: AstrMessageEvent):
+        """查看当前群的骰宝开奖记录（最近5期）"""
+        async for r in sicbo_handlers.sicbo_draw_history(self, event):
             yield r
 
     @filter.regex(r"^借[他她它]")

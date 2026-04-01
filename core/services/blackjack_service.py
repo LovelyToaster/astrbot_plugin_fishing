@@ -196,7 +196,7 @@ class BlackjackService:
         self.join_timeout = blackjack_config.get("join_timeout", 60)  # 加入等待时间
         self.action_timeout = blackjack_config.get("action_timeout", 30)  # 操作超时时间
         self.min_banker_coins = blackjack_config.get("min_banker_coins", 1000000)
-        self.message_mode = blackjack_config.get("message_mode", "text")
+        self.message_mode = blackjack_config.get("message_mode", "image")
         
         # 连胜/连败配置
         self.streak_win_bonus_threshold = blackjack_config.get("streak_win_bonus_threshold", 3)
@@ -212,7 +212,7 @@ class BlackjackService:
         # 连胜/连败追踪  {user_id: {"wins": int, "losses": int}}
         self.streaks: Dict[str, Dict[str, int]] = {}
         
-        # 赌博历史记录  [{time, game_type, game_id, user_id, nickname, bet, profit, detail}, ...]
+        # 读博历史记录  [{time, game_type, game_id, user_id, nickname, bet, profit, detail}, ...]
         self.gambling_records: List[Dict[str, Any]] = []
         self.max_records = 500  # 最多保留500条
         
@@ -222,6 +222,22 @@ class BlackjackService:
     def is_image_mode(self) -> bool:
         """是否使用图片模式"""
         return self.message_mode == "image"
+    
+    def set_message_mode(self, mode: str) -> Dict[str, Any]:
+        """设置消息模式"""
+        if mode not in ["image", "text"]:
+            return {"success": False, "message": "❌ 无效的消息模式，请使用 'image' 或 'text'"}
+        
+        self.message_mode = mode
+        mode_name = "图片模式" if mode == "image" else "文本模式"
+        return {
+            "success": True,
+            "message": f"✅ 21点消息模式已设置为 {mode_name}"
+        }
+    
+    def get_message_mode(self) -> str:
+        """获取当前消息模式"""
+        return self.message_mode
     
     def set_message_callback(self, callback):
         """设置消息发送回调函数"""
@@ -254,7 +270,7 @@ class BlackjackService:
     
     def _add_gambling_record(self, game_type: str, game_id: str, user_id: str,
                              nickname: str, bet: int, profit: int, detail: str):
-        """添加赌博历史记录"""
+        """添加读博历史记录"""
         record = {
             "time": get_now().strftime("%Y-%m-%d %H:%M:%S"),
             "game_type": game_type,
@@ -271,7 +287,7 @@ class BlackjackService:
             self.gambling_records = self.gambling_records[-self.max_records:]
     
     def get_user_gambling_records(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """获取用户的赌博历史记录"""
+        """获取用户的读博历史记录"""
         user_records = [r for r in self.gambling_records if r["user_id"] == user_id]
         return user_records[-limit:]  # 取最近N条
     
@@ -361,6 +377,7 @@ class BlackjackService:
                           f"💰 最低下注：{self.min_bet:,} 金币\n"
                           f"👥 最多可加入 4 名玩家\n\n"
                           f"📋 输入 /21点加入 [金额] 加入游戏\n"
+                          f"⏩ 输入 /21点开始 可跳过等待提前开始\n"
                           f"🃏 加入后输入 /抽牌 要牌，/停牌 停止要牌\n"
                           f"💡 输入 /21点帮助 查看完整规则（含加倍/分牌/保险等）",
                 "game_id": game_id,
@@ -423,6 +440,7 @@ class BlackjackService:
                           f"💰 最低下注：{self.min_bet:,} 金币\n"
                           f"👥 最多可加入 4 名玩家\n\n"
                           f"📋 输入 /21点加入 [金额] 加入游戏\n"
+                          f"⏩ 输入 /21点开始 可跳过等待提前开始\n"
                           f"💡 无人加入则自动开始单人游戏\n"
                           f"💡 输入 /21点帮助 查看完整规则（含加倍/分牌/保险等）",
                 "game_id": game_id,
@@ -482,6 +500,7 @@ class BlackjackService:
             "message": f"✅ {user.nickname or user_id} 加入游戏！\n"
                       f"💰 下注：{bet_amount:,} 金币\n"
                       f"👥 当前 {len(game.players)}/4 名玩家\n"
+                      f"⏩ 输入 /21点开始 可跳过等待提前开始\n"
                       f"⏰ 等待其他玩家加入..."
         }
     
@@ -631,7 +650,7 @@ class BlackjackService:
         )
     
     async def _action_timeout_task(self, session_id: str):
-        """操作超时处理"""
+        """操作超时处理 - 智能自动操作"""
         try:
             await asyncio.sleep(self.action_timeout)
             game = self.games.get(session_id)
@@ -640,40 +659,126 @@ class BlackjackService:
                 if current.state == PlayerState.PLAYING:
                     # 如果在分牌手中，先处理分牌手超时
                     if current.playing_split_hand:
-                        current.split_state = PlayerState.STOOD
-                        current.playing_split_hand = False
-                        current.state = PlayerState.STOOD
-                        timeout_msg = f"⏰ {current.nickname} 操作超时，分牌手和主手均自动停牌\n"
+                        # 分牌手智能自动操作
+                        await self._smart_auto_play(session_id, game, current, is_split=True)
+                        return
                     else:
                         if current.is_split and current.split_state == PlayerState.WAITING:
-                            # 主手超时停牌，转到分牌手
-                            current.state = PlayerState.STOOD
-                            current.playing_split_hand = True
-                            current.split_state = PlayerState.PLAYING
-                            timeout_msg = f"⏰ {current.nickname} 主手超时停牌，转到分牌手\n"
-                            timeout_msg += f"📋 分牌手：{current.split_hand_display()}\n"
-                            sp_ops = "/抽牌 继续要牌 | /停牌 停止"
-                            if current.can_double_down():
-                                sp_ops += " | /加倍"
-                            timeout_msg += f"📋 {sp_ops}\n"
-                            self._start_action_timeout(session_id)
-                            if self.message_callback and game.session_info:
-                                await self.message_callback(game.session_info, 
-                                    {"success": True, "message": timeout_msg})
+                            # 主手超时：智能自动操作主手
+                            await self._smart_auto_play(session_id, game, current, is_split=False, has_pending_split=True)
                             return
                         else:
-                            current.state = PlayerState.STOOD
-                            timeout_msg = f"⏰ {current.nickname} 操作超时，自动停牌\n"
-                    
-                    result = await self._advance_turn(session_id)
-                    result["message"] = timeout_msg + result.get("message", "")
-                    
-                    if self.message_callback and game.session_info:
-                        await self.message_callback(game.session_info, result)
+                            # 普通超时：智能自动操作
+                            await self._smart_auto_play(session_id, game, current, is_split=False)
+                            return
         except asyncio.CancelledError:
             pass
         except Exception as e:
             logger.error(f"21点操作超时处理错误: {e}")
+    
+    async def _smart_auto_play(self, session_id: str, game: BlackjackGame, 
+                                player: BlackjackPlayer, is_split: bool = False,
+                                has_pending_split: bool = False):
+        """智能自动操作：根据手牌和庄家明牌决定要牌或停牌
+        
+        基本策略：
+        - 手牌 ≤ 11：自动要牌（不可能爆牌）
+        - 手牌 12-16 且庄家明牌 ≥ 7：自动要牌
+        - 手牌 ≥ 17 或庄家明牌 ≤ 6 且手牌 ≥ 12：自动停牌
+        """
+        timeout_msg = f"⏰ {player.nickname} 操作超时，执行智能自动操作\n"
+        
+        # 获取庄家明牌点数
+        dealer_up_card = game.dealer.hand[0]
+        dealer_up_value = dealer_up_card.value  # property, J/Q/K=10, A=11
+        
+        # 循环自动操作直到停牌或爆牌
+        while True:
+            if is_split:
+                hand = player.split_hand
+                hand_value = player.split_hand_value()
+            else:
+                hand = player.hand
+                hand_value = player.hand_value()
+            
+            # 决策：是否要牌
+            should_hit = False
+            if hand_value <= 11:
+                should_hit = True
+            elif hand_value <= 16 and dealer_up_value >= 7:
+                should_hit = True
+            # 手牌 >= 17 或 (12-16 且庄家明牌 <= 6) → 停牌
+            
+            if should_hit:
+                card = self._draw_card(game)
+                hand.append(card)
+                new_value = player.split_hand_value() if is_split else player.hand_value()
+                timeout_msg += f"🤖 自动要牌：{card.emoji()}（当前 {new_value} 点）\n"
+                
+                if new_value > 21:
+                    if is_split:
+                        player.split_state = PlayerState.BUSTED
+                        timeout_msg += f"💥 分牌手爆牌！\n"
+                        player.playing_split_hand = False
+                    else:
+                        player.state = PlayerState.BUSTED
+                        timeout_msg += f"💥 爆牌！\n"
+                        # 如果有待处理的分牌手
+                        if has_pending_split:
+                            player.playing_split_hand = True
+                            player.split_state = PlayerState.PLAYING
+                            timeout_msg += f"\n📋 转到分牌手：{player.split_hand_display()}\n"
+                            self._start_action_timeout(session_id)
+                            if self.message_callback and game.session_info:
+                                await self.message_callback(game.session_info,
+                                    {"success": True, "message": timeout_msg})
+                            return
+                    break
+                elif new_value == 21:
+                    if is_split:
+                        player.split_state = PlayerState.STOOD
+                        timeout_msg += f"🎯 分牌手 21 点！自动停牌\n"
+                        player.playing_split_hand = False
+                    else:
+                        player.state = PlayerState.STOOD
+                        timeout_msg += f"🎯 21 点！自动停牌\n"
+                        if has_pending_split:
+                            player.playing_split_hand = True
+                            player.split_state = PlayerState.PLAYING
+                            timeout_msg += f"\n📋 转到分牌手：{player.split_hand_display()}\n"
+                            self._start_action_timeout(session_id)
+                            if self.message_callback and game.session_info:
+                                await self.message_callback(game.session_info,
+                                    {"success": True, "message": timeout_msg})
+                            return
+                    break
+                # 继续循环判断是否还需要要牌
+            else:
+                # 停牌
+                if is_split:
+                    player.split_state = PlayerState.STOOD
+                    player.playing_split_hand = False
+                    timeout_msg += f"🤖 分牌手自动停牌（{hand_value} 点）\n"
+                else:
+                    player.state = PlayerState.STOOD
+                    timeout_msg += f"🤖 自动停牌（{hand_value} 点）\n"
+                    if has_pending_split:
+                        player.playing_split_hand = True
+                        player.split_state = PlayerState.PLAYING
+                        timeout_msg += f"\n📋 转到分牌手：{player.split_hand_display()}\n"
+                        self._start_action_timeout(session_id)
+                        if self.message_callback and game.session_info:
+                            await self.message_callback(game.session_info,
+                                {"success": True, "message": timeout_msg})
+                        return
+                break
+        
+        # 推进到下一个玩家或结算
+        result = await self._advance_turn(session_id)
+        result["message"] = timeout_msg + result.get("message", "")
+        
+        if self.message_callback and game.session_info:
+            await self.message_callback(game.session_info, result)
     
     def _get_current_hand(self, player: BlackjackPlayer) -> List[Card]:
         """获取当前操作中的手牌"""
@@ -1241,7 +1346,7 @@ class BlackjackService:
                        f"   {r['result_text']}\n"
                        f"   💰 {profit_str} 金币\n\n")
             
-            # 记录赌博历史
+            # 记录读博历史
             self._add_gambling_record(
                 "21点", game.game_id, r["user_id"],
                 r["nickname"], r["bet_amount"], r["profit"], r["result_text"]

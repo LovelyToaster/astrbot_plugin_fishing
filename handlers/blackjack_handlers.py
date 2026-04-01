@@ -48,7 +48,7 @@ async def start_blackjack(plugin: "FishingPlugin", event: AstrMessageEvent):
                 "• /加倍 - 加倍下注（初始2牌时）\n"
                 "• /分牌 - 分牌（同点数时）\n"
                 "• /买保险 - 庄家A时买保险\n"
-                "• /赌博记录 - 查看历史记录\n"
+                "• /读博记录 - 查看历史记录\n"
                 "• /21点状态 - 查看当前游戏\n"
                 "• /21点开始 - 提前开始（跳过等待）\n"
                 "• /21点帮助 - 查看详细规则"
@@ -232,7 +232,7 @@ async def blackjack_help(plugin: "FishingPlugin", event: AstrMessageEvent):
   ↳ 庄家Blackjack时保险赔2:1
 
 【查询命令】
-• /赌博记录 - 查看最近的赌博历史记录
+• /读博记录 - 查看最近的读博历史记录
 • /21点帮助 - 查看本帮助
 
 【连胜/连败奖励】
@@ -243,7 +243,7 @@ async def blackjack_help(plugin: "FishingPlugin", event: AstrMessageEvent):
 1. 发起者开局 → 等待{join_timeout}秒供其他人加入
 2. 发牌（每人2张，庄家1明1暗）
 3. 若庄家明牌为A → 可购买保险
-4. 按顺序操作：抽牌/停牌/加倍/分牌（{action_timeout}秒超时自动停牌）
+4. 按顺序操作：抽牌/停牌/加倍/分牌（{action_timeout}秒超时智能自动操作）
 5. 所有人操作完 → 庄家自动操作 → 结算
 
 【下注限额】
@@ -291,12 +291,12 @@ async def blackjack_buy_insurance(plugin: "FishingPlugin", event: AstrMessageEve
 
 
 async def blackjack_gambling_records(plugin: "FishingPlugin", event: AstrMessageEvent):
-    """查看赌博记录"""
+    """查看读博记录"""
     try:
         user_id = plugin._get_effective_user_id(event)
         
         args = event.message_str.split(" ")
-        limit = 10
+        limit = 5
         if len(args) > 1:
             try:
                 limit = int(args[1])
@@ -307,10 +307,10 @@ async def blackjack_gambling_records(plugin: "FishingPlugin", event: AstrMessage
         records = plugin.blackjack_service.get_user_gambling_records(user_id, limit)
         
         if not records:
-            yield event.plain_result("📋 暂无赌博记录")
+            yield event.plain_result("📋 暂无读博记录")
             return
         
-        message = f"📋 最近 {len(records)} 条赌博记录\n\n"
+        message = f"📋 最近 {len(records)} 条读博记录\n\n"
         for i, r in enumerate(reversed(records), 1):
             profit_str = f"+{r['profit']:,}" if r['profit'] >= 0 else f"{r['profit']:,}"
             profit_icon = "💰" if r['profit'] > 0 else ("💸" if r['profit'] < 0 else "⚖️")
@@ -321,3 +321,32 @@ async def blackjack_gambling_records(plugin: "FishingPlugin", event: AstrMessage
         yield event.plain_result(message)
     except Exception as e:
         yield event.plain_result(f"❌ 查询记录失败：{str(e)}")
+
+
+async def set_blackjack_mode(plugin: "FishingPlugin", event: AstrMessageEvent):
+    """[管理员] 设置21点消息模式"""
+    args = event.message_str.split(" ")
+    
+    if len(args) < 2:
+        current_mode = plugin.blackjack_service.get_message_mode()
+        mode_name = "图片模式" if current_mode == "image" else "文本模式"
+        yield event.plain_result(f"📱 当前21点消息模式：{mode_name}\n用法：/21点模式 <image|text>")
+        return
+    
+    try:
+        mode = args[1].lower()
+        
+        # 支持中文输入
+        if mode in ["图片", "图片模式", "img"]:
+            mode = "image"
+        elif mode in ["文本", "文字", "文本模式", "txt"]:
+            mode = "text"
+        
+        result = plugin.blackjack_service.set_message_mode(mode)
+        
+        if result["success"]:
+            yield event.plain_result(result["message"])
+        else:
+            yield event.plain_result(result["message"])
+    except Exception as e:
+        yield event.plain_result(f"❌ 设置失败：{str(e)}")

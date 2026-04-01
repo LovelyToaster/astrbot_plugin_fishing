@@ -68,6 +68,13 @@ class SicboService:
         # 消息发送回调函数
         self.message_callback = None
         
+        # 读博记录回调（写入blackjack_service的统一记录）
+        self._gambling_record_callback = None
+        
+        # 骰宝开奖历史  {session_id: [{time, dice, total, results_summary, game_id}, ...]}
+        self.draw_history: Dict[str, List[Dict[str, Any]]] = {}
+        self.max_draw_history = 50  # 每个群最多保留50条
+        
         # 赔率表 - 基于您提供的图片
         self.odds_table = {
             # 大小和单双
@@ -108,6 +115,10 @@ class SicboService:
         """设置消息发送回调函数"""
         self.message_callback = callback
     
+    def set_gambling_record_callback(self, callback):
+        """设置读博记录写入回调"""
+        self._gambling_record_callback = callback
+    
     def set_countdown_seconds(self, seconds: int) -> Dict[str, Any]:
         """设置倒计时秒数"""
         if seconds < 10:
@@ -144,6 +155,11 @@ class SicboService:
     def is_image_mode(self) -> bool:
         """判断是否为图片模式"""
         return self.message_mode == "image"
+    
+    def get_draw_history(self, session_id: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """获取指定会话的骰宝开奖历史"""
+        records = self.draw_history.get(session_id, [])
+        return records[-limit:]
     
     def start_new_game(self, session_id: str, session_info: Dict[str, Any] = None, 
                         banker_user_id: str = None) -> Dict[str, Any]:
@@ -615,6 +631,40 @@ class SicboService:
                 message += f"🏦 庄家 {game.banker_nickname} 持平 ⚖️"
         
         logger.info(f"骰宝游戏结算完成: {game.game_id}, 结果: {dice}, 总派彩: {actual_total_payout}")
+        
+        # 写入读博记录
+        if self._gambling_record_callback:
+            dice_str_short = ",".join(str(d) for d in dice)
+            for user_id, total_profit in user_profits.items():
+                user = self.user_repo.get_by_id(user_id)
+                nickname = user.nickname if user and user.nickname else user_id
+                # 统计该用户的总下注
+                user_total_bet = sum(info["amount"] for info in settlement_info if info["user_id"] == user_id)
+                detail = f"骰子[{dice_str_short}]={total}点 {'赢' if total_profit > 0 else ('输' if total_profit < 0 else '平')}"
+                self._gambling_record_callback(
+                    "骰宝", game.game_id, user_id,
+                    nickname, user_total_bet, total_profit, detail
+                )
+        
+        # 记录骰宝开奖历史（按session_id分组）
+        dice_emojis = {1: '⚀', 2: '⚁', 3: '⚂', 4: '⚃', 5: '⚄', 6: '⚅'}
+        dice_emoji_str = " ".join([dice_emojis.get(d, str(d)) for d in dice])
+        draw_record = {
+            "time": get_now().strftime("%Y-%m-%d %H:%M:%S"),
+            "dice": dice,
+            "dice_display": dice_emoji_str,
+            "total": total,
+            "big_small": "大" if total >= 11 else "小",
+            "odd_even": "双" if total % 2 == 0 else "单",
+            "is_triple": results.get("is_triple", False),
+            "game_id": game.game_id,
+            "participants": len(user_profits),
+        }
+        if session_id not in self.draw_history:
+            self.draw_history[session_id] = []
+        self.draw_history[session_id].append(draw_record)
+        if len(self.draw_history[session_id]) > self.max_draw_history:
+            self.draw_history[session_id] = self.draw_history[session_id][-self.max_draw_history:]
         
         return {
             "success": True,
