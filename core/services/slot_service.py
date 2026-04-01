@@ -385,7 +385,8 @@ class SlotService:
                     "message": f"❌ 金币不足！{tier.name}需要 {cost:,} 金币，你只有 {user.coins:,}"}
 
         # 4) 扣费
-        self.user_repo.update_coins(user_id, -cost)
+        user.coins -= cost
+        self.user_repo.update(user)
 
         # 5) 累积奖池
         contribution = int(cost * tier.jackpot_contribution)
@@ -419,7 +420,10 @@ class SlotService:
 
         # 9) 发放奖金
         if result.payout > 0:
-            self.user_repo.update_coins(user_id, result.payout)
+            payout_user = self.user_repo.get_by_id(user_id)
+            if payout_user:
+                payout_user.coins += result.payout
+                self.user_repo.update(payout_user)
 
         # 10) 更新使用次数
         self._increment_usage(user_id)

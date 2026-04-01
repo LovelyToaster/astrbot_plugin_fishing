@@ -35,6 +35,9 @@ def _get_game_session_id(event: AstrMessageEvent) -> str:
 
 async def start_sicbo_game(plugin: "FishingPlugin", event: AstrMessageEvent):
     """开庄命令 - 系统开庄"""
+    if not plugin.is_game_enabled(event, "sicbo"):
+        yield event.plain_result("❌ 骰宝功能已被管理员在本群关闭")
+        return
     try:
         # 获取游戏会话ID
         game_session_id = _get_game_session_id(event)
@@ -70,6 +73,9 @@ async def start_sicbo_game(plugin: "FishingPlugin", event: AstrMessageEvent):
 
 async def start_sicbo_player_banker(plugin: "FishingPlugin", event: AstrMessageEvent):
     """玩家开庄命令 - 发送者成为庄家"""
+    if not plugin.is_game_enabled(event, "sicbo"):
+        yield event.plain_result("❌ 骰宝功能已被管理员在本群关闭")
+        return
     try:
         game_session_id = _get_game_session_id(event)
         user_id = plugin._get_effective_user_id(event)
@@ -105,6 +111,9 @@ async def start_sicbo_player_banker(plugin: "FishingPlugin", event: AstrMessageE
 
 async def place_bet(plugin: "FishingPlugin", event: AstrMessageEvent, bet_type: str):
     """下注命令的通用处理函数"""
+    if not plugin.is_game_enabled(event, "sicbo"):
+        yield event.plain_result("❌ 骰宝功能已被管理员在本群关闭")
+        return
     # 获取游戏会话ID
     game_session_id = _get_game_session_id(event)
     

@@ -18,6 +18,9 @@ if TYPE_CHECKING:
 
 async def slot_spin(plugin: "FishingPlugin", event: AstrMessageEvent):
     """拉杆命令 - 单次拉杆"""
+    if not plugin.is_game_enabled(event, "slot"):
+        yield event.plain_result("❌ 拉杆机功能已被管理员在本群关闭")
+        return
     try:
         user_id = plugin._get_effective_user_id(event)
 
@@ -67,6 +70,9 @@ async def slot_spin(plugin: "FishingPlugin", event: AstrMessageEvent):
 
 async def slot_multi_spin(plugin: "FishingPlugin", event: AstrMessageEvent):
     """连转命令 - 连续拉杆多次"""
+    if not plugin.is_game_enabled(event, "slot"):
+        yield event.plain_result("❌ 拉杆机功能已被管理员在本群关闭")
+        return
     try:
         user_id = plugin._get_effective_user_id(event)
 

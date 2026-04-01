@@ -3,6 +3,7 @@
 处理所有21点相关的命令
 """
 
+import os
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api import logger
 from typing import TYPE_CHECKING
@@ -10,6 +11,26 @@ from ..utils import parse_amount
 
 if TYPE_CHECKING:
     from ..main import FishingPlugin
+
+
+async def _render_blackjack_response(plugin: "FishingPlugin", event: AstrMessageEvent, result: dict):
+    """渲染21点响应 - 图片模式下对结算结果生成图片"""
+    if plugin.blackjack_service.is_image_mode() and result.get("settled"):
+        try:
+            from ..draw.blackjack import draw_blackjack_result, save_image_to_temp
+            image = draw_blackjack_result(
+                result.get("dealer_cards", []),
+                result.get("dealer_value", 0),
+                result.get("results", []),
+                result.get("banker_nickname"),
+                result.get("banker_profit")
+            )
+            image_path = save_image_to_temp(image, "bj_settle", plugin.data_dir)
+            yield event.image_result(image_path)
+            return
+        except Exception as e:
+            logger.error(f"21点结算图片生成失败，回退到文本: {e}")
+    yield event.plain_result(result["message"])
 
 
 def _get_game_session_id(event: AstrMessageEvent) -> str:
@@ -24,6 +45,9 @@ def _get_game_session_id(event: AstrMessageEvent) -> str:
 
 async def start_blackjack(plugin: "FishingPlugin", event: AstrMessageEvent):
     """开始21点游戏（系统庄家）"""
+    if not plugin.is_game_enabled(event, "blackjack"):
+        yield event.plain_result("❌ 21点功能已被管理员在本群关闭")
+        return
     try:
         game_session_id = _get_game_session_id(event)
         user_id = plugin._get_effective_user_id(event)
@@ -84,6 +108,9 @@ async def start_blackjack(plugin: "FishingPlugin", event: AstrMessageEvent):
 
 async def start_blackjack_banker(plugin: "FishingPlugin", event: AstrMessageEvent):
     """21点玩家开庄"""
+    if not plugin.is_game_enabled(event, "blackjack"):
+        yield event.plain_result("❌ 21点功能已被管理员在本群关闭")
+        return
     try:
         game_session_id = _get_game_session_id(event)
         user_id = plugin._get_effective_user_id(event)
@@ -116,6 +143,9 @@ async def start_blackjack_banker(plugin: "FishingPlugin", event: AstrMessageEven
 
 async def join_blackjack(plugin: "FishingPlugin", event: AstrMessageEvent):
     """加入21点游戏"""
+    if not plugin.is_game_enabled(event, "blackjack"):
+        yield event.plain_result("❌ 21点功能已被管理员在本群关闭")
+        return
     try:
         game_session_id = _get_game_session_id(event)
         user_id = plugin._get_effective_user_id(event)
@@ -147,24 +177,32 @@ async def join_blackjack(plugin: "FishingPlugin", event: AstrMessageEvent):
 
 async def blackjack_hit(plugin: "FishingPlugin", event: AstrMessageEvent):
     """抽牌/要牌"""
+    if not plugin.is_game_enabled(event, "blackjack"):
+        yield event.plain_result("❌ 21点功能已被管理员在本群关闭")
+        return
     try:
         game_session_id = _get_game_session_id(event)
         user_id = plugin._get_effective_user_id(event)
         
         result = await plugin.blackjack_service.hit(game_session_id, user_id)
-        yield event.plain_result(result["message"])
+        async for r in _render_blackjack_response(plugin, event, result):
+            yield r
     except Exception as e:
         yield event.plain_result(f"❌ 抽牌失败：{str(e)}")
 
 
 async def blackjack_stand(plugin: "FishingPlugin", event: AstrMessageEvent):
     """停牌"""
+    if not plugin.is_game_enabled(event, "blackjack"):
+        yield event.plain_result("❌ 21点功能已被管理员在本群关闭")
+        return
     try:
         game_session_id = _get_game_session_id(event)
         user_id = plugin._get_effective_user_id(event)
         
         result = await plugin.blackjack_service.stand(game_session_id, user_id)
-        yield event.plain_result(result["message"])
+        async for r in _render_blackjack_response(plugin, event, result):
+            yield r
     except Exception as e:
         yield event.plain_result(f"❌ 停牌失败：{str(e)}")
 
@@ -181,10 +219,14 @@ async def blackjack_status(plugin: "FishingPlugin", event: AstrMessageEvent):
 
 async def blackjack_force_start(plugin: "FishingPlugin", event: AstrMessageEvent):
     """提前开始21点游戏"""
+    if not plugin.is_game_enabled(event, "blackjack"):
+        yield event.plain_result("❌ 21点功能已被管理员在本群关闭")
+        return
     try:
         game_session_id = _get_game_session_id(event)
         result = await plugin.blackjack_service.force_start(game_session_id)
-        yield event.plain_result(result["message"])
+        async for r in _render_blackjack_response(plugin, event, result):
+            yield r
     except Exception as e:
         yield event.plain_result(f"❌ 开始失败：{str(e)}")
 
@@ -212,7 +254,7 @@ async def blackjack_help(plugin: "FishingPlugin", event: AstrMessageEvent):
 🎮 系统庄家：/21点 [金额]
    • 与系统对战，可多人同时参与
 🏦 玩家开庄：/21点开庄
-   • 发起者当庄，最多4人加入
+   • 发起者当庄，最多6人加入
    • 庄家最低余额要求 {min_banker:,} 金币
    • 庄家资金不足时按比例派彩
 
@@ -256,30 +298,41 @@ async def blackjack_help(plugin: "FishingPlugin", event: AstrMessageEvent):
 
 async def blackjack_double_down(plugin: "FishingPlugin", event: AstrMessageEvent):
     """加倍下注"""
+    if not plugin.is_game_enabled(event, "blackjack"):
+        yield event.plain_result("❌ 21点功能已被管理员在本群关闭")
+        return
     try:
         game_session_id = _get_game_session_id(event)
         user_id = plugin._get_effective_user_id(event)
         
         result = await plugin.blackjack_service.double_down(game_session_id, user_id)
-        yield event.plain_result(result["message"])
+        async for r in _render_blackjack_response(plugin, event, result):
+            yield r
     except Exception as e:
         yield event.plain_result(f"❌ 加倍失败：{str(e)}")
 
 
 async def blackjack_split(plugin: "FishingPlugin", event: AstrMessageEvent):
     """分牌"""
+    if not plugin.is_game_enabled(event, "blackjack"):
+        yield event.plain_result("❌ 21点功能已被管理员在本群关闭")
+        return
     try:
         game_session_id = _get_game_session_id(event)
         user_id = plugin._get_effective_user_id(event)
         
         result = await plugin.blackjack_service.split(game_session_id, user_id)
-        yield event.plain_result(result["message"])
+        async for r in _render_blackjack_response(plugin, event, result):
+            yield r
     except Exception as e:
         yield event.plain_result(f"❌ 分牌失败：{str(e)}")
 
 
 async def blackjack_buy_insurance(plugin: "FishingPlugin", event: AstrMessageEvent):
     """购买保险"""
+    if not plugin.is_game_enabled(event, "blackjack"):
+        yield event.plain_result("❌ 21点功能已被管理员在本群关闭")
+        return
     try:
         game_session_id = _get_game_session_id(event)
         user_id = plugin._get_effective_user_id(event)

@@ -1,4 +1,5 @@
 import os
+import json
 import asyncio
 
 from astrbot.api import logger, AstrBotConfig
@@ -379,6 +380,60 @@ class FishingPlugin(Star):
 
         # 管理员扮演功能
         self.impersonation_map = {}
+
+        # --- 游戏模块开关（per-group 持久化） ---
+        self._game_toggles_path = os.path.join(self.data_dir, "game_toggles.json")
+        self.game_toggles: dict = self._load_game_toggles()
+
+    # =========== 游戏模块开关 ==========
+
+    def _load_game_toggles(self) -> dict:
+        """从JSON文件加载游戏模块开关配置"""
+        try:
+            if os.path.exists(self._game_toggles_path):
+                with open(self._game_toggles_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.warning(f"加载游戏开关配置失败: {e}")
+        return {}
+
+    def _save_game_toggles(self):
+        """保存游戏模块开关配置到JSON文件"""
+        try:
+            with open(self._game_toggles_path, "w", encoding="utf-8") as f:
+                json.dump(self.game_toggles, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"保存游戏开关配置失败: {e}")
+
+    def _get_game_session_id_from_event(self, event: AstrMessageEvent) -> str:
+        """从事件获取游戏会话ID（群ID）"""
+        group_id = event.get_group_id()
+        if group_id:
+            platform_name = getattr(event.platform_meta, 'platform_name', 'aiocqhttp')
+            return f"{platform_name}:group:{group_id}"
+        return event.unified_msg_origin
+
+    def is_game_enabled(self, event: AstrMessageEvent, game_type: str) -> bool:
+        """检查指定游戏模块在当前会话中是否开启
+        
+        Args:
+            event: 消息事件
+            game_type: 游戏类型 - "blackjack" / "sicbo" / "slot"
+            
+        Returns:
+            True 表示开启（默认），False 表示关闭
+        """
+        session_id = self._get_game_session_id_from_event(event)
+        session_toggles = self.game_toggles.get(session_id, {})
+        return session_toggles.get(game_type, True)  # 默认开启
+
+    def set_game_toggle(self, event: AstrMessageEvent, game_type: str, enabled: bool):
+        """设置指定游戏模块在当前会话中的开关状态"""
+        session_id = self._get_game_session_id_from_event(event)
+        if session_id not in self.game_toggles:
+            self.game_toggles[session_id] = {}
+        self.game_toggles[session_id][game_type] = enabled
+        self._save_game_toggles()
 
     async def _send_sicbo_announcement(self, session_info: dict, result_data: dict):
         """发送骰宝游戏结果公告 - 使用主动发送机制"""
@@ -1198,6 +1253,56 @@ class FishingPlugin(Star):
         """[管理员] 设置21点消息模式（图片/文本）"""
         async for r in blackjack_handlers.set_blackjack_mode(self, event):
             yield r
+
+    @filter.permission_type(PermissionType.ADMIN)
+    @filter.command("游戏开关", alias={"功能开关"})
+    async def toggle_game_module(self, event: AstrMessageEvent):
+        """[管理员] 开关游戏模块。用法：游戏开关 [21点/骰宝/拉杆机] [开/关]"""
+        args = event.message_str.split()
+        
+        GAME_MAP = {
+            "21点": "blackjack", "二十一点": "blackjack", "blackjack": "blackjack",
+            "骰宝": "sicbo", "sicbo": "sicbo",
+            "拉杆机": "slot", "拉杆": "slot", "slot": "slot", "老虎机": "slot",
+        }
+        GAME_NAMES = {"blackjack": "21点", "sicbo": "骰宝", "slot": "拉杆机"}
+        
+        if len(args) < 2:
+            # 显示当前状态
+            lines = ["📋 当前游戏模块开关状态：\n"]
+            for game_type, display_name in GAME_NAMES.items():
+                enabled = self.is_game_enabled(event, game_type)
+                status = "✅ 开启" if enabled else "❌ 关闭"
+                lines.append(f"  {display_name}：{status}")
+            lines.append(f"\n💡 用法：/游戏开关 [21点/骰宝/拉杆机] [开/关]")
+            yield event.plain_result("\n".join(lines))
+            return
+        
+        game_input = args[1]
+        game_type = GAME_MAP.get(game_input)
+        if not game_type:
+            yield event.plain_result(f"❌ 未知游戏模块「{game_input}」\n💡 支持：21点、骰宝、拉杆机")
+            return
+        
+        display_name = GAME_NAMES[game_type]
+        
+        if len(args) < 3:
+            # 切换当前状态
+            current = self.is_game_enabled(event, game_type)
+            self.set_game_toggle(event, game_type, not current)
+            new_status = "❌ 关闭" if current else "✅ 开启"
+            yield event.plain_result(f"🔧 已将本群「{display_name}」{new_status}")
+            return
+        
+        action = args[2]
+        if action in ("开", "开启", "启用", "on", "enable"):
+            self.set_game_toggle(event, game_type, True)
+            yield event.plain_result(f"✅ 已开启本群「{display_name}」功能")
+        elif action in ("关", "关闭", "禁用", "off", "disable"):
+            self.set_game_toggle(event, game_type, False)
+            yield event.plain_result(f"❌ 已关闭本群「{display_name}」功能")
+        else:
+            yield event.plain_result(f"❌ 未知操作「{action}」\n💡 请使用：开/关")
 
     # =========== 社交 ==========
 
