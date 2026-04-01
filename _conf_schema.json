@@ -458,5 +458,41 @@
         "hint": "连败达到阈值后每局发放的安慰金，默认500金币"
       }
     }
+  },
+  "slot": {
+    "description": "拉杆机游戏配置",
+    "type": "object",
+    "items": {
+      "daily_limit": {
+        "type": "int",
+        "default": 50,
+        "description": "每日拉杆次数限制",
+        "hint": "每位玩家每日最多拉杆次数，默认50次"
+      },
+      "max_multi_spin": {
+        "type": "int",
+        "default": 10,
+        "description": "连转最大次数",
+        "hint": "单次连转命令最多执行次数，默认10次"
+      },
+      "streak_protection": {
+        "type": "int",
+        "default": 20,
+        "description": "保底触发次数",
+        "hint": "连续N次未中奖后保底触发两同，默认20次"
+      },
+      "initial_jackpot": {
+        "type": "int",
+        "default": 0,
+        "description": "初始累积奖池金额",
+        "hint": "服务启动时的累积奖池初始值，默认0"
+      },
+      "message_mode": {
+        "type": "string",
+        "default": "image",
+        "description": "拉杆机消息模式",
+        "hint": "image(图片)或text(文本)"
+      }
+    }
   }
 }

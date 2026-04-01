@@ -40,6 +40,7 @@ from .core.services.red_packet_service import RedPacketService
 from .core.services.loan_service import LoanService
 from .core.services.fish_weight_service import FishWeightService # 新增钓鱼权重Service
 from .core.services.blackjack_service import BlackjackService  # 新增21点游戏Service
+from .core.services.slot_service import SlotService  # 拉杆机Service
 
 from .core.database.migration import run_migrations
 
@@ -59,6 +60,7 @@ from .handlers import (
     red_packet_handlers,
     loan_handlers,
     blackjack_handlers,  # 新增21点游戏处理器
+    slot_handlers,  # 拉杆机处理器
 )
 from .handlers.fishing_handlers import FishingHandlers
 from .handlers.exchange_handlers import ExchangeHandlers
@@ -211,6 +213,7 @@ class FishingPlugin(Star):
             "exchange": exchange_config,  # 直接使用框架的配置
             "sicbo": config.get("sicbo", {}),  # 骰宝配置
             "blackjack": config.get("blackjack", {}),  # 21点配置
+            "slot": config.get("slot", {}),  # 拉杆机配置
         }
         
         # 初始化数据库模式
@@ -288,8 +291,13 @@ class FishingPlugin(Star):
         self.blackjack_service = BlackjackService(self.user_repo, self.log_repo, self.game_config)
         self.blackjack_service.set_message_callback(self._send_blackjack_announcement)
         
+        # 初始化拉杆机服务
+        self.slot_service = SlotService(self.user_repo, self.log_repo, self.game_config)
+        
         # 让骰宝的记录也写入统一的读博记录
         self.sicbo_service.set_gambling_record_callback(self.blackjack_service._add_gambling_record)
+        # 让拉杆机的记录也写入统一的读博记录
+        self.slot_service.set_gambling_record_callback(self.blackjack_service._add_gambling_record)
         
         # 初始化红包服务
         self.red_packet_repo = SqliteRedPacketRepository(db_path)
@@ -1435,6 +1443,45 @@ class FishingPlugin(Star):
     async def sicbo_draw_history(self, event: AstrMessageEvent):
         """查看当前群的骰宝开奖记录（最近5期）"""
         async for r in sicbo_handlers.sicbo_draw_history(self, event):
+            yield r
+
+    # =========== 拉杆机游戏 ==========
+
+    @filter.command("拉杆", alias={"拉杆机", "slot"})
+    async def slot_spin(self, event: AstrMessageEvent):
+        """拉杆机游戏。用法：拉杆 [铜/银/金/至尊]"""
+        async for r in slot_handlers.slot_spin(self, event):
+            yield r
+
+    @filter.command("连转", alias={"拉杆连转", "multi_spin"})
+    async def slot_multi_spin(self, event: AstrMessageEvent):
+        """连续拉杆。用法：连转 [档位] [次数]"""
+        async for r in slot_handlers.slot_multi_spin(self, event):
+            yield r
+
+    @filter.command("奖池", alias={"拉杆奖池", "jackpot"})
+    async def slot_jackpot(self, event: AstrMessageEvent):
+        """查看拉杆机累积奖池与档位信息"""
+        async for r in slot_handlers.slot_jackpot(self, event):
+            yield r
+
+    @filter.command("拉杆记录", alias={"拉杆历史"})
+    async def slot_history(self, event: AstrMessageEvent):
+        """查看拉杆历史记录"""
+        async for r in slot_handlers.slot_history(self, event):
+            yield r
+
+    @filter.command("拉杆帮助", alias={"拉杆说明"})
+    async def slot_help(self, event: AstrMessageEvent):
+        """查看拉杆机帮助"""
+        async for r in slot_handlers.slot_help(self, event):
+            yield r
+
+    @filter.permission_type(PermissionType.ADMIN)
+    @filter.command("拉杆模式")
+    async def set_slot_mode(self, event: AstrMessageEvent):
+        """[管理员] 设置拉杆机消息模式（图片/文本）"""
+        async for r in slot_handlers.set_slot_mode(self, event):
             yield r
 
     @filter.regex(r"^借[他她它]")
