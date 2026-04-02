@@ -548,7 +548,7 @@ class FishingPlugin(Star):
                 try:
                     if self.blackjack_service.is_image_mode():
                         if result_data.get("settled"):
-                            # 图片模式且是结算消息
+                            # 图片模式 + 结算消息 → 结算图片
                             from .draw.blackjack import draw_blackjack_result, save_image_to_temp
                             
                             dealer_cards = result_data.get("dealer_cards", [])
@@ -569,7 +569,7 @@ class FishingPlugin(Star):
                                 return
                         
                         elif result_data.get("game_state"):
-                            # 图片模式且是游戏过程消息 → 发送游戏状态图片 + 文字
+                            # 图片模式 + 游戏过程 → 纯游戏状态图片
                             from .draw.blackjack import draw_blackjack_game, save_image_to_temp
                             gs = result_data["game_state"]
                             image = draw_blackjack_game(
@@ -577,11 +577,28 @@ class FishingPlugin(Star):
                                 players=gs["players"],
                                 hide_dealer_second=gs.get("hide_dealer_second", True),
                                 banker_nickname=gs.get("banker_nickname"),
+                                current_player=gs.get("current_player"),
+                                action_hint=gs.get("action_hint"),
                             )
                             image_path = save_image_to_temp(image, "bj_game_auto", self.data_dir)
-                            await self._send_initiative_image(session_info, image_path)
+                            success = await self._send_initiative_image(session_info, image_path)
+                            if success:
+                                logger.info("🃏 21点游戏状态图片已主动发送")
+                                return
+                        
+                        else:
+                            # 图片模式 + 其他文本消息 → 通知图片
+                            from .draw.blackjack import draw_blackjack_notification, save_image_to_temp
+                            message = result_data.get("message", "")
+                            if message:
+                                image = draw_blackjack_notification(message)
+                                image_path = save_image_to_temp(image, "bj_notify_auto", self.data_dir)
+                                success = await self._send_initiative_image(session_info, image_path)
+                                if success:
+                                    logger.info("🃏 21点通知图片已主动发送")
+                                    return
                     
-                    # 文本模式或非结算消息：都要发文字
+                    # 文本模式：发送文字
                     message = result_data.get("message", "21点游戏结果")
                     success = await self._send_initiative_message(session_info, message)
                     if success:

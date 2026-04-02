@@ -130,10 +130,13 @@ class BlackjackPlayer:
     
     def can_double_down(self) -> bool:
         """判断是否可以加倍（只有两张牌且未分牌操作中）"""
+        if self.playing_split_hand:
+            # 分牌手的加倍判断独立于主手 is_doubled 状态
+            if self.split_state == PlayerState.DOUBLED:
+                return False
+            return self.split_hand is not None and len(self.split_hand) == 2
         if self.is_doubled:
             return False
-        if self.playing_split_hand:
-            return self.split_hand is not None and len(self.split_hand) == 2
         return len(self.hand) == 2
     
     def hand_display(self) -> str:
@@ -545,11 +548,11 @@ class BlackjackService:
     async def force_start(self, session_id: str) -> Dict[str, Any]:
         """强制开始游戏（跳过等待）"""
         game = self.games.get(session_id)
-        if not game:
-            return {"success": False, "message": "❌ 没有等待中的游戏"}
+        if not game or game.state == BlackjackGameState.SETTLED:
+            return {"success": False, "message": "❌ 当前没有等待中的游戏，请先发起新游戏"}
         
         if game.state != BlackjackGameState.WAITING_PLAYERS:
-            return {"success": False, "message": "❌ 游戏已经开始"}
+            return {"success": False, "message": "❌ 游戏已经在进行中"}
         
         if not game.players:
             return {"success": False, "message": "❌ 还没有玩家加入"}
@@ -876,11 +879,28 @@ class BlackjackService:
                 pd["split_bet"] = p.split_bet
             players_data.append(pd)
         
+        # 构建当前操作玩家提示信息（用于图片内嵌操作提示）
+        current_player_name = None
+        action_hint_text = None
+        if game.current_player_index < len(game.players):
+            cp = game.players[game.current_player_index]
+            if cp.state == PlayerState.PLAYING or (cp.playing_split_hand and cp.split_state == PlayerState.PLAYING):
+                hand_label = "（分牌手）" if cp.playing_split_hand else ""
+                current_player_name = f"{cp.nickname}{hand_label}"
+                hints = ["/抽牌 要牌", "/停牌 停止"]
+                if cp.can_double_down():
+                    hints.append("/加倍")
+                if cp.can_split():
+                    hints.append("/分牌")
+                action_hint_text = " | ".join(hints)
+        
         return {
             "dealer_cards": dealer_cards,
             "players": players_data,
             "hide_dealer_second": True,
             "banker_nickname": game.banker_nickname,
+            "current_player": current_player_name,
+            "action_hint": action_hint_text,
         }
 
     def _build_result(self, message: str, advance_result: Dict[str, Any] = None,
@@ -1071,7 +1091,7 @@ class BlackjackService:
         if not user:
             return {"success": False, "message": "❌ 用户不存在"}
         
-        double_cost = current.bet_amount
+        double_cost = current.split_bet if current.playing_split_hand else current.bet_amount
         if not user.can_afford(double_cost):
             return {"success": False, "message": f"❌ 加倍需要额外 {double_cost:,} 金币，余额不足"}
         

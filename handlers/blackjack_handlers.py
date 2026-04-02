@@ -35,7 +35,7 @@ async def _render_blackjack_response(plugin: "FishingPlugin", event: AstrMessage
         except Exception as e:
             logger.error(f"21点结算图片生成失败，回退到文本: {e}")
     
-    # 游戏过程 → 游戏状态图片 + 文字说明
+    # 游戏过程 → 纯游戏状态图片（操作提示已嵌入图片底部）
     if result.get("game_state"):
         try:
             from ..draw.blackjack import draw_blackjack_game, save_image_to_temp
@@ -45,11 +45,11 @@ async def _render_blackjack_response(plugin: "FishingPlugin", event: AstrMessage
                 players=gs["players"],
                 hide_dealer_second=gs.get("hide_dealer_second", True),
                 banker_nickname=gs.get("banker_nickname"),
+                current_player=gs.get("current_player"),
+                action_hint=gs.get("action_hint"),
             )
             image_path = save_image_to_temp(image, "bj_game", plugin.data_dir)
             yield event.image_result(image_path)
-            # 额外发送文字操作提示（图片不含动态提示文本）
-            yield event.plain_result(result["message"])
             return
         except Exception as e:
             logger.error(f"21点游戏状态图片生成失败，回退到文本: {e}")
@@ -65,6 +65,20 @@ def _get_game_session_id(event: AstrMessageEvent) -> str:
         return f"{platform_name}:group:{group_id}"
     else:
         return event.unified_msg_origin
+
+
+async def _render_text_as_image_or_plain(plugin: "FishingPlugin", event: AstrMessageEvent, message: str):
+    """在图片模式下将文本渲染为通知图片，否则直接发送文本"""
+    if plugin.blackjack_service.is_image_mode():
+        try:
+            from ..draw.blackjack import draw_blackjack_notification, save_image_to_temp
+            image = draw_blackjack_notification(message)
+            image_path = save_image_to_temp(image, "bj_notify", plugin.data_dir)
+            yield event.image_result(image_path)
+            return
+        except Exception as e:
+            logger.error(f"21点通知图片生成失败，回退到文本: {e}")
+    yield event.plain_result(message)
 
 
 async def start_blackjack(plugin: "FishingPlugin", event: AstrMessageEvent):
@@ -125,7 +139,11 @@ async def start_blackjack(plugin: "FishingPlugin", event: AstrMessageEvent):
             session_info=session_info,
             is_player_banker=False
         )
-        yield event.plain_result(result["message"])
+        if result.get("success"):
+            async for r in _render_text_as_image_or_plain(plugin, event, result["message"]):
+                yield r
+        else:
+            yield event.plain_result(result["message"])
     except Exception as e:
         yield event.plain_result(f"❌ 开始21点游戏失败：{str(e)}")
 
@@ -160,7 +178,11 @@ async def start_blackjack_banker(plugin: "FishingPlugin", event: AstrMessageEven
             session_info=session_info,
             is_player_banker=True
         )
-        yield event.plain_result(result["message"])
+        if result.get("success"):
+            async for r in _render_text_as_image_or_plain(plugin, event, result["message"]):
+                yield r
+        else:
+            yield event.plain_result(result["message"])
     except Exception as e:
         yield event.plain_result(f"❌ 21点开庄失败：{str(e)}")
 
@@ -194,7 +216,11 @@ async def join_blackjack(plugin: "FishingPlugin", event: AstrMessageEvent):
             return
         
         result = plugin.blackjack_service.join_game(game_session_id, user_id, amount)
-        yield event.plain_result(result["message"])
+        if result.get("success"):
+            async for r in _render_text_as_image_or_plain(plugin, event, result["message"]):
+                yield r
+        else:
+            yield event.plain_result(result["message"])
     except Exception as e:
         yield event.plain_result(f"❌ 加入21点失败：{str(e)}")
 
@@ -236,7 +262,11 @@ async def blackjack_status(plugin: "FishingPlugin", event: AstrMessageEvent):
     try:
         game_session_id = _get_game_session_id(event)
         result = plugin.blackjack_service.get_game_status(game_session_id)
-        yield event.plain_result(result["message"])
+        if result.get("success"):
+            async for r in _render_text_as_image_or_plain(plugin, event, result["message"]):
+                yield r
+        else:
+            yield event.plain_result(result["message"])
     except Exception as e:
         yield event.plain_result(f"❌ 查看状态失败：{str(e)}")
 
@@ -362,7 +392,11 @@ async def blackjack_buy_insurance(plugin: "FishingPlugin", event: AstrMessageEve
         user_id = plugin._get_effective_user_id(event)
         
         result = await plugin.blackjack_service.buy_insurance(game_session_id, user_id)
-        yield event.plain_result(result["message"])
+        if result.get("success"):
+            async for r in _render_text_as_image_or_plain(plugin, event, result["message"]):
+                yield r
+        else:
+            yield event.plain_result(result["message"])
     except Exception as e:
         yield event.plain_result(f"❌ 购买保险失败：{str(e)}")
 
