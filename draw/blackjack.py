@@ -145,7 +145,10 @@ def draw_blackjack_game(dealer_cards: List[dict], players: List[dict],
         name_text = f"{icon} {player['nickname']} ({bet_text})"
         draw.text((30, y), name_text, fill=COLOR_TEXT_WHITE, font=name_font)
         if tag_str:
-            draw.text((30 + len(name_text) * 11, y + 3), tag_str, fill=COLOR_GOLD, font=tag_font)
+            # 使用textbbox精确测量名字文本宽度，避免中文字符宽度不一导致重叠
+            name_bbox = draw.textbbox((0, 0), name_text, font=name_font)
+            name_width = name_bbox[2] - name_bbox[0]
+            draw.text((30 + name_width + 8, y + 3), tag_str, fill=COLOR_GOLD, font=tag_font)
         
         # 绘制主手牌
         card_x = 30
@@ -257,7 +260,10 @@ def draw_blackjack_result(dealer_cards: List[dict], dealer_value: int,
         name_display = f"👤 {nickname}"
         draw.text((30, y), name_display, fill=COLOR_TEXT_WHITE, font=name_font)
         if tag_str:
-            draw.text((30 + len(name_display) * 11, y + 3), tag_str, fill=COLOR_GOLD, font=tag_font)
+            # 使用textbbox精确测量名字文本宽度，避免中文字符宽度不一导致重叠
+            name_bbox = draw.textbbox((0, 0), name_display, font=name_font)
+            name_width = name_bbox[2] - name_bbox[0]
+            draw.text((30 + name_width + 8, y + 3), tag_str, fill=COLOR_GOLD, font=tag_font)
         
         draw.text((30, y + 25), f"   {result_text}", fill=color, font=info_font)
         draw.text((30, y + 48), f"   💰 {profit_str} 金币", fill=color, font=info_font)

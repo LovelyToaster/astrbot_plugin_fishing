@@ -394,6 +394,9 @@ class BlackjackService:
             if bet_amount < self.min_bet:
                 return {"success": False, "message": f"❌ 最低下注 {self.min_bet:,} 金币"}
             
+            if bet_amount > self.max_bet:
+                return {"success": False, "message": f"❌ 最高下注 {self.max_bet:,} 金币"}
+            
             if not user.can_afford(bet_amount):
                 return {"success": False, "message": f"❌ 金币不足！当前 {user.coins:,} 金币"}
             
@@ -482,6 +485,9 @@ class BlackjackService:
         # 检查下注金额
         if bet_amount < game.min_bet:
             return {"success": False, "message": f"❌ 最低下注 {game.min_bet:,} 金币"}
+        
+        if bet_amount > self.max_bet:
+            return {"success": False, "message": f"❌ 最高下注 {self.max_bet:,} 金币"}
         
         user = self.user_repo.get_by_id(user_id)
         if not user:
@@ -686,9 +692,13 @@ class BlackjackService:
                             if current.playing_split_hand:
                                 current.split_state = PlayerState.STOOD
                                 current.playing_split_hand = False
-                            result = await self._advance_turn(session_id)
                             error_msg = f"⏰ {current.nickname} 操作超时（自动停牌）\n"
-                            result["message"] = error_msg + result.get("message", "")
+                            # 先发送超时通知
+                            if self.message_callback and game.session_info:
+                                await self.message_callback(game.session_info,
+                                    {"success": True, "message": error_msg})
+                            # 再推进结算（settlement 可能生成图片）
+                            result = await self._advance_turn(session_id)
                             if self.message_callback and game.session_info:
                                 await self.message_callback(game.session_info, result)
                         except Exception as e2:
@@ -799,9 +809,13 @@ class BlackjackService:
                             return
                     break
             
-            # 推进到下一个玩家或结算
+            # 先发送自动操作过程文本（确保用户能看到系统做了什么）
+            if timeout_msg and self.message_callback and game.session_info:
+                await self.message_callback(game.session_info,
+                    {"success": True, "message": timeout_msg})
+            
+            # 推进到下一个玩家或结算（settled 结果将单独发送，图片模式可正确渲染）
             result = await self._advance_turn(session_id)
-            result["message"] = timeout_msg + result.get("message", "")
             
             if self.message_callback and game.session_info:
                 await self.message_callback(game.session_info, result)
@@ -1006,11 +1020,19 @@ class BlackjackService:
         if old_task:
             old_task.cancel()
         
-        # 扣除额外金币
-        user.coins -= double_cost
-        self.user_repo.update(user)
-        current.bet_amount *= 2
-        current.is_doubled = True
+        # 区分主手/分牌手的加倍
+        if current.playing_split_hand:
+            # 分牌手加倍
+            user.coins -= double_cost
+            self.user_repo.update(user)
+            current.split_bet *= 2
+            # 注意: is_doubled 标志仅标记主手加倍状态，分牌手通过 split_state 判断
+        else:
+            # 主手加倍
+            user.coins -= double_cost
+            self.user_repo.update(user)
+            current.bet_amount *= 2
+            current.is_doubled = True
         
         # 只抽一张牌
         hand = self._get_current_hand(current)
@@ -1020,16 +1042,28 @@ class BlackjackService:
         value = self._get_current_hand_value(current)
         display = self._get_current_hand_display(current)
         
-        message = f"⬆️ {current.nickname} 选择加倍！下注翻倍至 {current.bet_amount:,} 金币\n"
+        actual_bet = current.split_bet if current.playing_split_hand else current.bet_amount
+        message = f"⬆️ {current.nickname} 选择加倍！下注翻倍至 {actual_bet:,} 金币\n"
         message += f"🃏 抽到 {card.emoji()}\n"
         message += f"📋 最终手牌：{display}\n"
         
-        if value > 21:
-            current.state = PlayerState.BUSTED
-            message += f"💥 爆牌！\n"
+        if current.playing_split_hand:
+            # 分牌手加倍后的结果
+            if value > 21:
+                current.split_state = PlayerState.BUSTED
+                message += f"💥 分牌手爆牌！\n"
+            else:
+                current.split_state = PlayerState.DOUBLED
+                message += f"✋ 分牌手加倍后自动停牌\n"
+            current.playing_split_hand = False
         else:
-            current.state = PlayerState.DOUBLED
-            message += f"✋ 加倍后自动停牌\n"
+            # 主手加倍后的结果
+            if value > 21:
+                current.state = PlayerState.BUSTED
+                message += f"💥 爆牌！\n"
+            else:
+                current.state = PlayerState.DOUBLED
+                message += f"✋ 加倍后自动停牌\n"
         
         # 如果有分牌手待操作
         if current.is_split and current.split_state == PlayerState.WAITING and not current.playing_split_hand:

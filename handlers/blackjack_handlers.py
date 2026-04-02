@@ -3,7 +3,6 @@
 处理所有21点相关的命令
 """
 
-import os
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api import logger
 from typing import TYPE_CHECKING
@@ -58,7 +57,7 @@ async def start_blackjack(plugin: "FishingPlugin", event: AstrMessageEvent):
             yield event.plain_result(overdue_msg)
             return
         
-        args = event.message_str.split(" ")
+        args = event.message_str.split()
         
         if len(args) < 2:
             yield event.plain_result(
@@ -156,7 +155,7 @@ async def join_blackjack(plugin: "FishingPlugin", event: AstrMessageEvent):
             yield event.plain_result(overdue_msg)
             return
         
-        args = event.message_str.split(" ")
+        args = event.message_str.split()
         
         if len(args) < 2:
             yield event.plain_result("❌ 请指定下注金额，例如：/21点加入 1000")
@@ -348,7 +347,7 @@ async def blackjack_gambling_records(plugin: "FishingPlugin", event: AstrMessage
     try:
         user_id = plugin._get_effective_user_id(event)
         
-        args = event.message_str.split(" ")
+        args = event.message_str.split()
         limit = 5
         if len(args) > 1:
             try:
@@ -378,7 +377,7 @@ async def blackjack_gambling_records(plugin: "FishingPlugin", event: AstrMessage
 
 async def set_blackjack_mode(plugin: "FishingPlugin", event: AstrMessageEvent):
     """[管理员] 设置21点消息模式"""
-    args = event.message_str.split(" ")
+    args = event.message_str.split()
     
     if len(args) < 2:
         current_mode = plugin.blackjack_service.get_message_mode()

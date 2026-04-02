@@ -25,12 +25,24 @@ COLOR_JACKPOT = (255, 215, 0)          # Jackpot 金色
 COLOR_MINI_JP = (192, 192, 255)        # Mini Jackpot 浅紫
 COLOR_LUCKY = (255, 200, 100)          # 幸运时段暖色
 
+# 拉杆机符号样式映射 (emoji -> (中文标签, 显示颜色))
+SYMBOL_STYLE_MAP = {
+    "🐟": ("小鱼", (100, 180, 255)),     # 浅蓝
+    "🦀": ("螃蟹", (255, 130, 80)),      # 橙红
+    "🐙": ("章鱼", (190, 130, 255)),     # 紫色
+    "🦈": ("鲨鱼", (130, 160, 210)),     # 蓝灰
+    "🐳": ("鲸鱼", (80, 170, 255)),      # 亮蓝
+    "💎": ("宝石", (100, 240, 240)),     # 青色
+    "🌟": ("海星", (255, 220, 80)),      # 金色
+}
+
 
 def draw_slot_result(symbols: List[str], tier_name: str, cost: int, payout: int,
                      net: int, match_type: str, match_desc: str,
                      balance: int, remaining: int, daily_limit: int,
                      jackpot_pool: int, jackpot_win: int = 0,
-                     is_lucky_hour: bool = False) -> Image.Image:
+                     is_lucky_hour: bool = False,
+                     symbol_labels: List[str] = None) -> Image.Image:
     """绘制单次拉杆结果图片"""
     width = 600
     height = 520 if jackpot_win > 0 else 480
@@ -63,16 +75,30 @@ def draw_slot_result(symbols: List[str], tier_name: str, cost: int, payout: int,
     draw.rounded_rectangle(reel_rect, radius=15, fill=COLOR_SLOT_REEL,
                            outline=COLOR_SLOT_BORDER, width=3)
 
-    # 三个符号
+    # 三个符号 - 使用文字标签渲染（PIL无法正确渲染emoji）
     sym_w = (width - 2 * reel_margin) // 3
+    label_font = load_font(28)
     for i, sym in enumerate(symbols):
-        sx = reel_margin + sym_w * i + sym_w // 2
-        sy = y + reel_h // 2
-        # 符号用大字体居中
-        sym_bbox = draw.textbbox((0, 0), sym, font=emoji_font)
-        sw = sym_bbox[2] - sym_bbox[0]
-        sh = sym_bbox[3] - sym_bbox[1]
-        draw.text((sx - sw // 2, sy - sh // 2 - 5), sym, fill=COLOR_TEXT_WHITE, font=emoji_font)
+        sx = reel_margin + sym_w * i
+        # 获取标签和颜色
+        label, sym_color = SYMBOL_STYLE_MAP.get(sym, (sym, COLOR_TEXT_WHITE))
+        if symbol_labels and i < len(symbol_labels):
+            label = symbol_labels[i]
+
+        # 绘制符号单元格着色背景
+        cell_pad = 6
+        cell_rect = [sx + cell_pad, y + cell_pad, sx + sym_w - cell_pad, y + reel_h - cell_pad]
+        # 半透明背景色
+        bg_color = tuple(max(0, c - 80) for c in sym_color)
+        draw.rounded_rectangle(cell_rect, radius=8, fill=bg_color)
+
+        # 居中绘制文字标签
+        lbl_bbox = draw.textbbox((0, 0), label, font=label_font)
+        lw = lbl_bbox[2] - lbl_bbox[0]
+        lh = lbl_bbox[3] - lbl_bbox[1]
+        cx = sx + sym_w // 2 - lw // 2
+        cy = y + reel_h // 2 - lh // 2
+        draw.text((cx, cy), label, fill=sym_color, font=label_font)
 
         # 分隔线（前两个后面画竖线）
         if i < 2:
@@ -168,7 +194,9 @@ def draw_slot_multi_result(results: List[Dict[str, Any]], tier_name: str,
     # 每行结果
     for i, r in enumerate(results, 1):
         rd = r["result"]
-        syms = " ".join(rd["symbols"])
+        # 优先使用文字标签（PIL无法渲染emoji）
+        labels = rd.get("symbol_labels", rd["symbols"])
+        syms = " ".join(labels)
         net = rd["net"]
         desc = rd["match_desc"]
         # 截短描述
@@ -294,7 +322,13 @@ def draw_slot_history(records: List[Dict], username: str) -> Image.Image:
     for rec in reversed(records):  # 最新的在前
         t = rec.get("time", "")
         tier = rec.get("tier", "")
-        syms = " ".join(rec.get("symbols", []))
+        # 优先使用文字标签（PIL无法渲染emoji）
+        raw_syms = rec.get("symbols", [])
+        display_syms = []
+        for s in raw_syms:
+            label, _ = SYMBOL_STYLE_MAP.get(s, (s, None))
+            display_syms.append(label)
+        syms = " ".join(display_syms)
         desc = rec.get("match_desc", "")
         net = rec.get("net", 0)
 
@@ -314,7 +348,8 @@ def draw_slot_history(records: List[Dict], username: str) -> Image.Image:
     return image
 
 
-def draw_slot_help(daily_limit: int, tiers_info: Dict) -> Image.Image:
+def draw_slot_help(daily_limit: int, tiers_info: Dict,
+                   max_multi_spin: int = 10) -> Image.Image:
     """绘制拉杆机帮助图片"""
     width, height = 650, 800
 
@@ -352,13 +387,13 @@ def draw_slot_help(daily_limit: int, tiers_info: Dict) -> Image.Image:
     _draw_card(draw, 30, y, width - 60, card_h, "💰 赔率表")
     inner_y = y + 35
     odds_data = [
-        ("🌟 三海星", "×250", "🌟🌟 两海星", "×5"),
-        ("💎 三宝石", "×120", "💎 两宝石", "×3"),
-        ("🐳 三鲸鱼", "×60", "🐳 两鲸鱼", "×2"),
-        ("🦈 三鲨鱼", "×30", "🦈 两鲨鱼", "×1"),
-        ("🐙 三章鱼", "×15", "🐙 两章鱼", "×1"),
-        ("🦀 三螃蟹", "×8", "🦀 两螃蟹", "×1"),
-        ("🐟 三小鱼", "×5", "🐟 两小鱼", "×1"),
+        ("海星 ×250", "×250", "两海星", "×5"),
+        ("宝石 ×120", "×120", "两宝石", "×3"),
+        ("鲸鱼 ×60", "×60", "两鲸鱼", "×2"),
+        ("鲨鱼 ×30", "×30", "两鲨鱼", "×1"),
+        ("章鱼 ×15", "×15", "两章鱼", "×1"),
+        ("螃蟹 ×8", "×8", "两螃蟹", "×1"),
+        ("小鱼 ×5", "×5", "两小鱼", "×1"),
     ]
     # 表头
     draw.text((55, inner_y), "三同", fill=(150, 150, 180), font=small_font)
@@ -396,7 +431,7 @@ def draw_slot_help(daily_limit: int, tiers_info: Dict) -> Image.Image:
     inner_y = y + 35
     cmds = [
         "/拉杆 [档位]     - 单次拉杆（默认铜桌）",
-        "/连转 [档位] [次数] - 连续拉杆（最多10次）",
+        f"/连转 [档位] [次数] - 连续拉杆（最多{max_multi_spin}次）",
         "/奖池          - 查看累积奖池与档位",
         "/拉杆记录       - 查看最近拉杆历史",
         "/拉杆帮助       - 查看本帮助",

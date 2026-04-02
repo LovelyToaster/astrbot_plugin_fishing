@@ -57,6 +57,7 @@ async def slot_spin(plugin: "FishingPlugin", event: AstrMessageEvent):
                 jackpot_pool=result["jackpot_pool"],
                 jackpot_win=rd.get("jackpot_win", 0),
                 is_lucky_hour=result.get("is_lucky_hour", False),
+                symbol_labels=rd.get("symbol_labels"),
             )
             image_path = save_image_to_temp(image, "slot_spin", plugin.data_dir)
             yield event.image_result(image_path)
@@ -204,6 +205,7 @@ async def slot_help(plugin: "FishingPlugin", event: AstrMessageEvent):
             image = draw_slot_help(
                 daily_limit=plugin.slot_service.daily_limit,
                 tiers_info={},
+                max_multi_spin=plugin.slot_service.max_multi_spin,
             )
             image_path = save_image_to_temp(image, "slot_help", plugin.data_dir)
             yield event.image_result(image_path)
@@ -233,7 +235,7 @@ async def slot_help(plugin: "FishingPlugin", event: AstrMessageEvent):
 
 【命令】
 /拉杆 [档位] - 单次拉杆（默认铜桌）
-/连转 [档位] [次数] - 连续拉杆（最多10次）
+/连转 [档位] [次数] - 连续拉杆（最多{plugin.slot_service.max_multi_spin}次）
 /奖池 - 查看累积奖池
 /拉杆记录 - 查看最近记录
 /拉杆帮助 - 查看本帮助

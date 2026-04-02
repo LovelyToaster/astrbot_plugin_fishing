@@ -463,6 +463,7 @@ class SlotService:
 
     def multi_spin(self, user_id: str, tier_name: str, count: int) -> Dict[str, Any]:
         """连续拉杆多次"""
+        requested_count = count
         count = max(1, min(count, self.max_multi_spin))
 
         # 预检查
@@ -507,6 +508,16 @@ class SlotService:
             return {"success": False, "message": "❌ 拉杆失败"}
 
         updated_user = self.user_repo.get_by_id(user_id)
+
+        # 构建信息提示
+        cap_notice = ""
+        if requested_count > self.max_multi_spin:
+            cap_notice = f"⚠️ 单次连转上限为 {self.max_multi_spin} 次，已自动调整\n"
+
+        text_msg = self._build_multi_text(results, tier, total_net, updated_user)
+        if cap_notice:
+            text_msg = cap_notice + text_msg
+
         return {
             "success": True,
             "results": results,
@@ -519,7 +530,8 @@ class SlotService:
             "jackpot_pool": self.jackpot_pool,
             "remaining_spins": self.get_remaining_spins(user_id),
             "daily_limit": self.daily_limit,
-            "message": self._build_multi_text(results, tier, total_net, updated_user),
+            "cap_notice": cap_notice,
+            "message": text_msg,
         }
 
     def get_jackpot_info(self) -> Dict[str, Any]:
