@@ -13,8 +13,13 @@ if TYPE_CHECKING:
 
 
 async def _render_blackjack_response(plugin: "FishingPlugin", event: AstrMessageEvent, result: dict):
-    """渲染21点响应 - 图片模式下对结算结果生成图片"""
-    if plugin.blackjack_service.is_image_mode() and result.get("settled"):
+    """渲染21点响应 - 图片模式下对结算和游戏过程生成图片"""
+    if not plugin.blackjack_service.is_image_mode():
+        yield event.plain_result(result["message"])
+        return
+    
+    # 结算结果 → 结算图片
+    if result.get("settled"):
         try:
             from ..draw.blackjack import draw_blackjack_result, save_image_to_temp
             image = draw_blackjack_result(
@@ -29,6 +34,26 @@ async def _render_blackjack_response(plugin: "FishingPlugin", event: AstrMessage
             return
         except Exception as e:
             logger.error(f"21点结算图片生成失败，回退到文本: {e}")
+    
+    # 游戏过程 → 游戏状态图片 + 文字说明
+    if result.get("game_state"):
+        try:
+            from ..draw.blackjack import draw_blackjack_game, save_image_to_temp
+            gs = result["game_state"]
+            image = draw_blackjack_game(
+                dealer_cards=gs["dealer_cards"],
+                players=gs["players"],
+                hide_dealer_second=gs.get("hide_dealer_second", True),
+                banker_nickname=gs.get("banker_nickname"),
+            )
+            image_path = save_image_to_temp(image, "bj_game", plugin.data_dir)
+            yield event.image_result(image_path)
+            # 额外发送文字操作提示（图片不含动态提示文本）
+            yield event.plain_result(result["message"])
+            return
+        except Exception as e:
+            logger.error(f"21点游戏状态图片生成失败，回退到文本: {e}")
+    
     yield event.plain_result(result["message"])
 
 

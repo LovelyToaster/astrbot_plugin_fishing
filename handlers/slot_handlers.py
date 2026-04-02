@@ -57,7 +57,6 @@ async def slot_spin(plugin: "FishingPlugin", event: AstrMessageEvent):
                 jackpot_pool=result["jackpot_pool"],
                 jackpot_win=rd.get("jackpot_win", 0),
                 is_lucky_hour=result.get("is_lucky_hour", False),
-                symbol_labels=rd.get("symbol_labels"),
             )
             image_path = save_image_to_temp(image, "slot_spin", plugin.data_dir)
             yield event.image_result(image_path)

@@ -5,6 +5,7 @@
 
 import os
 import time
+import platform
 from PIL import Image, ImageDraw, ImageFont
 from typing import Dict, Any, List, Optional
 from .gradient_utils import create_vertical_gradient
@@ -36,13 +37,131 @@ SYMBOL_STYLE_MAP = {
     "🌟": ("海星", (255, 220, 80)),      # 金色
 }
 
+# ---------------------------------------------------------------------------
+# Emoji 字体检测与缓存
+# ---------------------------------------------------------------------------
+_emoji_font_cache: Dict[int, Optional[ImageFont.FreeTypeFont]] = {}
+_emoji_support_checked = False
+_emoji_support_available = False
+
+
+def _detect_emoji_font_paths() -> List[str]:
+    """根据操作系统返回候选 emoji 字体路径，系统彩色字体优先，内置字体兜底"""
+    paths: List[str] = []
+    # 内置字体作为最终兜底（单色但跨平台可用）
+    bundled = os.path.join(os.path.dirname(__file__), "resource", "NotoEmoji.ttf")
+
+    system = platform.system()
+    if system == "Windows":
+        windir = os.environ.get("WINDIR", r"C:\Windows")
+        paths.append(os.path.join(windir, "Fonts", "seguiemj.ttf"))       # Segoe UI Emoji (彩色)
+    elif system == "Linux":
+        paths.extend([
+            "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+            "/usr/share/fonts/noto-emoji/NotoColorEmoji.ttf",
+            "/usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf",
+            "/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf",
+            "/usr/share/fonts/noto/NotoEmoji-Regular.ttf",
+            "/usr/share/fonts/noto-emoji/NotoEmoji-Regular.ttf",
+        ])
+    elif system == "Darwin":
+        paths.append("/System/Library/Fonts/Apple Color Emoji.ttc")
+
+    # 内置字体始终作为最终兜底
+    paths.append(bundled)
+    return paths
+
+
+def _test_emoji_render(font: ImageFont.FreeTypeFont) -> bool:
+    """测试字体是否真的能渲染 emoji（非零尺寸且有像素输出）"""
+    try:
+        test_img = Image.new("RGBA", (120, 120), (0, 0, 0, 0))
+        test_draw = ImageDraw.Draw(test_img)
+        test_draw.text((10, 10), "🐟", font=font, fill=(255, 255, 255, 255))
+        bbox = test_img.getbbox()
+        if bbox and (bbox[2] - bbox[0]) > 8 and (bbox[3] - bbox[1]) > 8:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _get_emoji_font(size: int) -> Optional[ImageFont.FreeTypeFont]:
+    """尝试加载 emoji 字体并缓存，若不可用返回 None"""
+    global _emoji_support_checked, _emoji_support_available
+
+    # 已确认不支持则快速返回
+    if _emoji_support_checked and not _emoji_support_available:
+        return None
+    if size in _emoji_font_cache:
+        return _emoji_font_cache[size]
+
+    for path in _detect_emoji_font_paths():
+        if os.path.exists(path):
+            try:
+                font = ImageFont.truetype(path, size)
+                if _test_emoji_render(font):
+                    _emoji_font_cache[size] = font
+                    _emoji_support_checked = True
+                    _emoji_support_available = True
+                    return font
+            except Exception:
+                continue
+
+    _emoji_font_cache[size] = None
+    _emoji_support_checked = True
+    _emoji_support_available = False
+    return None
+
+
+def _render_symbol_cell(draw: ImageDraw.Draw, sym_emoji: str,
+                        cx: int, cy: int, cell_w: int, cell_h: int,
+                        label_font, emoji_font_size: int = 40):
+    """渲染单个拉杆机符号单元格 —— emoji 优先，文字兜底
+    
+    cx, cy: 单元格左上角坐标
+    cell_w, cell_h: 单元格尺寸
+    """
+    _, sym_color = SYMBOL_STYLE_MAP.get(sym_emoji, (sym_emoji, COLOR_TEXT_WHITE))
+    emoji_font = _get_emoji_font(emoji_font_size)
+    if emoji_font:
+        # emoji 模式：居中绘制 emoji
+        # 对于单色字体使用符号主题色，彩色字体 embedded_color 会自动覆盖
+        eb = draw.textbbox((0, 0), sym_emoji, font=emoji_font)
+        ew = eb[2] - eb[0]
+        eh = eb[3] - eb[1]
+        ex = cx + cell_w // 2 - ew // 2
+        ey = cy + cell_h // 2 - eh // 2
+        draw.text((ex, ey), sym_emoji, font=emoji_font, fill=sym_color,
+                  embedded_color=True)
+    else:
+        # 文字标签模式：彩色背景 + 居中中文
+        label, sym_color = SYMBOL_STYLE_MAP.get(sym_emoji, (sym_emoji, COLOR_TEXT_WHITE))
+        pad = 6
+        cell_rect = [cx + pad, cy + pad, cx + cell_w - pad, cy + cell_h - pad]
+        bg_color = tuple(max(0, c - 80) for c in sym_color)
+        draw.rounded_rectangle(cell_rect, radius=8, fill=bg_color)
+        lb = draw.textbbox((0, 0), label, font=label_font)
+        lw = lb[2] - lb[0]
+        lh = lb[3] - lb[1]
+        lx = cx + cell_w // 2 - lw // 2
+        ly = cy + cell_h // 2 - lh // 2
+        draw.text((lx, ly), label, fill=sym_color, font=label_font)
+
+
+def _symbol_display_text(sym_emoji: str) -> str:
+    """将一个 emoji 符号转换为适合 PIL 绘制的显示文本（emoji 优先）"""
+    if _get_emoji_font(18):
+        return sym_emoji
+    label, _ = SYMBOL_STYLE_MAP.get(sym_emoji, (sym_emoji, None))
+    return label
+
 
 def draw_slot_result(symbols: List[str], tier_name: str, cost: int, payout: int,
                      net: int, match_type: str, match_desc: str,
                      balance: int, remaining: int, daily_limit: int,
                      jackpot_pool: int, jackpot_win: int = 0,
-                     is_lucky_hour: bool = False,
-                     symbol_labels: List[str] = None) -> Image.Image:
+                     is_lucky_hour: bool = False) -> Image.Image:
     """绘制单次拉杆结果图片"""
     width = 600
     height = 520 if jackpot_win > 0 else 480
@@ -54,7 +173,6 @@ def draw_slot_result(symbols: List[str], tier_name: str, cost: int, payout: int,
     draw = ImageDraw.Draw(image)
 
     title_font = load_font(30)
-    emoji_font = load_font(48)
     info_font = load_font(20)
     small_font = load_font(16)
     big_font = load_font(36)
@@ -62,7 +180,7 @@ def draw_slot_result(symbols: List[str], tier_name: str, cost: int, payout: int,
     y = 20
 
     # ===== 标题 =====
-    title = f"🎰 拉杆机 · {tier_name}"
+    title = f"拉杆机 · {tier_name}"
     _draw_centered(draw, title, width, y, title_font, COLOR_JACKPOT)
     y += 50
 
@@ -75,30 +193,13 @@ def draw_slot_result(symbols: List[str], tier_name: str, cost: int, payout: int,
     draw.rounded_rectangle(reel_rect, radius=15, fill=COLOR_SLOT_REEL,
                            outline=COLOR_SLOT_BORDER, width=3)
 
-    # 三个符号 - 使用文字标签渲染（PIL无法正确渲染emoji）
+    # 三个符号 —— emoji 优先，文字标签兜底
     sym_w = (width - 2 * reel_margin) // 3
     label_font = load_font(28)
     for i, sym in enumerate(symbols):
         sx = reel_margin + sym_w * i
-        # 获取标签和颜色
-        label, sym_color = SYMBOL_STYLE_MAP.get(sym, (sym, COLOR_TEXT_WHITE))
-        if symbol_labels and i < len(symbol_labels):
-            label = symbol_labels[i]
-
-        # 绘制符号单元格着色背景
-        cell_pad = 6
-        cell_rect = [sx + cell_pad, y + cell_pad, sx + sym_w - cell_pad, y + reel_h - cell_pad]
-        # 半透明背景色
-        bg_color = tuple(max(0, c - 80) for c in sym_color)
-        draw.rounded_rectangle(cell_rect, radius=8, fill=bg_color)
-
-        # 居中绘制文字标签
-        lbl_bbox = draw.textbbox((0, 0), label, font=label_font)
-        lw = lbl_bbox[2] - lbl_bbox[0]
-        lh = lbl_bbox[3] - lbl_bbox[1]
-        cx = sx + sym_w // 2 - lw // 2
-        cy = y + reel_h // 2 - lh // 2
-        draw.text((cx, cy), label, fill=sym_color, font=label_font)
+        _render_symbol_cell(draw, sym, sx, y, sym_w, reel_h,
+                            label_font, emoji_font_size=40)
 
         # 分隔线（前两个后面画竖线）
         if i < 2:
@@ -179,7 +280,7 @@ def draw_slot_multi_result(results: List[Dict[str, Any]], tier_name: str,
     y = 20
 
     # 标题
-    _draw_centered(draw, f"🎰 拉杆机连转 ×{count}  ·  {tier_name}", width, y, title_font, COLOR_JACKPOT)
+    _draw_centered(draw, f"拉杆机连转 ×{count}  ·  {tier_name}", width, y, title_font, COLOR_JACKPOT)
     y += 50
 
     # 表头
@@ -191,12 +292,16 @@ def draw_slot_multi_result(results: List[Dict[str, Any]], tier_name: str,
     draw.line([(25, y), (width - 25, y)], fill=(80, 80, 120), width=1)
     y += 8
 
+    # 用于行内显示的 emoji 字体（可能为 None）
+    row_emoji_font = _get_emoji_font(18)
+
     # 每行结果
     for i, r in enumerate(results, 1):
         rd = r["result"]
-        # 优先使用文字标签（PIL无法渲染emoji）
-        labels = rd.get("symbol_labels", rd["symbols"])
-        syms = " ".join(labels)
+        # emoji 优先，不可用则文字标签
+        sym_list = rd["symbols"]
+        display_syms = [_symbol_display_text(s) for s in sym_list]
+        syms = " ".join(display_syms)
         net = rd["net"]
         desc = rd["match_desc"]
         # 截短描述
@@ -207,7 +312,12 @@ def draw_slot_multi_result(results: List[Dict[str, Any]], tier_name: str,
         net_color = COLOR_SLOT_WIN if net > 0 else (COLOR_SLOT_LOSE if net < 0 else COLOR_WARNING)
 
         draw.text((30, y), f"{i:>2}", fill=(150, 150, 180), font=row_font)
-        draw.text((60, y), syms, fill=COLOR_TEXT_WHITE, font=row_font)
+        # 符号列：如果能渲染 emoji，用 emoji 字体绘制
+        if row_emoji_font:
+            draw.text((60, y), syms, fill=COLOR_TEXT_WHITE, font=row_emoji_font,
+                      embedded_color=True)
+        else:
+            draw.text((60, y), syms, fill=COLOR_TEXT_WHITE, font=row_font)
         draw.text((210, y), desc, fill=COLOR_TEXT_WHITE, font=row_font)
         draw.text((480, y), net_str, fill=net_color, font=row_font)
         y += row_h
@@ -322,12 +432,9 @@ def draw_slot_history(records: List[Dict], username: str) -> Image.Image:
     for rec in reversed(records):  # 最新的在前
         t = rec.get("time", "")
         tier = rec.get("tier", "")
-        # 优先使用文字标签（PIL无法渲染emoji）
+        # emoji 优先，不可用则文字标签
         raw_syms = rec.get("symbols", [])
-        display_syms = []
-        for s in raw_syms:
-            label, _ = SYMBOL_STYLE_MAP.get(s, (s, None))
-            display_syms.append(label)
+        display_syms = [_symbol_display_text(s) for s in raw_syms]
         syms = " ".join(display_syms)
         desc = rec.get("match_desc", "")
         net = rec.get("net", 0)
@@ -338,9 +445,14 @@ def draw_slot_history(records: List[Dict], username: str) -> Image.Image:
         net_str = f"+{net:,}" if net > 0 else f"{net:,}"
         net_color = COLOR_SLOT_WIN if net > 0 else (COLOR_SLOT_LOSE if net < 0 else COLOR_WARNING)
 
+        row_emoji_font = _get_emoji_font(16)
         draw.text((25, y), t, fill=(180, 180, 200), font=row_font)
         draw.text((100, y), tier, fill=COLOR_TEXT_WHITE, font=row_font)
-        draw.text((165, y), syms, fill=COLOR_TEXT_WHITE, font=row_font)
+        if row_emoji_font:
+            draw.text((165, y), syms, fill=COLOR_TEXT_WHITE, font=row_emoji_font,
+                      embedded_color=True)
+        else:
+            draw.text((165, y), syms, fill=COLOR_TEXT_WHITE, font=row_font)
         draw.text((300, y), desc, fill=COLOR_TEXT_WHITE, font=row_font)
         draw.text((490, y), net_str, fill=net_color, font=row_font)
         y += row_h

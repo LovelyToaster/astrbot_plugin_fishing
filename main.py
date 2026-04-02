@@ -293,7 +293,7 @@ class FishingPlugin(Star):
         self.blackjack_service.set_message_callback(self._send_blackjack_announcement)
         
         # 初始化拉杆机服务
-        self.slot_service = SlotService(self.user_repo, self.log_repo, self.game_config)
+        self.slot_service = SlotService(self.user_repo, self.log_repo, self.game_config, data_dir=self.data_dir)
         
         # 让骰宝的记录也写入统一的读博记录
         self.sicbo_service.set_gambling_record_callback(self.blackjack_service._add_gambling_record)
@@ -546,32 +546,46 @@ class FishingPlugin(Star):
         try:
             if session_info and result_data.get("success"):
                 try:
-                    if self.blackjack_service.is_image_mode() and result_data.get("settled"):
-                        # 图片模式且是结算消息
-                        from .draw.blackjack import draw_blackjack_result, save_image_to_temp
+                    if self.blackjack_service.is_image_mode():
+                        if result_data.get("settled"):
+                            # 图片模式且是结算消息
+                            from .draw.blackjack import draw_blackjack_result, save_image_to_temp
+                            
+                            dealer_cards = result_data.get("dealer_cards", [])
+                            dealer_value = result_data.get("dealer_value", 0)
+                            results = result_data.get("results", [])
+                            banker_nickname = result_data.get("banker_nickname")
+                            banker_profit = result_data.get("banker_profit")
+                            
+                            image = draw_blackjack_result(
+                                dealer_cards, dealer_value,
+                                results, banker_nickname, banker_profit
+                            )
+                            image_path = save_image_to_temp(image, "blackjack_result", self.data_dir)
+                            
+                            success = await self._send_initiative_image(session_info, image_path)
+                            if success:
+                                logger.info("🃏 21点结果公告图片已主动发送")
+                                return
                         
-                        dealer_cards = result_data.get("dealer_cards", [])
-                        dealer_value = result_data.get("dealer_value", 0)
-                        results = result_data.get("results", [])
-                        banker_nickname = result_data.get("banker_nickname")
-                        banker_profit = result_data.get("banker_profit")
-                        
-                        image = draw_blackjack_result(
-                            dealer_cards, dealer_value,
-                            results, banker_nickname, banker_profit
-                        )
-                        image_path = save_image_to_temp(image, "blackjack_result", self.data_dir)
-                        
-                        success = await self._send_initiative_image(session_info, image_path)
-                        if success:
-                            logger.info("🃏 21点结果公告图片已主动发送")
-                            return
+                        elif result_data.get("game_state"):
+                            # 图片模式且是游戏过程消息 → 发送游戏状态图片 + 文字
+                            from .draw.blackjack import draw_blackjack_game, save_image_to_temp
+                            gs = result_data["game_state"]
+                            image = draw_blackjack_game(
+                                dealer_cards=gs["dealer_cards"],
+                                players=gs["players"],
+                                hide_dealer_second=gs.get("hide_dealer_second", True),
+                                banker_nickname=gs.get("banker_nickname"),
+                            )
+                            image_path = save_image_to_temp(image, "bj_game_auto", self.data_dir)
+                            await self._send_initiative_image(session_info, image_path)
                     
-                    # 文本模式或非结算消息
+                    # 文本模式或非结算消息：都要发文字
                     message = result_data.get("message", "21点游戏结果")
                     success = await self._send_initiative_message(session_info, message)
                     if success:
-                        logger.info("🃏 21点结果公告已主动发送")
+                        logger.info("🃏 21点公告已主动发送")
                         return
                 except Exception as e:
                     logger.error(f"发送21点结果失败: {e}")

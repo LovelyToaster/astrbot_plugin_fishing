@@ -637,11 +637,15 @@ class BlackjackService:
             result = await self._settle_game(session_id)
             return result
         
-        return {
+        gs = self._build_game_state_data(session_id)
+        r = {
             "success": True,
             "message": message,
             "game_started": True
         }
+        if gs:
+            r["game_state"] = gs
+        return r
     
     def _find_next_active_player(self, game: BlackjackGame, current_index: int) -> Optional[int]:
         """找到下一个需要操作的玩家"""
@@ -652,9 +656,9 @@ class BlackjackService:
     
     def _start_action_timeout(self, session_id: str):
         """启动操作超时任务"""
-        # 取消旧的超时任务
+        # 取消旧的超时任务（但不取消当前正在执行的任务，避免自我取消）
         old_task = self.action_tasks.get(session_id)
-        if old_task:
+        if old_task and old_task is not asyncio.current_task():
             old_task.cancel()
         
         self.action_tasks[session_id] = asyncio.create_task(
@@ -846,7 +850,41 @@ class BlackjackService:
         label = "[主手] " if player.is_split else ""
         return f"{label}{player.hand_display()}"
     
-    def _build_result(self, message: str, advance_result: Dict[str, Any] = None) -> Dict[str, Any]:
+    def _build_game_state_data(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """构建当前游戏状态的序列化数据，用于图片模式渲染游戏过程"""
+        game = self.games.get(session_id)
+        if not game or game.state != BlackjackGameState.IN_PROGRESS:
+            return None
+        
+        dealer_cards = [{"rank": c.rank, "suit": c.suit.value} for c in game.dealer.hand]
+        
+        players_data = []
+        for p in game.players:
+            pd = {
+                "nickname": p.nickname,
+                "cards": [{"rank": c.rank, "suit": c.suit.value} for c in p.hand],
+                "value": p.hand_value(),
+                "status": p.state.value,
+                "bet": p.bet_amount,
+                "is_doubled": p.is_doubled,
+                "has_insurance": p.has_insurance,
+            }
+            if p.is_split and p.split_hand:
+                pd["split_cards"] = [{"rank": c.rank, "suit": c.suit.value} for c in p.split_hand]
+                pd["split_value"] = p.split_hand_value()
+                pd["split_status"] = p.split_state.value if p.split_state else ""
+                pd["split_bet"] = p.split_bet
+            players_data.append(pd)
+        
+        return {
+            "dealer_cards": dealer_cards,
+            "players": players_data,
+            "hide_dealer_second": True,
+            "banker_nickname": game.banker_nickname,
+        }
+
+    def _build_result(self, message: str, advance_result: Dict[str, Any] = None,
+                      session_id: str = None) -> Dict[str, Any]:
         """构建结果字典，转发来自 _advance_turn 的结算数据（用于图片模式渲染）"""
         if advance_result:
             message += advance_result.get("message", "")
@@ -855,6 +893,11 @@ class BlackjackService:
             for key in ["settled", "results", "dealer_cards", "dealer_value", "banker_profit", "banker_nickname"]:
                 if key in advance_result:
                     result[key] = advance_result[key]
+        elif session_id:
+            # 非结算结果：附加游戏状态数据用于图片模式
+            game_state = self._build_game_state_data(session_id)
+            if game_state:
+                result["game_state"] = game_state
         return result
     
     async def hit(self, session_id: str, user_id: str) -> Dict[str, Any]:
@@ -900,7 +943,7 @@ class BlackjackService:
                 # 如果主手也已经结束了
                 if current.state in [PlayerState.STOOD, PlayerState.BUSTED, PlayerState.DOUBLED]:
                     result = await self._advance_turn(session_id)
-                    return self._build_result(message, result)
+                    return self._build_result(message, result, session_id=session_id)
             else:
                 current.state = PlayerState.BUSTED
                 message += f"💥 爆牌！超过21点\n"
@@ -914,10 +957,14 @@ class BlackjackService:
                         sp_ops += " | /加倍"
                     message += f"📋 {sp_ops}\n"
                     self._start_action_timeout(session_id)
-                    return {"success": True, "message": message}
+                    gs = self._build_game_state_data(session_id)
+                    r = {"success": True, "message": message}
+                    if gs:
+                        r["game_state"] = gs
+                    return r
                 else:
                     result = await self._advance_turn(session_id)
-                    return self._build_result(message, result)
+                    return self._build_result(message, result, session_id=session_id)
         elif value == 21:
             if current.playing_split_hand:
                 current.split_state = PlayerState.STOOD
@@ -935,14 +982,22 @@ class BlackjackService:
                         sp_ops += " | /加倍"
                     message += f"📋 {sp_ops}\n"
                     self._start_action_timeout(session_id)
-                    return {"success": True, "message": message}
+                    gs = self._build_game_state_data(session_id)
+                    r = {"success": True, "message": message}
+                    if gs:
+                        r["game_state"] = gs
+                    return r
             
             result = await self._advance_turn(session_id)
-            return self._build_result(message, result)
+            return self._build_result(message, result, session_id=session_id)
         else:
             message += f"📋 /抽牌 继续要牌 | /停牌 停止"
             self._start_action_timeout(session_id)
-            return {"success": True, "message": message}
+            gs = self._build_game_state_data(session_id)
+            r = {"success": True, "message": message}
+            if gs:
+                r["game_state"] = gs
+            return r
     
     async def stand(self, session_id: str, user_id: str) -> Dict[str, Any]:
         """停牌"""
@@ -983,10 +1038,14 @@ class BlackjackService:
                     sp_ops += " | /加倍"
                 message += f"📋 {sp_ops}\n"
                 self._start_action_timeout(session_id)
-                return {"success": True, "message": message}
+                gs = self._build_game_state_data(session_id)
+                r = {"success": True, "message": message}
+                if gs:
+                    r["game_state"] = gs
+                return r
         
         result = await self._advance_turn(session_id)
-        return self._build_result(message, result)
+        return self._build_result(message, result, session_id=session_id)
     
     async def double_down(self, session_id: str, user_id: str) -> Dict[str, Any]:
         """加倍下注 - 加倍后只能再抽一张牌"""
@@ -1075,10 +1134,14 @@ class BlackjackService:
                 sp_ops += " | /加倍"
             message += f"📋 {sp_ops}\n"
             self._start_action_timeout(session_id)
-            return {"success": True, "message": message}
+            gs = self._build_game_state_data(session_id)
+            r = {"success": True, "message": message}
+            if gs:
+                r["game_state"] = gs
+            return r
         
         result = await self._advance_turn(session_id)
-        return self._build_result(message, result)
+        return self._build_result(message, result, session_id=session_id)
     
     async def split(self, session_id: str, user_id: str) -> Dict[str, Any]:
         """分牌 - 两张相同点数的牌拆成两手"""
@@ -1143,7 +1206,7 @@ class BlackjackService:
                 current.playing_split_hand = False
                 message += f"🎯 分牌手也21点！自动停牌\n"
                 result = await self._advance_turn(session_id)
-                return self._build_result(message, result)
+                return self._build_result(message, result, session_id=session_id)
             message += f"📋 转到分牌手：{current.split_hand_display()}\n"
             sp_ops = "/抽牌 继续要牌 | /停牌 停止"
             if current.can_double_down():
@@ -1156,7 +1219,11 @@ class BlackjackService:
             message += f"📋 {ops}"
         
         self._start_action_timeout(session_id)
-        return {"success": True, "message": message}
+        gs = self._build_game_state_data(session_id)
+        r = {"success": True, "message": message}
+        if gs:
+            r["game_state"] = gs
+        return r
     
     async def buy_insurance(self, session_id: str, user_id: str) -> Dict[str, Any]:
         """购买保险 - 庄家明牌为A时可购买，花费下注额一半"""
@@ -1224,12 +1291,16 @@ class BlackjackService:
             if p.can_split():
                 ops += " | /分牌 - 拆分同点牌"
             
-            return {
+            gs = self._build_game_state_data(session_id)
+            r = {
                 "success": True,
                 "message": f"\n🎯 轮到 {p.nickname} 操作\n"
                           f"📋 手牌：{p.hand_display()}\n"
                           f"📋 {ops}"
             }
+            if gs:
+                r["game_state"] = gs
+            return r
         else:
             return await self._dealer_play_and_settle(session_id)
     
@@ -1454,8 +1525,9 @@ class BlackjackService:
         game.state = BlackjackGameState.SETTLED
         game.settled = True
         
-        task = self.action_tasks.get(session_id)
-        if task:
+        # 清理超时任务（不取消当前正在执行的任务，避免自我取消导致结算消息丢失）
+        task = self.action_tasks.pop(session_id, None)
+        if task and task is not asyncio.current_task():
             task.cancel()
         
         return {

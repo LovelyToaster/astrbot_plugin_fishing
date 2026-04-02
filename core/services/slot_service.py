@@ -3,6 +3,8 @@
 提供多档位拉杆机玩法，支持累积奖池、连转模式、保底与幸运时段
 """
 
+import json
+import os
 import random
 import secrets
 import time
@@ -126,10 +128,12 @@ class SpinResult:
 class SlotService:
     """拉杆机游戏服务"""
 
-    def __init__(self, user_repo, log_repo, config: Dict[str, Any]):
+    def __init__(self, user_repo, log_repo, config: Dict[str, Any],
+                 data_dir: Optional[str] = None):
         self.user_repo = user_repo
         self.log_repo = log_repo
         self.config = config
+        self._data_dir = data_dir
 
         slot_config = config.get("slot", {})
         self.daily_limit: int = slot_config.get("daily_limit", 50)
@@ -162,6 +166,9 @@ class SlotService:
         # 读博记录回调
         self._gambling_record_callback: Optional[Callable] = None
 
+        # 从文件恢复持久化状态（每日次数、奖池、连败计数）
+        self._load_state()
+
     # ----- 配置方法 -----
 
     def set_gambling_record_callback(self, callback: Callable):
@@ -180,6 +187,55 @@ class SlotService:
         self.message_mode = mode
         mode_name = "图片模式" if mode == "image" else "文本模式"
         return {"success": True, "message": f"✅ 拉杆机消息模式已切换为：{mode_name}"}
+
+    # ----- 状态持久化 -----
+
+    @property
+    def _state_file_path(self) -> Optional[str]:
+        if not self._data_dir:
+            return None
+        return os.path.join(self._data_dir, "slot_state.json")
+
+    def _load_state(self):
+        """从文件恢复 daily_usage / jackpot_pool / lose_streak"""
+        path = self._state_file_path
+        if not path or not os.path.exists(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if "daily_usage" in data and isinstance(data["daily_usage"], dict):
+                self._daily_usage = data["daily_usage"]
+            if "jackpot_pool" in data and isinstance(data["jackpot_pool"], (int, float)):
+                self.jackpot_pool = int(data["jackpot_pool"])
+            if "lose_streak" in data and isinstance(data["lose_streak"], dict):
+                self._lose_streak = data["lose_streak"]
+            logger.info(f"🎰 拉杆机状态已恢复：奖池 {self.jackpot_pool:,}，{len(self._daily_usage)} 位用户的每日记录")
+        except Exception as e:
+            logger.warning(f"🎰 拉杆机状态恢复失败: {e}")
+
+    def _save_state(self):
+        """将 daily_usage / jackpot_pool / lose_streak 持久化到文件"""
+        path = self._state_file_path
+        if not path:
+            return
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            data = {
+                "daily_usage": self._daily_usage,
+                "jackpot_pool": self.jackpot_pool,
+                "lose_streak": self._lose_streak,
+            }
+            tmp_path = path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            # 原子替换，防止写入中途崩溃导致数据损坏
+            if os.path.exists(path):
+                os.replace(tmp_path, path)
+            else:
+                os.rename(tmp_path, path)
+        except Exception as e:
+            logger.warning(f"🎰 拉杆机状态保存失败: {e}")
 
     # ----- 幸运时段 -----
 
@@ -427,6 +483,9 @@ class SlotService:
 
         # 10) 更新使用次数
         self._increment_usage(user_id)
+
+        # 10.5) 持久化状态
+        self._save_state()
 
         # 11) 记录历史
         self._add_history(user_id, result, tier.name)
