@@ -356,5 +356,143 @@
         "hint": "超过此期限未还款将标记为逾期，并禁止参与骰宝和擦弹游戏"
       }
     }
+  },
+  "sicbo": {
+    "description": "骰宝游戏配置",
+    "type": "object",
+    "items": {
+      "countdown_seconds": {
+        "type": "int",
+        "default": 60,
+        "description": "骰宝倒计时（秒）",
+        "hint": "每局骰宝游戏的下注等待时间"
+      },
+      "min_bet": {
+        "type": "int",
+        "default": 100,
+        "description": "骰宝最低下注金额",
+        "hint": "单次下注的最低金额"
+      },
+      "max_bet": {
+        "type": "int",
+        "default": 1000000,
+        "description": "骰宝最高下注金额",
+        "hint": "单次下注的最高金额"
+      },
+      "min_banker_coins": {
+        "type": "int",
+        "default": 1000000,
+        "description": "玩家开庄最低金币余额",
+        "hint": "玩家当庄时所需的最低金币余额，默认100万"
+      },
+      "message_mode": {
+        "type": "string",
+        "default": "image",
+        "description": "骰宝消息模式",
+        "hint": "image(图片)或text(文本)"
+      }
+    }
+  },
+  "blackjack": {
+    "description": "21点游戏配置",
+    "type": "object",
+    "items": {
+      "min_bet": {
+        "type": "int",
+        "default": 100,
+        "description": "21点最低下注金额",
+        "hint": "参与21点游戏的最低下注金额"
+      },
+      "max_bet": {
+        "type": "int",
+        "default": 1000000,
+        "description": "21点最高下注金额",
+        "hint": "参与21点游戏的最高下注金额"
+      },
+      "min_banker_coins": {
+        "type": "int",
+        "default": 1000000,
+        "description": "21点玩家开庄最低金币余额",
+        "hint": "玩家当庄时所需的最低金币余额，默认100万"
+      },
+      "join_timeout": {
+        "type": "int",
+        "default": 60,
+        "description": "21点加入等待时间（秒）",
+        "hint": "开局后等待其他玩家加入的时间"
+      },
+      "action_timeout": {
+        "type": "int",
+        "default": 30,
+        "description": "21点操作超时时间（秒）",
+        "hint": "玩家操作（抽牌/停牌）的超时时间，超时自动停牌"
+      },
+      "message_mode": {
+        "type": "string",
+        "default": "image",
+        "description": "21点消息模式",
+        "hint": "image(图片)或text(文本)"
+      },
+      "streak_win_bonus_threshold": {
+        "type": "int",
+        "default": 3,
+        "description": "21点连胜奖励触发局数",
+        "hint": "连续赢多少局后触发额外奖励，默认3局"
+      },
+      "streak_win_bonus_rate": {
+        "type": "float",
+        "default": 0.1,
+        "description": "21点连胜额外奖励比例",
+        "hint": "连胜时额外奖励为当局利润的百分比，默认10%(0.1)"
+      },
+      "streak_lose_consolation_threshold": {
+        "type": "int",
+        "default": 3,
+        "description": "21点连败安慰奖触发局数",
+        "hint": "连续输多少局后触发安慰奖，默认3局"
+      },
+      "streak_lose_consolation": {
+        "type": "int",
+        "default": 500,
+        "description": "21点连败安慰金数额",
+        "hint": "连败达到阈值后每局发放的安慰金，默认500金币"
+      }
+    }
+  },
+  "slot": {
+    "description": "拉杆机游戏配置",
+    "type": "object",
+    "items": {
+      "daily_limit": {
+        "type": "int",
+        "default": 50,
+        "description": "每日拉杆次数限制",
+        "hint": "每位玩家每日最多拉杆次数，默认50次"
+      },
+      "max_multi_spin": {
+        "type": "int",
+        "default": 10,
+        "description": "连转最大次数",
+        "hint": "单次连转命令最多执行次数，默认10次"
+      },
+      "streak_protection": {
+        "type": "int",
+        "default": 20,
+        "description": "保底触发次数",
+        "hint": "连续N次未中奖后保底触发两同，默认20次"
+      },
+      "initial_jackpot": {
+        "type": "int",
+        "default": 0,
+        "description": "初始累积奖池金额",
+        "hint": "服务启动时的累积奖池初始值，默认0"
+      },
+      "message_mode": {
+        "type": "string",
+        "default": "image",
+        "description": "拉杆机消息模式",
+        "hint": "image(图片)或text(文本)"
+      }
+    }
   }
 }

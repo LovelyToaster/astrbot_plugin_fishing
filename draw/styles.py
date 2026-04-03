@@ -70,12 +70,16 @@ COLOR_CORNER = (255, 255, 255, 80) # 四角装饰颜色
 # --- 字体路径 ---
 FONT_PATH_BOLD = os.path.join(os.path.dirname(__file__), "resource", "DouyinSansBold.otf")
 
-# --- 字体加载 ---
+# --- 字体加载（带缓存，避免每次调用都读取磁盘） ---
+_font_cache = {}
+
 def load_font(size):
-    try:
-        return ImageFont.truetype(FONT_PATH_BOLD, size)
-    except IOError:
-        return ImageFont.load_default()
+    if size not in _font_cache:
+        try:
+            _font_cache[size] = ImageFont.truetype(FONT_PATH_BOLD, size)
+        except IOError:
+            _font_cache[size] = ImageFont.load_default()
+    return _font_cache[size]
 
 FONT_HEADER = load_font(36)    # 标题字体
 FONT_SUBHEADER = load_font(24) # 收集进度字体

@@ -34,7 +34,10 @@ def _get_game_session_id(event: AstrMessageEvent) -> str:
 
 
 async def start_sicbo_game(plugin: "FishingPlugin", event: AstrMessageEvent):
-    """开庄命令"""
+    """开庄命令 - 系统开庄"""
+    if not plugin.is_game_enabled(event, "sicbo"):
+        yield event.plain_result("❌ 骰宝功能已被管理员在本群关闭")
+        return
     try:
         # 获取游戏会话ID
         game_session_id = _get_game_session_id(event)
@@ -56,23 +59,61 @@ async def start_sicbo_game(plugin: "FishingPlugin", event: AstrMessageEvent):
         
         if result["success"]:
             if plugin.sicbo_service.is_image_mode():
-                # 图片模式：生成开庄成功图片
                 countdown_seconds = plugin.sicbo_service.get_countdown_seconds()
                 image = draw_sicbo_game_start(countdown_seconds)
                 image_path = save_image_to_temp(image, "sicbo_start", plugin.data_dir)
                 yield event.image_result(image_path)
             else:
-                # 文本模式：发送文本消息
                 yield event.plain_result(result["message"])
         else:
-            # 失败时始终使用文本消息
             yield event.plain_result(result["message"])
     except Exception as e:
         yield event.plain_result(f"❌ 开庄失败：{str(e)}")
 
 
+async def start_sicbo_player_banker(plugin: "FishingPlugin", event: AstrMessageEvent):
+    """玩家开庄命令 - 发送者成为庄家"""
+    if not plugin.is_game_enabled(event, "sicbo"):
+        yield event.plain_result("❌ 骰宝功能已被管理员在本群关闭")
+        return
+    try:
+        game_session_id = _get_game_session_id(event)
+        user_id = plugin._get_effective_user_id(event)
+        
+        # 构建会话信息
+        session_info = {
+            'platform': getattr(event.platform_meta, 'platform_name', 'aiocqhttp'),
+            'session_id': event.session_id,
+            'sender_id': event.get_sender_id(),
+            'unified_msg_origin': event.unified_msg_origin,
+        }
+        
+        group_id = event.get_group_id()
+        if group_id:
+            session_info['group_id'] = group_id
+        
+        result = plugin.sicbo_service.start_new_game(game_session_id, session_info, banker_user_id=user_id)
+        
+        if result["success"]:
+            if plugin.sicbo_service.is_image_mode():
+                countdown_seconds = plugin.sicbo_service.get_countdown_seconds()
+                banker_nickname = result.get("banker_nickname", "未知")
+                image = draw_sicbo_game_start(countdown_seconds, banker_nickname=banker_nickname)
+                image_path = save_image_to_temp(image, "sicbo_start_player", plugin.data_dir)
+                yield event.image_result(image_path)
+            else:
+                yield event.plain_result(result["message"])
+        else:
+            yield event.plain_result(result["message"])
+    except Exception as e:
+        yield event.plain_result(f"❌ 玩家开庄失败：{str(e)}")
+
+
 async def place_bet(plugin: "FishingPlugin", event: AstrMessageEvent, bet_type: str):
     """下注命令的通用处理函数"""
+    if not plugin.is_game_enabled(event, "sicbo"):
+        yield event.plain_result("❌ 骰宝功能已被管理员在本群关闭")
+        return
     # 获取游戏会话ID
     game_session_id = _get_game_session_id(event)
     
@@ -404,6 +445,7 @@ async def sicbo_help(plugin: "FishingPlugin", event: AstrMessageEvent):
 • /骰宝状态 - 查看当前游戏状态
 • /我的下注 - 查看本局下注情况
 • /骰宝赔率 - 查看详细赔率表
+• /骰宝记录 - 查看当前群最近5期开奖记录
 • /骰宝倒计时 [秒数] - 管理员设置倒计时时间
 
 【特殊规则】
@@ -521,3 +563,27 @@ async def set_sicbo_mode(plugin: "FishingPlugin", event: AstrMessageEvent):
             yield event.plain_result(result["message"])
     except Exception as e:
         yield event.plain_result(f"❌ 设置失败：{str(e)}")
+
+
+async def sicbo_draw_history(plugin: "FishingPlugin", event: AstrMessageEvent):
+    """查看当前群的骰宝开奖记录"""
+    try:
+        game_session_id = _get_game_session_id(event)
+        
+        records = plugin.sicbo_service.get_draw_history(game_session_id, 5)
+        
+        if not records:
+            yield event.plain_result("📋 当前群暂无骰宝开奖记录")
+            return
+        
+        message = f"🎲 骰宝开奖记录（最近 {len(records)} 期）\n\n"
+        for i, r in enumerate(reversed(records), 1):
+            triple_tag = " 🎯豹子！" if r.get("is_triple") else ""
+            message += (f"{i}. {r['time']}\n"
+                       f"   {r['dice_display']}  总点 {r['total']}\n"
+                       f"   判定：{r['big_small']} / {r['odd_even']}{triple_tag}\n"
+                       f"   参与人数：{r['participants']} 人\n\n")
+        
+        yield event.plain_result(message)
+    except Exception as e:
+        yield event.plain_result(f"❌ 查询开奖记录失败：{str(e)}")
