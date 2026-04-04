@@ -1002,17 +1002,18 @@ class CatService:
                 hours_since_feed = (now - last_feed).total_seconds() / 3600
                 hours_since_play = (now - last_play).total_seconds() / 3600
                 
-                # 修复衰减逻辑：扣除后立即更新时间戳，防止在下次循环中由于 last_feed 未变而导致重复且累积扣除
+                # 饱食度衰减：改为每小时 3 点，且保留进度余数以确保离线/在线逻辑一致
                 if hours_since_feed >= 1:
-                    hunger_decay = int(hours_since_feed) * 5
-                    cat.hunger = max(0, cat.hunger - hunger_decay)
-                    cat.last_feed_time = now # 更新时间点
+                    hours_to_decay = int(hours_since_feed)
+                    cat.hunger = max(0, cat.hunger - hours_to_decay * 3)
+                    cat.last_feed_time = last_feed + timedelta(hours=hours_to_decay)
                     changed = True
                     
+                # 心情衰减：改为每 2 小时 2 点（每小时 1 点），且保留进度余数
                 if hours_since_play >= 2:
-                    mood_decay = int(hours_since_play / 2) * 3
-                    cat.mood = max(0, cat.mood - mood_decay)
-                    cat.last_play_time = now # 更新时间点
+                    steps_to_decay = int(hours_since_play / 2)
+                    cat.mood = max(0, cat.mood - steps_to_decay * 2)
+                    cat.last_play_time = last_play + timedelta(hours=steps_to_decay * 2)
                     changed = True
                 
                 if changed:
