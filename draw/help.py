@@ -189,7 +189,8 @@ def draw_help_image():
     ]
 
     sicbo = [
-        ("开庄", "玩家开启骰宝游戏\n倒计时60秒"),
+        ("开庄", "系统开启骰宝游戏\n倒计时60秒"),
+        ("玩家开庄", "玩家当庄家\n用自己金币赔付"),
         ("鸭大 [金额]", "鸭大(11-17点)\n赔率1:1"),
         ("鸭小 [金额]", "鸭小(4-10点)\n赔率1:1"),
         ("鸭单 [金额]", "鸭单数\n赔率1:1"),
@@ -200,6 +201,7 @@ def draw_help_image():
         ("鸭17点 [金额]", "鸭总点数17\n赔率1:50"),
         ("骰宝状态", "查看游戏状态"),
         ("我的下注", "查看下注情况"),
+        ("骰宝记录", "查看最近5期\n开奖记录"),
         ("骰宝帮助", "查看详细规则"),
         ("骰宝赔率", "查看完整\n赔率表"),
         ("骰宝结算", "管理员强制\n结算当前游戏"),
@@ -215,6 +217,32 @@ def draw_help_image():
         ("右游", "右游移动\n水平探索"),
         ("回头", "结束探险\n结算收益"),
         ("深海状态", "查看当前\n探险状态"),
+    ]
+
+    blackjack = [
+        ("21点 [金额]", "开局（系统庄家）\n下注后开始"),
+        ("21点开庄", "玩家当庄家\n其他人可加入"),
+        ("21点加入 [金额]", "加入别人开的场"),
+        ("抽牌", "要一张牌\n别名:要牌/拿牌"),
+        ("停牌", "停止要牌\n别名:不要了"),
+        ("加倍", "加倍下注\n仅初始2牌时可用"),
+        ("分牌", "拆分同点数牌\n分成两手"),
+        ("买保险", "庄家明牌A时\n购买保险"),
+        ("21点状态", "查看当前牌局"),
+        ("21点开始", "跳过等待\n直接开始"),
+        ("21点帮助", "查看规则和赔率"),
+    ]
+
+    slot = [
+        ("拉杆 [档位]", "单次拉杆\n铜/银/金/至尊"),
+        ("连转 [档位] [次数]", "连续多次拉杆"),
+        ("奖池", "查看各档位\n累积奖池"),
+        ("拉杆记录", "查看拉杆\n历史战绩"),
+        ("拉杆帮助", "查看符号赔率\n说明"),
+    ]
+
+    gambling_records = [
+        ("读博记录", "查看所有博弈\n游戏记录"),
     ]
 
     social = [
@@ -308,6 +336,9 @@ def draw_help_image():
     y0_est += section_delta(len(gacha), 3)
     y0_est += section_delta(len(sicbo), 3)
     y0_est += section_delta(len(deep_sea), 3)
+    y0_est += section_delta(len(blackjack), 3)
+    y0_est += section_delta(len(slot), 3)
+    y0_est += section_delta(len(gambling_records), 3)
     y0_est += section_delta(len(social), 2)
     y0_est += section_delta(len(exchange), 2)
     y0_est += section_delta(len(bank), 3)
@@ -354,6 +385,9 @@ def draw_help_image():
     y0 = draw_section("🎰 抽卡与概率玩法", gacha, y0, cols=3)
     y0 = draw_section("🎲 骰宝游戏", sicbo, y0, cols=3)
     y0 = draw_section("🌊 深海探险", deep_sea, y0, cols=3)
+    y0 = draw_section("🃏 21点游戏", blackjack, y0, cols=3)
+    y0 = draw_section("🎰 拉杆机游戏", slot, y0, cols=3)
+    y0 = draw_section("📊 读博记录", gambling_records, y0, cols=3)
     y0 = draw_section("👥 社交功能", social, y0, cols=2)
     y0 = draw_section("📈 大宗商品交易所", exchange, y0, cols=2)
     y0 = draw_section("🏦 银行系统", bank, y0, cols=3)
