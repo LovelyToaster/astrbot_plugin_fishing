@@ -366,11 +366,12 @@ class CatService:
         diseases = self._get_cat_diseases()
         for disease in diseases:
             conditions_met = True
-            if disease.get("min_health_threshold", 0) > 0 and cat.health <= int(disease["min_health_threshold"]):
+            # 修正逻辑：只有当属性 低于或等于 阈值时，才满足发病条件
+            if disease.get("min_health_threshold", 0) > 0 and cat.health > int(disease["min_health_threshold"]):
                 conditions_met = False
-            if disease.get("min_hunger_threshold", 0) > 0 and cat.hunger <= int(disease["min_hunger_threshold"]):
+            if disease.get("min_hunger_threshold", 0) > 0 and cat.hunger > int(disease["min_hunger_threshold"]):
                 conditions_met = False
-            if disease.get("min_mood_threshold", 0) > 0 and cat.mood <= int(disease["min_mood_threshold"]):
+            if disease.get("min_mood_threshold", 0) > 0 and cat.mood > int(disease["min_mood_threshold"]):
                 conditions_met = False
 
             if conditions_met and random.random() < float(disease.get("onset_chance", 0.1)):
@@ -500,7 +501,7 @@ class CatService:
                 old_mood = cat.mood
                 mood_gain = random.randint(5, 15)
                 cat.mood = min(100, cat.mood + mood_gain)
-                cat.last_play_time = get_now()
+                cat.last_play_time = get_now() # 更新互动时间
                 cat.exp += 10
 
                 level_up, _, new_level = self._check_level_up(cat)
@@ -635,7 +636,7 @@ class CatService:
 
                 cat.hunger = min(100, cat.hunger + hunger_gain)
                 cat.mood = min(100, cat.mood + mood_gain)
-                cat.last_feed_time = get_now()
+                cat.last_feed_time = get_now() # 更新喂食时间
                 cat.exp += exp_gain
 
                 level_up, did_star_up_from_level, new_level = self._check_level_up(cat)
@@ -1001,14 +1002,17 @@ class CatService:
                 hours_since_feed = (now - last_feed).total_seconds() / 3600
                 hours_since_play = (now - last_play).total_seconds() / 3600
                 
+                # 修复衰减逻辑：扣除后立即更新时间戳，防止在下次循环中由于 last_feed 未变而导致重复且累积扣除
                 if hours_since_feed >= 1:
                     hunger_decay = int(hours_since_feed) * 5
                     cat.hunger = max(0, cat.hunger - hunger_decay)
+                    cat.last_feed_time = now # 更新时间点
                     changed = True
                     
                 if hours_since_play >= 2:
                     mood_decay = int(hours_since_play / 2) * 3
                     cat.mood = max(0, cat.mood - mood_decay)
+                    cat.last_play_time = now # 更新时间点
                     changed = True
                 
                 if changed:
@@ -1023,7 +1027,8 @@ class CatService:
             try:
                 disease = self._get_active_disease(cat.cat_instance_id)
                 if not disease:
-                    if cat.hunger < 30 or cat.mood < 30 or cat.health < 50:
+                    # 只有当属性真的低于阈值时才尝试触发疾病，且增加随机性
+                    if (cat.hunger < 30 or cat.mood < 30 or cat.health < 50) and random.random() < 0.2:
                         self.check_disease_onset(cat.user_id, cat.cat_instance_id)
                     
                     if cat.hunger >= 70 and cat.mood >= 70 and cat.health < 100:
