@@ -12,3 +12,7 @@ __pycache__/
 .idea/
 
 *.db
+
+# 本地配置
+GEMINI.md
+astrbot_plugin_fishing.code-workspace
