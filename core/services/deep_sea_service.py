@@ -26,14 +26,18 @@ class DeepSeaService:
     }
 
     ENCOUNTERS = {
-        "fish_school": {"weight": 20, "name": "鱼群"},
-        "treasure_chest": {"weight": 10, "name": "宝箱"},
-        "current": {"weight": 22, "name": "暗流"},
-        "shark": {"weight": 15, "name": "鲨鱼"},
-        "giant_octopus": {"weight": 12, "name": "巨型章鱼"},
+        "fish_school": {"weight": 18, "name": "鱼群"},
+        "treasure_chest": {"weight": 8, "name": "宝箱"},
+        "current": {"weight": 15, "name": "暗流"},
+        "shark": {"weight": 12, "name": "鲨鱼"},
+        "giant_octopus": {"weight": 10, "name": "巨型章鱼"},
         "deep_lord": {"weight": 3, "name": "深海之主"},
         "mermaid": {"weight": 8, "name": "人鱼公主"},
-        "volcano": {"weight": 10, "name": "海底火山"},
+        "volcano": {"weight": 8, "name": "海底火山"},
+        "shipwreck": {"weight": 7, "name": "古代沉船"},
+        "algae": {"weight": 10, "name": "发光海藻"},
+        "rift": {"weight": 5, "name": "深渊裂隙"},
+        "jellyfish": {"weight": 12, "name": "水母群"},
     }
 
     def __init__(
@@ -130,7 +134,7 @@ class DeepSeaService:
             message_lines.append(self._add_coins_and_format(user_id, treasure_value, adventure))
 
         elif encounter_type == "current":
-            loss = int(adventure.entry_fee * 0.20)
+            loss = int(adventure.entry_fee * 0.15) # 降低暗流损失
             loss = int(loss * (1 - random.uniform(0.01, 0.05)))
             message_lines.append(f"🌀 遭遇暗流！")
             message_lines.append(self._add_coins_and_format(user_id, -loss, adventure, is_loss=True))
@@ -216,6 +220,60 @@ class DeepSeaService:
                 loss = int(loss * (1 - random.uniform(0.01, 0.05)))
                 message_lines.append(f"🌋 海底火山喷发！")
                 message_lines.append(self._add_coins_and_format(user_id, -loss, adventure, is_loss=True))
+
+        elif encounter_type == "shipwreck":
+            roll = random.random()
+            if roll < 0.3:
+                reward = int(adventure.entry_fee * random.uniform(1.2, 1.8))
+                message_lines.append(f"⚓ 发现古代沉船！你潜入船舱深处...")
+                message_lines.append(f"💎 你在船长的保险箱里发现了大量珠宝！")
+                message_lines.append(self._add_coins_and_format(user_id, reward, adventure))
+            elif roll < 0.6:
+                fish = self._select_fish(4, 5)
+                message_lines.append(f"⚓ 发现古代沉船！你潜入船舱深处...")
+                message_lines.append(f"🐟 一条珍贵的鱼竟然在这里安了家！")
+                if fish:
+                    message_lines.append(self._add_fish_and_format(user_id, fish, adventure))
+                    fish_obtained = fish
+            else:
+                loss = int(adventure.entry_fee * 0.30)
+                message_lines.append(f"⚓ 发现古代沉船！你潜入船舱深处...")
+                message_lines.append(f"⚠️ 船体突然发生坍塌，你狼狈地逃了出来！")
+                message_lines.append(self._add_coins_and_format(user_id, -loss, adventure, is_loss=True))
+
+        elif encounter_type == "algae":
+            reward = int(adventure.entry_fee * random.uniform(0.2, 0.4))
+            message_lines.append(f"✨ 周围被荧光闪烁的海藻包围，如梦如幻。")
+            message_lines.append(self._add_coins_and_format(user_id, reward, adventure))
+            if random.random() < 0.3:
+                fish = self._select_fish(4, 5)
+                if fish:
+                    message_lines.append(f"✨ 在海藻丛中，你发现了一条罕见的鱼！")
+                    message_lines.append(self._add_fish_and_format(user_id, fish, adventure))
+                    fish_obtained = fish
+
+        elif encounter_type == "rift":
+            if random.random() < 0.4:
+                reward = int(adventure.entry_fee * 0.5)
+                message_lines.append(f"🌌 前方出现深渊裂隙，你选择全力跨越！")
+                message_lines.append(f"🚀 成功！由于海水压力的喷涌，你被推向了更深处。")
+                # 尝试下潜，但受限于 max_depth
+                original_depth = adventure.depth
+                adventure.depth = min(adventure.max_depth, adventure.depth + 2)
+                adventure.position_y += (adventure.depth - original_depth)
+                message_lines.append(f"📊 深度直接到达 {adventure.depth}m")
+                message_lines.append(self._add_coins_and_format(user_id, reward, adventure))
+            else:
+                loss = int(adventure.entry_fee * 0.35)
+                message_lines.append(f"🌌 前方出现深渊裂隙，你选择全力跨越！")
+                message_lines.append(f"💥 失败了！你跌入了裂隙的乱流之中。")
+                message_lines.append(self._add_coins_and_format(user_id, -loss, adventure, is_loss=True))
+
+        elif encounter_type == "jellyfish":
+            loss = int(adventure.entry_fee * random.uniform(0.1, 0.2))
+            message_lines.append(f"🏮 你误入了一大片水母群，密密麻麻的触手让你防不胜防。")
+            message_lines.append(f"⚡ 哎呀！你被水母刺到了，感觉浑身发麻。")
+            message_lines.append(self._add_coins_and_format(user_id, -loss, adventure, is_loss=True))
 
         return message_lines, fish_obtained
 
