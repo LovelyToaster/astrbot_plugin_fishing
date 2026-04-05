@@ -15,4 +15,5 @@ __pycache__/
 
 # 本地配置
 GEMINI.md
+astrbot_fishing
 astrbot_plugin_fishing.code-workspace
