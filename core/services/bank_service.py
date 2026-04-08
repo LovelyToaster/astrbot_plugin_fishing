@@ -753,8 +753,9 @@ class BankService:
 
                 # 执行利息结算
                 logger.info("🏦 开始执行活期利息结算任务...")
-
-                # 获取所有账户
+                
+                # 强制触发一次利率更新
+                self.calculate_dynamic_interest_rate()
                 conn = self.bank_repo._get_connection()
                 cursor = conn.cursor()
                 cursor.execute("SELECT user_id FROM bank_accounts WHERE current_balance > 0")
