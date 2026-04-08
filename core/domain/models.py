@@ -245,6 +245,7 @@ class User:
     wof_last_action_time: datetime | None = None
     wof_plays_today: int = 0
     last_wof_date: Optional[str] = None # YYYY-MM-DD 格式
+    wof_used_protection: bool = False
     
     # --- 新增：用于“骰宝”游戏冷却 ---
     last_sicbo_time: Optional[datetime] = None

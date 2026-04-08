@@ -67,6 +67,7 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
             effect_payload=row[9] if len(row) > 9 else None,
         )
 
+
     def add(self, item: Item):
         with self._get_connection() as conn:
             cursor = conn.cursor()

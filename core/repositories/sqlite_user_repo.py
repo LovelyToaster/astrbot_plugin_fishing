@@ -98,6 +98,7 @@ class SqliteUserRepository(AbstractUserRepository):
             wof_last_action_time=parse_datetime(row["wof_last_action_time"]) if "wof_last_action_time" in row_keys else None,
             wof_plays_today=row["wof_plays_today"] if "wof_plays_today" in row_keys else 0,
             last_wof_date=row["last_wof_date"] if "last_wof_date" in row_keys else None,
+            wof_used_protection=bool(row["wof_used_protection"]) if "wof_used_protection" in row_keys else False,
             # --- [新功能] 添加骰宝冷却字段的读取 ---
             last_sicbo_time=parse_datetime(row["last_sicbo_time"]) if "last_sicbo_time" in row_keys else None,
             

@@ -446,6 +446,7 @@ class GameMechanicsService:
         user.in_wheel_of_fate = False
         user.last_wof_play_time = get_now()
         user.wof_last_action_time = None
+        user.wof_used_protection = False  # 重置保护道具使用状态
         self.user_repo.update(user)
 
     def handle_wof_timeout(self, user_id: str) -> Dict[str, Any] | None:
@@ -522,10 +523,37 @@ class GameMechanicsService:
         
         # [新功能] 游戏次数加一
         user.wof_plays_today += 1
+        user.wof_used_protection = False  # 初始化单局保护标识
         
         self.user_repo.update(user) # 保存所有更新
 
         return self.continue_wheel_of_fate(user_id, user_obj=user)
+
+    def _try_use_wof_protection(self, user: User) -> bool:
+        """尝试使用命运之轮保护道具。"""
+        # 增加单局仅限一次的校验
+        if getattr(user, 'wof_used_protection', False):
+            return False
+
+        # 1. 查找具有 WOF_PROTECTION 效果的道具模板
+        all_items = self.item_template_repo.get_all_items()
+        
+        protection_item = next((item for item in all_items if (getattr(item, 'effect_type', None) == "WOF_PROTECTION") or (item.name == "逆转天平")), None)
+        
+        if not protection_item:
+            return False
+            
+        # 2. 检查用户库存
+        inventory = self.inventory_repo.get_user_item_inventory(user.user_id)
+        count = inventory.get(protection_item.item_id, 0)
+        
+        if count > 0:
+            # 3. 扣除道具并设置本局已使用标识
+            self.inventory_repo.update_item_quantity(user.user_id, protection_item.item_id, -1)
+            user.wof_used_protection = True
+            return True
+            
+        return False
 
     def continue_wheel_of_fate(self, user_id: str, user_obj: User | None = None) -> Dict[str, Any]:
         """在命运之轮中继续挑战下一层。"""
@@ -548,7 +576,16 @@ class GameMechanicsService:
         success_rate = level_data.get("success_rate", 0.5)
         multiplier = level_data.get("multiplier", 1.0)
         
-        if random.random() < success_rate:
+        is_success = random.random() < success_rate
+        used_protection = False
+        
+        if not is_success:
+            # 失败，尝试使用保护道具 (传入 User 对象以确保 ID 纯净)
+            if self._try_use_wof_protection(user):
+                is_success = True
+                used_protection = True
+        
+        if is_success:
             # 成功
             user.wof_current_level += 1
             user.wof_current_prize = round(user.wof_current_prize * multiplier)
@@ -563,9 +600,11 @@ class GameMechanicsService:
             next_level_data = levels[user.wof_current_level]
             next_success_rate = int(next_level_data.get("success_rate", 0.5) * 100)
             
+            protection_msg = "（触发了【逆转天平】，抵消了一次失败！）" if used_protection else ""
+            
             return {
                 "success": True, "status": "ongoing",
-                "message": (f"[CQ:at,qq={user_id}] 🎯 第 {user.wof_current_level} 层幸存！ (下一层成功率: {next_success_rate}%)\n"
+                "message": (f"[CQ:at,qq={user_id}] 🎯 第 {user.wof_current_level} 层幸存！{protection_msg} (下一层成功率: {next_success_rate}%)\n"
                             f"💰 当前累积奖金 {user.wof_current_prize} 金币。\n"
                             f"⏱️ 请在{config.get('timeout_seconds', 60)}秒内回复【继续】或【放弃】！")
             }
