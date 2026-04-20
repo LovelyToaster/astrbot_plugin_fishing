@@ -94,6 +94,8 @@ class GameMechanicsService:
         self._server_suppressed = False
         self._last_suppression_date = None
         self.thread_pool = ThreadPoolExecutor(max_workers=5)
+        # 命运之轮：跨回合补救期状态缓存 (user_id -> bool)
+        self._wof_pending_protection = {}
 
     def _check_server_suppression(self) -> bool:
         """检查服务器级别的抑制状态，如果需要则重置"""
@@ -447,6 +449,11 @@ class GameMechanicsService:
         user.last_wof_play_time = get_now()
         user.wof_last_action_time = None
         user.wof_used_protection = False  # 重置保护道具使用状态
+        
+        # 清除内存标识
+        if user.user_id in self._wof_pending_protection:
+            del self._wof_pending_protection[user.user_id]
+            
         self.user_repo.update(user)
 
     def handle_wof_timeout(self, user_id: str) -> Dict[str, Any] | None:
@@ -460,11 +467,16 @@ class GameMechanicsService:
         now = get_now()
         
         if (now - user.wof_last_action_time).total_seconds() > timeout_seconds:
-            prize = user.wof_current_prize
+            is_awaiting = self._wof_pending_protection.get(user_id, False)
+            prize = user.wof_current_prize if not is_awaiting else 0
             self._reset_wof_state(user, cash_out_prize=prize)
             
-            message = f"[CQ:at,qq={user_id}] ⏰ 你的操作已超时，系统已自动为你结算当前奖金 {prize} 金币。"
-            logger.info(f"用户 {user_id} 命运之轮超时，自动结算 {prize} 金币。")
+            if is_awaiting:
+                message = f"[CQ:at,qq={user_id}] ⏰ 由于你超时未做出补救决定，挑战已宣告失败！你失去了一切奖金。"
+            else:
+                message = f"[CQ:at,qq={user_id}] ⏰ 你的操作已超时，系统已自动为你结算当前奖金 {prize} 金币。"
+                
+            logger.info(f"用户 {user_id} 命运之轮超时，自动结算 {prize} 金币。 (补救期缓存: {is_awaiting})")
             
             return {"success": True, "status": "timed_out", "message": message}
         return None
@@ -567,26 +579,60 @@ class GameMechanicsService:
 
         config = self.WHEEL_OF_FATE_CONFIG
         levels = config.get("levels", [])
-        
         next_level_index = user.wof_current_level
-        if next_level_index >= len(levels):
-            return self.cash_out_wheel_of_fate(user_id, is_final_win=True)
 
-        level_data = levels[next_level_index]
-        success_rate = level_data.get("success_rate", 0.5)
-        multiplier = level_data.get("multiplier", 1.0)
-        
-        is_success = random.random() < success_rate
+        # --- 1. 处理“补救”逻辑：如果当前正处于等待保护确认状态 ---
         used_protection = False
-        
-        if not is_success:
-            # 失败，尝试使用保护道具 (传入 User 对象以确保 ID 纯净)
+        if self._wof_pending_protection.get(user_id, False):
+            # 尝试正式消耗道具
             if self._try_use_wof_protection(user):
                 is_success = True
                 used_protection = True
-        
+                # 补救成功，清除状态
+                if user_id in self._wof_pending_protection:
+                    del self._wof_pending_protection[user_id]
+                # 补救成功，直接走下方“成功流程” (is_success=True)
+            else:
+                # 如果点继续时道具刚好没了，清除状态并走常规逻辑（或直接失败）
+                if user_id in self._wof_pending_protection:
+                    del self._wof_pending_protection[user_id]
+                return {"success": False, "message": "❌ 道具已失效或不再可用，挑战结束。"}
+        else:
+            # --- 2. 正常随机判定 ---
+            if next_level_index >= len(levels):
+                return self.cash_out_wheel_of_fate(user_id, is_final_win=True)
+
+            level_data = levels[next_level_index]
+            success_rate = level_data.get("success_rate", 0.5)
+            is_success = random.random() < success_rate
+
+            if not is_success:
+                # --- 3. 失败拦截：如果持有保护道具，不直接结算而是询问 ---
+                # 检查是否持有逆转天平（但不消耗）
+                all_items = self.item_template_repo.get_all_items()
+                protection_item = next((item for item in all_items if (getattr(item, 'effect_type', None) == "WOF_PROTECTION") or (item.name == "逆转天平")), None)
+                
+                if protection_item and not getattr(user, 'wof_used_protection', False):
+                    inventory = self.inventory_repo.get_user_item_inventory(user.user_id)
+                    if inventory.get(protection_item.item_id, 0) > 0:
+                        # 触发询问状态，写入服务级内存缓存
+                        self._wof_pending_protection[user.user_id] = True
+                        user.wof_last_action_time = get_now() # 刷新超时 60s
+                        self.user_repo.update(user)
+                        return {
+                            "success": True, "status": "ongoing",
+                            "message": (f"[CQ:at,qq={user_id}] ❌ 糟糕，挑战失败了！\n\n"
+                                        f"但你拥有【{protection_item.name}】，可以抵消本次失败。\n"
+                                        f"⏱️ 请在60秒内选择：\n"
+                                        f"回复【继续】：消耗道具并【直接通关】本层\n"
+                                        f"回复【放弃】：不消耗道具，接受失败并结束游戏")
+                        }
+
         if is_success:
-            # 成功
+            # --- 4. 成功流程 (包括补救成功和随机成功) ---
+            level_data = levels[next_level_index]
+            multiplier = level_data.get("multiplier", 1.0)
+            
             user.wof_current_level += 1
             user.wof_current_prize = round(user.wof_current_prize * multiplier)
             user.wof_last_action_time = get_now()
@@ -600,7 +646,7 @@ class GameMechanicsService:
             next_level_data = levels[user.wof_current_level]
             next_success_rate = int(next_level_data.get("success_rate", 0.5) * 100)
             
-            protection_msg = "（触发了【逆转天平】，抵消了一次失败！）" if used_protection else ""
+            protection_msg = "（✨ 触发了【逆转天平】，抵消了一次失败！）" if used_protection else ""
             
             return {
                 "success": True, "status": "ongoing",
@@ -609,7 +655,7 @@ class GameMechanicsService:
                             f"⏱️ 请在{config.get('timeout_seconds', 60)}秒内回复【继续】或【放弃】！")
             }
         else:
-            # 失败
+            # --- 5. 彻底失败逻辑 (无道具或已用过) ---
             lost_amount = user.wof_entry_fee
             self._reset_wof_state(user)
             return {
@@ -628,18 +674,23 @@ class GameMechanicsService:
         if not hasattr(user, 'in_wheel_of_fate') or not user.in_wheel_of_fate:
             return {"success": False, "status": "not_in_game", "message": "⚠️ 你当前不在命运之轮游戏中，无法继续。"}
 
-        prize = user.wof_current_prize
+        is_awaiting = self._wof_pending_protection.get(user_id, False)
+        prize = user.wof_current_prize if not is_awaiting else 0
         entry = user.wof_entry_fee
+        
         self._reset_wof_state(user, cash_out_prize=prize)
 
         if is_final_win:
             message = (f"🏆 [CQ:at,qq={user_id}] 命运的宠儿诞生了！ "
                        f"你成功征服了命运之轮的10层，最终赢得了 {prize} 金币的神话级奖励！")
+        elif is_awaiting:
+            message = (f"❌ [CQ:at,qq={user_id}] 你选择了放弃补救，挑战失败！ "
+                       f"你失去了本局累计的所有金币，本次入场费 {entry} 金币已损失。")
         else:
             message = (f"✅ [CQ:at,qq={user_id}] 明智的选择！ "
                        f"你成功将 {prize} 金币带回了家，本次游戏净赚 {prize - entry} 金币。")
         
-        return {"success": True, "status": "cashed_out", "message": message}
+        return {"success": True, "status": "cashed_out" if not is_awaiting else "failed", "message": message}
 
     # ============================================================
     # ================== 新增功能：命运之轮 结束 ==================
