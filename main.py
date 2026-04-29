@@ -182,6 +182,7 @@ class FishingPlugin(Star):
                 "max_attempts_per_day": game_global_config.get("wipe_bomb_attempts", 3)
             },
             "wheel_of_fate_daily_limit": game_global_config.get("wheel_of_fate_daily_limit", 3),
+            "deep_sea_daily_limit": game_global_config.get("deep_sea_daily_limit", 3),
             "daily_reset_hour": game_global_config.get("daily_reset_hour", 0),
             "user": {
                 "initial_coins": user_config.get("initial_coins", 200)

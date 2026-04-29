@@ -13,28 +13,28 @@ from ..repositories.abstract_repository import (
     AbstractUserBuffRepository,
 )
 from ..domain.models import DeepSeaAdventure, UserBuff
-from ..utils import get_now
+from ..utils import get_now, get_today
 
 
 class DeepSeaService:
     """深海探险服务层"""
 
     ZONES = {
-        "浅海区": {"depth_range": (1, 10), "entry_fee_base": 10000, "max_depth": 10, "fish_rarity_range": (1, 3)},
-        "深海区": {"depth_range": (11, 20), "entry_fee_base": 55000, "max_depth": 20, "fish_rarity_range": (2, 4)},
-        "深渊区": {"depth_range": (21, 30), "entry_fee_base": 100000, "max_depth": 30, "fish_rarity_range": (3, 5)},
+        "浅海区": {"depth_range": (1, 10), "entry_fee_base": 10000, "max_depth": 10, "fish_rarity_range": (1, 3), "horizontal_range": 5, "premium_currency_cap": 4},
+        "深海区": {"depth_range": (11, 20), "entry_fee_base": 55000, "max_depth": 20, "fish_rarity_range": (2, 4), "horizontal_range": 8, "premium_currency_cap": 6},
+        "深渊区": {"depth_range": (21, 30), "entry_fee_base": 100000, "max_depth": 30, "fish_rarity_range": (3, 5), "horizontal_range": 12, "premium_currency_cap": 9},
     }
 
     ENCOUNTERS = {
         "fish_school": {"weight": 18, "name": "鱼群"},
-        "treasure_chest": {"weight": 8, "name": "宝箱"},
+        "treasure_chest": {"weight": 8, "name": "宝箱", "premium_reward": 2, "premium_chance": 0.8},
         "current": {"weight": 15, "name": "暗流"},
         "shark": {"weight": 12, "name": "鲨鱼"},
         "giant_octopus": {"weight": 10, "name": "巨型章鱼"},
-        "deep_lord": {"weight": 3, "name": "深海之主"},
-        "mermaid": {"weight": 8, "name": "人鱼公主"},
+        "deep_lord": {"weight": 3, "name": "深海之主", "premium_reward": 3, "premium_chance": 1.0},
+        "mermaid": {"weight": 8, "name": "人鱼公主", "premium_reward": 1, "premium_chance": 0.7},
         "volcano": {"weight": 8, "name": "海底火山"},
-        "shipwreck": {"weight": 7, "name": "古代沉船"},
+        "shipwreck": {"weight": 7, "name": "古代沉船", "premium_reward": 2, "premium_chance": 0.6},
         "algae": {"weight": 10, "name": "发光海藻"},
         "rift": {"weight": 5, "name": "深渊裂隙"},
         "jellyfish": {"weight": 12, "name": "水母群"},
@@ -113,6 +113,16 @@ class DeepSeaService:
             self.user_repo.update(user)
             return f"💰 获得: +{amount} 金币"
 
+    def _give_premium(self, user_id: str, adventure: DeepSeaAdventure, amount: int) -> str:
+        if adventure.premium_currency_earned >= adventure.premium_currency_cap:
+            return ""
+        actual = min(amount, adventure.premium_currency_cap - adventure.premium_currency_earned)
+        user = self.user_repo.get_by_id(user_id)
+        user.premium_currency += actual
+        self.user_repo.update(user)
+        adventure.premium_currency_earned += actual
+        return f"\n💎 +{actual} 高级货币！（{adventure.premium_currency_earned}/{adventure.premium_currency_cap}）"
+
     def _process_encounter(self, encounter_type: str, user_id: str, adventure: DeepSeaAdventure) -> Tuple[List[str], Optional[Any]]:
         """处理单次遭遇并返回格式化消息"""
         message_lines = []
@@ -132,6 +142,10 @@ class DeepSeaService:
             treasure_value = int(adventure.entry_fee * random.uniform(0.3, 0.6))
             message_lines.append(f"📦 发现宝箱！")
             message_lines.append(self._add_coins_and_format(user_id, treasure_value, adventure))
+            if random.random() < self.ENCOUNTERS["treasure_chest"]["premium_chance"]:
+                premium_msg = self._give_premium(user_id, adventure, self.ENCOUNTERS["treasure_chest"]["premium_reward"])
+                if premium_msg:
+                    message_lines.append(premium_msg)
 
         elif encounter_type == "current":
             loss = int(adventure.entry_fee * 0.15) # 降低暗流损失
@@ -171,6 +185,11 @@ class DeepSeaService:
             message_lines.append(f"头奖！！！ 深海之主被你的勇气所震撼！")
             message_lines.append(self._add_coins_and_format(user_id, jackpot_base, adventure))
 
+            if random.random() < self.ENCOUNTERS["deep_lord"]["premium_chance"]:
+                premium_msg = self._give_premium(user_id, adventure, self.ENCOUNTERS["deep_lord"]["premium_reward"])
+                if premium_msg:
+                    message_lines.append(premium_msg)
+
             fish_rarity_roll = random.random()
             if fish_rarity_roll < 0.01:
                 fish = self._select_fish(6)
@@ -188,6 +207,10 @@ class DeepSeaService:
                 message_lines.append(f"🧜‍♀️ 人鱼公主向你微笑...")
                 message_lines.append(f"💨 她赠送了你好运")
                 message_lines.append(self._add_coins_and_format(user_id, reward, adventure))
+                if random.random() < self.ENCOUNTERS["mermaid"]["premium_chance"]:
+                    premium_msg = self._give_premium(user_id, adventure, self.ENCOUNTERS["mermaid"]["premium_reward"])
+                    if premium_msg:
+                        message_lines.append(premium_msg)
             else:
                 rarity_range = self._get_fish_by_depth(adventure.depth)
                 fish = self._select_fish(*rarity_range)
@@ -198,6 +221,10 @@ class DeepSeaService:
                 else:
                     message_lines.append(f"🧜‍♀️ 人鱼公主说：这里没有鱼能配得上你...")
                     message_lines.append(self._add_coins_and_format(user_id, int(adventure.entry_fee * 0.1), adventure))
+                if random.random() < self.ENCOUNTERS["mermaid"]["premium_chance"]:
+                    premium_msg = self._give_premium(user_id, adventure, self.ENCOUNTERS["mermaid"]["premium_reward"])
+                    if premium_msg:
+                        message_lines.append(premium_msg)
 
         elif encounter_type == "volcano":
             if random.random() < 0.30:
@@ -228,6 +255,10 @@ class DeepSeaService:
                 message_lines.append(f"⚓ 发现古代沉船！你潜入船舱深处...")
                 message_lines.append(f"💎 你在船长的保险箱里发现了大量珠宝！")
                 message_lines.append(self._add_coins_and_format(user_id, reward, adventure))
+                if random.random() < self.ENCOUNTERS["shipwreck"]["premium_chance"]:
+                    premium_msg = self._give_premium(user_id, adventure, self.ENCOUNTERS["shipwreck"]["premium_reward"])
+                    if premium_msg:
+                        message_lines.append(premium_msg)
             elif roll < 0.6:
                 fish = self._select_fish(4, 5)
                 message_lines.append(f"⚓ 发现古代沉船！你潜入船舱深处...")
@@ -235,6 +266,10 @@ class DeepSeaService:
                 if fish:
                     message_lines.append(self._add_fish_and_format(user_id, fish, adventure))
                     fish_obtained = fish
+                if random.random() < self.ENCOUNTERS["shipwreck"]["premium_chance"]:
+                    premium_msg = self._give_premium(user_id, adventure, self.ENCOUNTERS["shipwreck"]["premium_reward"])
+                    if premium_msg:
+                        message_lines.append(premium_msg)
             else:
                 loss = int(adventure.entry_fee * 0.30)
                 message_lines.append(f"⚓ 发现古代沉船！你潜入船舱深处...")
@@ -338,6 +373,15 @@ class DeepSeaService:
         if existing and existing.status == "active":
             return {"success": False, "message": "❌ 您已经在深海探险中了，请先使用「回头」命令结束当前探险。"}
 
+        # 每日限制检查
+        deep_sea_daily_limit = self.config.get("deep_sea_daily_limit", 3)
+        today_str = get_today().strftime('%Y-%m-%d')
+        if user.last_deep_sea_date != today_str:
+            user.deep_sea_attempts_today = 0
+            user.last_deep_sea_date = today_str
+        if user.deep_sea_attempts_today >= deep_sea_daily_limit:
+            return {"success": False, "message": f"今天的深海探险次数已用完（{user.deep_sea_attempts_today}/{deep_sea_daily_limit}），请明天再来吧！"}
+
         user.coins -= entry_fee
         self.user_repo.update(user)
 
@@ -354,8 +398,13 @@ class DeepSeaService:
             position_x=0,
             position_y=0,
             moves=0,
+            horizontal_range=zone_config["horizontal_range"],
+            premium_currency_cap=zone_config["premium_currency_cap"],
         )
         self._save_adventure(adventure)
+
+        user.deep_sea_attempts_today += 1
+        self.user_repo.update(user)
 
         zone_desc = {
             "浅海区": "阳光斑斓，小鱼成群结队，适合新手练习。",
@@ -414,11 +463,17 @@ class DeepSeaService:
 
                 if adventure.depth >= adventure.max_depth:
                     break
-        else:
+        else:  # 水平移动
             if direction == "左游":
-                adventure.position_x -= 1
+                new_x = adventure.position_x - 1
+                if adventure.horizontal_range > 0 and abs(new_x) > adventure.horizontal_range:
+                    return {"success": False, "message": "🌊 再往左就是未知海域了，无法继续左游。"}
+                adventure.position_x = new_x
             elif direction == "右游":
-                adventure.position_x += 1
+                new_x = adventure.position_x + 1
+                if adventure.horizontal_range > 0 and abs(new_x) > adventure.horizontal_range:
+                    return {"success": False, "message": "🌊 再往右就是未知海域了，无法继续右游。"}
+                adventure.position_x = new_x
 
             adventure.moves += 1
             encounter_type = self._select_encounter()
@@ -441,10 +496,11 @@ class DeepSeaService:
                 user.coins += net_profit
                 self.user_repo.update(user)
 
+            premium_line = f"\n高级货币: +{adventure.premium_currency_earned}" if adventure.premium_currency_cap > 0 and adventure.premium_currency_earned > 0 else ""
             message_lines.append(f"""🏆 恭喜！你到达了{adventure.zone}最深处！
 总收益: +{adventure.current_reward} 金币
 总损失: -{total_loss} 金币（含入场费 {adventure.entry_fee}）
-净收益: {net_profit:+.0f} 金币""")
+净收益: {net_profit:+.0f} 金币{premium_line}""")
             self._clear_adventure(user_id)
         else:
             self._save_adventure(adventure)
@@ -452,7 +508,9 @@ class DeepSeaService:
         profit = adventure.current_reward - adventure.current_loss
 
         message_lines.append("")
+        premium_line = f"高级货币: {adventure.premium_currency_earned}/{adventure.premium_currency_cap}" if adventure.premium_currency_cap > 0 else ""
         message_lines.append(f"""📊 探险状态:
+{premium_line}
 收益: +{adventure.current_reward}
 损失: -{adventure.current_loss}
 净收益: {profit:+.0f}
@@ -482,12 +540,13 @@ class DeepSeaService:
 
         self.user_repo.update(user)
 
+        premium_line = f"\n高级货币: +{adventure.premium_currency_earned}" if adventure.premium_currency_cap > 0 and adventure.premium_currency_earned > 0 else ""
         message = f"""🏃【深海探险 - 回头】🏃
 
 💰 入场费: {adventure.entry_fee} 金币
 📈 总收益: +{adventure.current_reward} 金币
 📉 总损失: -{total_loss} 金币（含入场费 {adventure.entry_fee}）
-💵 净收益: {net_profit:+.0f} 金币
+💵 净收益: {net_profit:+.0f} 金币{premium_line}
 ⏱️ 探险时长: {(get_now() - adventure.started_at).total_seconds():.0f} 秒
 
 结算完成，金币已从你的账户{("返还" if net_profit > 0 else "扣除")}！"""
@@ -506,16 +565,38 @@ class DeepSeaService:
 
         zone_emoji = {"浅海区": "🌊", "深海区": "🌊🌊", "深渊区": "🌊🌊🌊"}
 
-        message = f"""🌊【深海探险 - 状态】🌊
+        msg_lines = [
+            f"🌊【深海探险 - 状态】🌊",
+            "",
+            f"📍 区域: {zone_emoji.get(adventure.zone, '')} {adventure.zone}",
+            f"📊 深度: {adventure.depth}m / {adventure.max_depth}m",
+        ]
 
-📍 区域: {zone_emoji.get(adventure.zone, '')} {adventure.zone}
-📊 深度: {adventure.depth}m / {adventure.max_depth}m
-💰 入场费: {adventure.entry_fee} 金币
-📈 收益: +{adventure.current_reward} 金币
-📉 损失: -{adventure.current_loss} 金币
-💵 净收益: {profit:+.0f} 金币
-⏱️ 开始时间: {adventure.started_at.strftime('%H:%M:%S')}
+        if adventure.horizontal_range > 0:
+            msg_lines.append(f"📍 水平位置：{adventure.position_x}/{adventure.horizontal_range}（左右各{adventure.horizontal_range}格）")
 
-💡 「下潜」「上浮」「左游」「右游」继续探索，「回头」结束探险。"""
+        msg_lines.extend([
+            f"💰 入场费: {adventure.entry_fee} 金币",
+            f"📈 收益: +{adventure.current_reward} 金币",
+            f"📉 损失: -{adventure.current_loss} 金币",
+            f"💵 净收益: {profit:+.0f} 金币",
+        ])
+
+        if adventure.premium_currency_cap > 0:
+            msg_lines.append(f"💎 高级货币：{adventure.premium_currency_earned}/{adventure.premium_currency_cap}")
+
+        msg_lines.extend([
+            f"⏱️ 开始时间: {adventure.started_at.strftime('%H:%M:%S')}",
+            "",
+            f"💡 「下潜」「上浮」「左游」「右游」继续探索，「回头」结束探险。",
+        ])
+
+        msg_lines.extend([
+            f"⏱️ 开始时间: {adventure.started_at.strftime('%H:%M:%S')}",
+            "",
+            f"💡 「下潜」「上浮」「左游」「右游」继续探索，「回头」结束探险。",
+        ])
+
+        message = "\n".join(msg_lines)
 
         return {"success": True, "message": message, "adventure": adventure}

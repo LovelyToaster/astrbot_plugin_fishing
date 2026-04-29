@@ -154,6 +154,12 @@
         "type": "int",
         "hint": "每个用户每天可以使用擦弹炸弹的最大次数",
         "default": 3
+      },
+      "deep_sea_daily_limit": {
+        "description": "深海探险每日次数限制",
+        "type": "int",
+        "hint": "每个用户每天可以进行深海探险的最大次数",
+        "default": 3
       }
     }
   },

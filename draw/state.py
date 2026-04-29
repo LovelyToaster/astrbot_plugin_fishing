@@ -60,7 +60,7 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, avatar_conf
         PIL.Image.Image: 生成的状态图像
     """
     # 画布尺寸 
-    width, height = 620, 540
+    width, height = 620, 640
     
     # 导入优化的渐变生成函数
     from .gradient_utils import create_vertical_gradient
@@ -374,8 +374,8 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, avatar_conf
     draw.text((card_margin, current_y), status_title, font=subtitle_font, fill=primary_medium)
     current_y += 30
 
-    # 状态卡片 - 扩展高度容纳第七行信息
-    status_card_height = 175
+    # 状态卡片 - 扩展高度容纳第八行信息
+    status_card_height = 210
     draw_rounded_rectangle(draw,
                          (card_margin, current_y, width - card_margin, current_y + status_card_height),
                          8, fill=card_bg)
@@ -386,10 +386,11 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, avatar_conf
     status_row1_y = current_y + 12      # 第一行
     status_row2_y = current_y + 35      # 第二行
     status_row3_y = current_y + 58      # 第三行
-    status_row4_y = current_y + 81      # 第四行 (鱼塘信息)
-    status_row5_y = current_y + 104     # 第五行 (银行活期 - 左)
-    status_row6_y = current_y + 127     # 第六行 (银行活期 - 右/定期左)
-    status_row7_y = current_y + 150     # 第七行 (银行定期/倒计时)
+    status_row4_y = current_y + 81      # 第四行 (深海探险)
+    status_row5_y = current_y + 104     # 第五行 (鱼塘信息)
+    status_row6_y = current_y + 127     # 第六行 (活期余额)
+    status_row7_y = current_y + 150     # 第七行 (结息倒计时)
+    status_row8_y = current_y + 173     # 第八行 (定期到期/提示)
 
     # 左列第一行：签到状态
     signed_today = user_data.get('signed_in_today', False)
@@ -457,51 +458,56 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, avatar_conf
         wof_color = text_muted
     draw.text((status_col2_x, status_row3_y), wof_text, font=content_font, fill=wof_color)
 
-    # 第四行：鱼塘信息
+    # 第四行左列：深海探险次数
+    deep_sea_rem = user_data.get('deep_sea_remaining', 0)
+    if deep_sea_rem > 0:
+        deep_sea_text = f"深海探险: 剩余 {deep_sea_rem} 次"
+        deep_sea_color = error_color
+    else:
+        deep_sea_text = "深海探险: 已用完"
+        deep_sea_color = text_muted
+    draw.text((status_col1_x, status_row4_y), deep_sea_text, font=content_font, fill=deep_sea_color)
+
+    # 第五行：鱼塘信息
     pond_info = user_data.get('pond_info', {})
     if pond_info and pond_info.get('total_count', 0) > 0:
-        # 左列：鱼塘鱼数
         pond_count_text = f"鱼塘数量: {pond_info['total_count']} 条， 价值: {pond_info['total_value']:,} 金币"
-        draw.text((status_col1_x, status_row4_y), pond_count_text, font=content_font, fill=text_primary)
+        draw.text((status_col1_x, status_row5_y), pond_count_text, font=content_font, fill=text_primary)
     else:
-        # 鱼塘为空时显示
         pond_empty_text = "鱼塘里什么都没有..."
-        draw.text((status_col1_x, status_row4_y), pond_empty_text, font=content_font, fill=text_muted)
+        draw.text((status_col1_x, status_row5_y), pond_empty_text, font=content_font, fill=text_muted)
 
-    # 第五行：银行活期信息（左列）
+    # 第六行：银行活期信息（左列）
     has_bank_account = user_data.get('has_bank_account', False)
     bank_current_balance = user_data.get('bank_current_balance', 0)
     settlement_countdown = user_data.get('settlement_countdown', '')
 
     if has_bank_account:
         bank_current_text = f"活期：{bank_current_balance:,} 金币"
-        draw.text((status_col1_x, status_row5_y), bank_current_text, font=content_font, fill=text_primary)
+        draw.text((status_col1_x, status_row6_y), bank_current_text, font=content_font, fill=text_primary)
     else:
         bank_no_account_text = "暂无银行账户"
-        draw.text((status_col1_x, status_row5_y), bank_no_account_text, font=content_font, fill=text_muted)
+        draw.text((status_col1_x, status_row6_y), bank_no_account_text, font=content_font, fill=text_muted)
 
-    # 第六行：下次结息倒计时（左列）
+    # 第七行：下次结息倒计时（左列）
     if has_bank_account and settlement_countdown:
         settlement_text = f"下次结息：{settlement_countdown}"
-        draw.text((status_col1_x, status_row6_y), settlement_text, font=content_font, fill=text_secondary)
+        draw.text((status_col1_x, status_row7_y), settlement_text, font=content_font, fill=text_secondary)
 
-    # 第七行：银行定期信息（左列）
+    # 第八行：银行定期信息（左列）
     bank_fixed_balance = user_data.get('bank_fixed_balance', 0)
     matured_fixed_count = user_data.get('matured_fixed_count', 0)
 
     if has_bank_account:
         if matured_fixed_count > 0:
-            # 有已到期的定期存款
             bank_fixed_text = f"定期：{matured_fixed_count}笔已到期"
-            draw.text((status_col1_x, status_row7_y), bank_fixed_text, font=content_font, fill=warning_color)
+            draw.text((status_col1_x, status_row8_y), bank_fixed_text, font=content_font, fill=warning_color)
         else:
-            # 没有到期的定期存款
             bank_fixed_text = "定期：暂无到期的定期存款"
-            draw.text((status_col1_x, status_row7_y), bank_fixed_text, font=content_font, fill=text_muted)
+            draw.text((status_col1_x, status_row8_y), bank_fixed_text, font=content_font, fill=text_muted)
     else:
-        # 没有银行账户时显示提示
         bank_tip_text = "使用「存款 活期 金额」命令开户"
-        draw.text((status_col1_x, status_row7_y), bank_tip_text, font=content_font, fill=text_secondary)
+        draw.text((status_col1_x, status_row8_y), bank_tip_text, font=content_font, fill=text_secondary)
 
     # 10. 底部信息 - 调整位置
     current_y += status_card_height + 15
@@ -712,7 +718,19 @@ def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo,
     else:
         # 兼容旧数据，给予最大次数
         wof_remaining_plays = wheel_of_fate_daily_limit
-    
+
+    # 计算深海探险剩余次数
+    deep_sea_daily_limit = game_config.get("deep_sea_daily_limit", 3)
+    deep_sea_remaining = 0
+    if hasattr(user, 'last_deep_sea_date') and hasattr(user, 'deep_sea_attempts_today'):
+        today_str = get_today().strftime('%Y-%m-%d')
+        if user.last_deep_sea_date == today_str:
+            deep_sea_remaining = max(0, deep_sea_daily_limit - user.deep_sea_attempts_today)
+        else:
+            deep_sea_remaining = deep_sea_daily_limit
+    else:
+        deep_sea_remaining = deep_sea_daily_limit
+
     # 获取鱼塘信息
     pond_info = None
     try:
@@ -780,6 +798,7 @@ def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo,
         'wipe_bomb_remaining': wipe_bomb_remaining,
         'pond_info': pond_info,
         'wof_remaining_plays': wof_remaining_plays,
+        'deep_sea_remaining': deep_sea_remaining,
         'bank_current_balance': bank_current_balance,  # 活期余额
         'bank_fixed_balance': bank_fixed_balance,  # 定期余额
         'settlement_countdown': settlement_countdown,  # 下次结算倒计时

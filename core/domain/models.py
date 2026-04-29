@@ -253,6 +253,10 @@ class User:
     # --- 新增：用于每日擦弹次数追踪 ---
     wipe_bomb_attempts_today: int = 0
     last_wipe_bomb_date: Optional[str] = None # YYYY-MM-DD 格式
+    
+    # --- 新增：用于每日深海探险次数追踪 ---
+    deep_sea_attempts_today: int = 0
+    last_deep_sea_date: Optional[str] = None # YYYY-MM-DD 格式
 
     def can_afford(self, cost: int) -> bool:
         """判断用户金币是否足够"""
@@ -684,3 +688,6 @@ class DeepSeaAdventure:
     position_x: int = 0  # 水平位置
     position_y: int = 0  # 垂直位置
     moves: int = 0  # 移动步数
+    horizontal_range: int = 0  # 水平边界限制，0=无限制
+    premium_currency_earned: int = 0  # 本局已获得高级货币
+    premium_currency_cap: int = 0  # 本局高级货币上限，0=无上限

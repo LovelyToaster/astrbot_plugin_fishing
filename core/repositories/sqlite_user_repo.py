@@ -87,6 +87,9 @@ class SqliteUserRepository(AbstractUserRepository):
             # ==================== 在这里添加新字段 ====================
             wipe_bomb_attempts_today=row["wipe_bomb_attempts_today"] if "wipe_bomb_attempts_today" in row_keys else 0,
             last_wipe_bomb_date=row["last_wipe_bomb_date"] if "last_wipe_bomb_date" in row_keys else None,
+            # --- 每日深海探险追踪 ---
+            deep_sea_attempts_today=row["deep_sea_attempts_today"] if "deep_sea_attempts_today" in row_keys else 0,
+            last_deep_sea_date=row["last_deep_sea_date"] if "last_deep_sea_date" in row_keys else None,
             # =========================================================
 
             # --- [关键修复] 添加所有命运之轮字段的读取 ---
