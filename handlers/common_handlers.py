@@ -2,6 +2,7 @@ import os
 from astrbot.api.event import filter, AstrMessageEvent
 from ..draw.help import draw_help_image
 from ..draw.state import draw_state_image, get_user_state_data
+from ..draw.checkin import draw_sign_in_image
 from ..core.utils import get_now
 from ..utils import safe_datetime_handler, parse_target_user_id, parse_amount
 from typing import TYPE_CHECKING
@@ -23,8 +24,16 @@ async def sign_in(self: "FishingPlugin", event: AstrMessageEvent):
     """签到"""
     user_id = self._get_effective_user_id(event)
     result = self.user_service.daily_sign_in(user_id)
-    if result["success"]:
-        yield event.plain_result(result["message"])
+    try:
+        calendar_data = self.user_service.get_sign_in_calendar_data(user_id)
+        if result["success"]:
+            calendar_data["reward"] = result
+        image = draw_sign_in_image(calendar_data, self.data_dir)
+        image_path = os.path.join(self.tmp_dir, "sign_in.png")
+        image.save(image_path)
+        yield event.image_result(image_path)
+    except Exception:
+        yield event.plain_result(result.get("message", "出错了"))
 
 async def state(self: "FishingPlugin", event: AstrMessageEvent):
     """查看用户状态"""

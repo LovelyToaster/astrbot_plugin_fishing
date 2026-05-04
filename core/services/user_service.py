@@ -1,4 +1,6 @@
 import random
+import json
+import calendar
 from typing import Dict, Any, Optional
 from datetime import timedelta, datetime, timezone
 
@@ -148,10 +150,18 @@ class UserService:
             "leaderboard": leaderboard
         }
 
+    @staticmethod
+    def _parse_milestones_config(value):
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return {}
+
     def daily_sign_in(self, user_id: str) -> Dict[str, Any]:
-        """
-        处理用户每日签到。
-        """
         user = self.user_repo.get_by_id(user_id)
         if not user:
             return {"success": False, "message": "请先注册才能签到"}
@@ -160,38 +170,53 @@ class UserService:
         if self.log_repo.has_checked_in(user_id, today):
             return {"success": False, "message": "你今天已经签到过了，明天再来吧！"}
 
-        yesterday = today - timedelta(days=1)
-        if not self.log_repo.has_checked_in(user_id, yesterday):
+        # 月度重置判断
+        if user.last_login_time:
+            if user.last_login_time.year != today.year or user.last_login_time.month != today.month:
+                user.consecutive_login_days = 0
+            else:
+                yesterday = today - timedelta(days=1)
+                if not self.log_repo.has_checked_in(user_id, yesterday):
+                    user.consecutive_login_days = 0
+        else:
             user.consecutive_login_days = 0
 
-        signin_config = self.config.get("signin", {})
-        min_reward = signin_config.get("min_reward", 100)
-        max_reward = signin_config.get("max_reward", 300)
-        coins_reward = random.randint(min_reward, max_reward)
-
-        # 1. 增加金币和高级货币
-        premium_currency_reward = 1
-        user.coins += coins_reward
-        user.premium_currency += premium_currency_reward 
-
-        # 2. 更新连续签到和最后登录时间
+        consecutive_before = user.consecutive_login_days
         user.consecutive_login_days += 1
+
+        signin_config = self.config.get("signin", {})
+
+        # --- 金币计算 ---
+        coins_base_min = signin_config.get("base_reward_coins_min", 1200)
+        coins_base_max = signin_config.get("base_reward_coins_max", 3000)
+        coins_base = random.randint(coins_base_min, coins_base_max)
+        coins_linear = consecutive_before * signin_config.get("consecutive_bonus_per_day_coins", 150)
+        coins_milestone = 0
+        coins_milestones = self._parse_milestones_config(signin_config.get("consecutive_milestones_coins", {}))
+        if str(consecutive_before + 1) in coins_milestones:
+            coins_milestone = coins_milestones[str(consecutive_before + 1)]
+        total_coins = coins_base + coins_linear + coins_milestone
+
+        # --- 高级货币计算 ---
+        prem_base_min = signin_config.get("base_reward_premium_min", 1)
+        prem_base_max = signin_config.get("base_reward_premium_max", 2)
+        prem_base = random.randint(prem_base_min, prem_base_max)
+        prem_interval = signin_config.get("consecutive_bonus_premium_interval", 3)
+        prem_linear = consecutive_before // prem_interval
+        prem_milestone = 0
+        prem_milestones = self._parse_milestones_config(signin_config.get("consecutive_milestones_premium", {}))
+        if str(consecutive_before + 1) in prem_milestones:
+            prem_milestone = prem_milestones[str(consecutive_before + 1)]
+        total_premium = prem_base + prem_linear + prem_milestone
+
+        # 更新用户
+        user.coins += total_coins
+        user.premium_currency += total_premium
         user.last_login_time = get_now()
-
-        bonus_coins = 0
-        consecutive_bonuses = signin_config.get("consecutive_bonuses", {})
-        if str(user.consecutive_login_days) in consecutive_bonuses:
-            bonus_coins = consecutive_bonuses[str(user.consecutive_login_days)]
-            user.coins += bonus_coins
-
         self.user_repo.update(user)
         self.log_repo.add_check_in(user_id, today)
 
-        # 3. 构建包含两种奖励的消息
-        message = f"签到成功！获得 {coins_reward} 金币和 {premium_currency_reward} 高级货币。"
-        if bonus_coins > 0:
-            message += f" 连续签到 {user.consecutive_login_days} 天，额外奖励 {bonus_coins} 金币！"
-
+        # --- 每日免费抽卡（保留） ---
         free_gacha_reward_msg = ""
         free_pool = self.gacha_service.get_daily_free_pool()
         if free_pool:
@@ -208,10 +233,34 @@ class UserService:
 
         return {
             "success": True,
-            "message": message + free_gacha_reward_msg,
-            "coins_reward": coins_reward,
-            "bonus_coins": bonus_coins,
-            "consecutive_days": user.consecutive_login_days
+            "message": f"签到成功！获得 {total_coins} 金币和 {total_premium} 高级货币。{free_gacha_reward_msg}",
+            "coins_base": coins_base,
+            "coins_linear": coins_linear,
+            "coins_milestone": coins_milestone,
+            "total_coins": total_coins,
+            "prem_base": prem_base,
+            "prem_linear": prem_linear,
+            "prem_milestone": prem_milestone,
+            "total_premium": total_premium,
+            "consecutive_days": consecutive_before + 1,
+            "consecutive_before": consecutive_before
+        }
+
+    def get_monthly_checkin_dates(self, user_id: str, year: int, month: int):
+        return self.log_repo.get_monthly_checkin_dates(user_id, year, month)
+
+    def get_sign_in_calendar_data(self, user_id: str) -> Dict[str, Any]:
+        today = get_today()
+        signed_dates = self.get_monthly_checkin_dates(user_id, today.year, today.month)
+        _, days_in_month = calendar.monthrange(today.year, today.month)
+        user = self.user_repo.get_by_id(user_id)
+        return {
+            "year": today.year,
+            "month": today.month,
+            "days_in_month": days_in_month,
+            "signed_dates": signed_dates,
+            "consecutive_days": user.consecutive_login_days if user else 0,
+            "today": today.day
         }
 
     def get_user_current_accessory(self, user_id: str) -> Dict[str, Any]:

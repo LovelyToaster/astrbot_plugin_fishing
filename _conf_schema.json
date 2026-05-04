@@ -175,6 +175,56 @@
       }
     }
   },
+  "signin": {
+    "description": "签到系统配置",
+    "type": "object",
+    "items": {
+      "base_reward_coins_min": {
+        "description": "签到保底金币最小值",
+        "type": "int",
+        "default": 1200
+      },
+      "base_reward_coins_max": {
+        "description": "签到保底金币最大值",
+        "type": "int",
+        "default": 3000
+      },
+      "base_reward_premium_min": {
+        "description": "签到保底高级货币最小值",
+        "type": "int",
+        "default": 1
+      },
+      "base_reward_premium_max": {
+        "description": "签到保底高级货币最大值",
+        "type": "int",
+        "default": 2
+      },
+      "consecutive_bonus_per_day_coins": {
+        "description": "连续签到每日额外金币",
+        "type": "int",
+        "hint": "每连续签到一天额外获得的金币数量",
+        "default": 150
+      },
+      "consecutive_bonus_premium_interval": {
+        "description": "连续签到高级货币间隔天数",
+        "type": "int",
+        "hint": "每连续签到N天额外获得1高级货币",
+        "default": 3
+      },
+      "consecutive_milestones_coins": {
+        "description": "连续签到里程碑金币奖励（JSON格式）",
+        "type": "string",
+        "hint": "JSON字典，key为天数，value为奖励数量，如 {\"7\": 6000, \"14\": 12000, \"21\": 22000, \"28\": 40000}",
+        "default": "{\"7\": 6000, \"14\": 12000, \"21\": 22000, \"28\": 40000}"
+      },
+      "consecutive_milestones_premium": {
+        "description": "连续签到里程碑高级货币奖励（JSON格式）",
+        "type": "string",
+        "hint": "JSON字典，key为天数，value为奖励数量，如 {\"7\": 10, \"14\": 15, \"21\": 20, \"28\": 25}",
+        "default": "{\"7\": 10, \"14\": 15, \"21\": 20, \"28\": 25}"
+      }
+    }
+  },
   "cat": {
     "description": "猫咪系统配置",
     "type": "object",

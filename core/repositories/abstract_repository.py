@@ -582,6 +582,9 @@ class AbstractLogRepository(ABC):
     # 检查用户某天是否已签到
     @abstractmethod
     def has_checked_in(self, user_id: str, check_in_date: date) -> bool: pass
+    # 获取用户某月所有签到日期（返回日号列表）
+    @abstractmethod
+    def get_monthly_checkin_dates(self, user_id: str, year: int, month: int) -> List[int]: pass
     # 记录一条税收日志
     @abstractmethod
     def add_tax_record(self, record: TaxRecord) -> None: pass

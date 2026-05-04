@@ -330,6 +330,21 @@ class SqliteLogRepository(AbstractLogRepository):
             )
             return cursor.fetchone() is not None
 
+    def get_monthly_checkin_dates(self, user_id: str, year: int, month: int) -> List[int]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            month_str = f"{month:02d}"
+            cursor.execute(
+                """
+                SELECT cast(strftime('%d', check_in_date) AS INTEGER) AS day
+                FROM check_ins
+                WHERE user_id = ? AND strftime('%Y', check_in_date) = ? AND strftime('%m', check_in_date) = ?
+                ORDER BY check_in_date
+                """,
+                (user_id, str(year), month_str)
+            )
+            return [row["day"] for row in cursor.fetchall()]
+
     def add_log(self, user_id: str, log_type: str, message: str) -> None:
         """添加一条通用日志"""
         # 由于 fishing_records 表有外键约束，我们使用一个简单的日志表
