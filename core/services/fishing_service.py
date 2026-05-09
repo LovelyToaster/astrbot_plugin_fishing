@@ -818,8 +818,6 @@ class FishingService:
             return {"success": False, "message": f"该钓鱼区域已于 {zone.available_until.strftime('%Y-%m-%d %H:%M')} 关闭"}
 
         # 检查通行证要求（从数据库读取）
-        pass_consumed = False
-        consumed_item_name = None
         if zone.requires_pass and zone.required_item_id:
             # 获取用户道具库存
             user_items = self.inventory_repo.get_user_item_inventory(user_id)
@@ -834,24 +832,22 @@ class FishingService:
                     "message": f"❌ 进入该区域需要 {item_name}，您当前拥有 {current_quantity} 个"
                 }
             
-            # 消耗一个通行证道具
-            self.inventory_repo.decrease_item_quantity(user_id, zone.required_item_id, 1)
-            
             # 获取道具名称用于提示
             item_template = self.item_template_repo.get_item_by_id(zone.required_item_id)
-            consumed_item_name = item_template.name if item_template else f"道具ID{zone.required_item_id}"
-            pass_consumed = True
+            item_name = item_template.name if item_template else f"道具ID{zone.required_item_id}"
             
             # 记录日志
-            self.log_repo.add_log(user_id, "zone_entry", f"使用通行证进入 {zone.name}")
+            self.log_repo.add_log(user_id, "zone_entry", f"进入通行证区域 {zone.name}")
 
         user.fishing_zone_id = zone.id
         self.user_repo.update(user)
 
         # 构建成功消息
         success_message = f"✅已将钓鱼区域设置为 {zone.name}"
-        if pass_consumed and consumed_item_name:
-            success_message += f"\n🔑 已消耗 1 个 {consumed_item_name}"
+        if zone.requires_pass and zone.required_item_id:
+            item_template = self.item_template_repo.get_item_by_id(zone.required_item_id)
+            item_name = item_template.name if item_template else f"道具ID{zone.required_item_id}"
+            success_message += f"\n🔑 每日将自动消耗 1 张 {item_name}"
 
         return {"success": True, "message": success_message}
 
@@ -972,16 +968,15 @@ class FishingService:
                         "item_name": item_name
                     })
                 else:
-                    # 用户有道具，不需要重复扣除通行证
-                    # 通行证只在切换区域时扣除一次，这里只做检查
+                    # 每日消耗1张通行证
                     try:
                         item_template = self.item_template_repo.get_item_by_id(zone.required_item_id)
                         item_name = item_template.name if item_template else f"道具ID{zone.required_item_id}"
                     except Exception:
                         item_name = f"道具ID{zone.required_item_id}"
                     
-                    # 记录日志（不扣除道具）
-                    self.log_repo.add_log(user_id, "zone_access_check", f"检查 {item_name} 剩余数量：{current_quantity}，继续留在 {zone.name}")
+                    self.inventory_repo.decrease_item_quantity(user_id, zone.required_item_id, 1)
+                    self.log_repo.add_log(user_id, "zone_access_check", f"消耗1张{item_name}，剩余{current_quantity - 1}，继续留在{zone.name}")
             except Exception:
                 # 单个用户异常不影响其他用户
                 continue

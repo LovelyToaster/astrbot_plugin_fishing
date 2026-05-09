@@ -132,7 +132,7 @@ class FishingHandlers:
                 message += f"💰 钓鱼消耗: {zone.get('fishing_cost', 10)} 金币/次\n"
                 if zone.get("requires_pass"):
                     required_item_name = zone.get("required_item_name", "通行证")
-                    message += f"🔑 需要 {required_item_name} 才能进入\n"
+                    message += f"🔑 每日消耗1张 {required_item_name}\n"
                 if zone.get("available_from") or zone.get("available_until"):
                     message += "⏰ 开放时间: "
                     if zone.get("available_from") and zone.get("available_until"):
