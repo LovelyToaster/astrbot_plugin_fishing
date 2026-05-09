@@ -9,7 +9,7 @@ from ..domain.models import (
     User, Fish, Rod, Bait, Accessory, Title, Achievement, Item,
     UserRodInstance, UserAccessoryInstance, UserFishInventoryItem, UserAquariumItem,
     FishingRecord, GachaRecord, WipeBombLog, MarketListing, TaxRecord,
-    GachaPool, GachaPoolItem, FishingZone, UserBuff, AquariumUpgrade,
+    GachaPool, GachaPoolItem, UserGachaPity, FishingZone, UserBuff, AquariumUpgrade,
     ShopOffer, ShopOfferCost, ShopOfferReward,
     Commodity, Exchange, UserCommodity,
     CatTemplate, UserCatInstance, CatDisease, UserCatDisease, UserCatEventRecord
@@ -532,6 +532,13 @@ class AbstractGachaRepository(ABC):
     def get_free_pools(self) -> List[GachaPool]:
         pass
 
+    # 保底计数
+    @abstractmethod
+    def get_user_pity(self, user_id: str, pool_id: int) -> Optional[UserGachaPity]: pass
+
+    @abstractmethod
+    def set_user_pity(self, user_id: str, pool_id: int, current_pity: int) -> None: pass
+
 
 class AbstractMarketRepository(ABC):
     """市场仓储接口"""
@@ -567,6 +574,9 @@ class AbstractLogRepository(ABC):
     # 记录一条抽卡日志
     @abstractmethod
     def add_gacha_record(self, record: GachaRecord) -> None: pass
+    # 批量记录抽卡日志（性能优化，合并事务与清理）
+    @abstractmethod
+    def add_gacha_records_batch(self, records: List[GachaRecord]) -> None: pass
     # 获取用户抽卡日志
     @abstractmethod
     def get_gacha_records(self, user_id: str, limit: int) -> List[GachaRecord]: pass

@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 # 导入抽象基类和领域模型
 from .abstract_repository import AbstractLogRepository
 from ..domain.models import FishingRecord, GachaRecord, WipeBombLog, TaxRecord, UserFishStat
+from typing import List
 
 class SqliteLogRepository(AbstractLogRepository):
     """日志类数据仓储的SQLite实现"""
@@ -211,6 +212,50 @@ class SqliteLogRepository(AbstractLogRepository):
                 (cutoff_time,),
             )
 
+            conn.commit()
+
+    def add_gacha_records_batch(self, records: List[GachaRecord]) -> None:
+        if not records:
+            return
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            user_id = records[0].user_id
+            cursor.executemany(
+                """
+                INSERT INTO gacha_records (
+                    user_id, gacha_pool_id, item_type, item_id,
+                    item_name, quantity, rarity, timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        r.user_id, r.gacha_pool_id, r.item_type, r.item_id,
+                        r.item_name, r.quantity, r.rarity,
+                        r.timestamp or datetime.now(self.UTC8)
+                    )
+                    for r in records
+                ],
+            )
+            # 仅保留当前用户最近50条抽卡记录
+            cursor.execute(
+                """
+                DELETE FROM gacha_records
+                WHERE user_id = ?
+                  AND record_id NOT IN (
+                    SELECT record_id FROM gacha_records
+                    WHERE user_id = ?
+                    ORDER BY timestamp DESC, record_id DESC
+                    LIMIT 50
+                  )
+                """,
+                (user_id, user_id),
+            )
+            # 清理30天前的抽卡记录（全局）
+            cutoff_time = datetime.now(self.UTC8) - timedelta(days=30)
+            cursor.execute(
+                "DELETE FROM gacha_records WHERE timestamp < ?",
+                (cutoff_time,),
+            )
             conn.commit()
 
     def get_gacha_records(self, user_id: str, limit: int) -> List[GachaRecord]:

@@ -57,6 +57,17 @@
 - **交易所**: 动态价格波动系统，支持技术分析指标（RSI, MA）。
 - **银行**: 区分活期与定期存款，利率随资金池规模动态波动。
 
+### 抽卡保底系统 (`GachaService`)
+- **全局硬保底**: 通过 `_conf_schema.json` 的 `gacha.pity_threshold` 配置（默认80抽），0=关闭。
+- **保底机制**: 连续 N 抽未出卡池最稀有物品时，下一抽必出（硬保底，无概率递增）。
+- **保底目标**: 自动适配卡池中最高稀有度物品，不同卡池各自独立计数。
+- **数据存储**: `user_gacha_pity` 表持久化保底计数器。
+- **性能优化**:
+  - 模板查询使用 `(type, id)` 字典缓存，避免重复查库。
+  - 日志批量写入 `add_gacha_records_batch`（`executemany` + 单次清理）。
+  - 金币奖励合并后一次性 `user_repo.update`。
+  - 多次十连（`multi_ten_gacha`）改为单次 `perform_draw(total_draws)` 调用。
+
 ### 道具效果扩展
 若要添加新道具效果，在 `core/services/item_effects/` 目录下创建继承自 `AbstractEffect` 的类即可，系统会自动扫描并注册。
 

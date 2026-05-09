@@ -18,7 +18,7 @@ def _get_field(obj, key, default=None):
         return getattr(obj, key, default)
 
 
-def _format_pool_details(pool, probabilities):
+def _format_pool_details(pool, probabilities, pity_threshold=0):
     message = "【🎰 卡池详情】\n\n"
     message += f"ID: {pool['gacha_pool_id']} - {pool['name']}\n"
     message += f"描述: {pool['description']}\n"
@@ -34,6 +34,8 @@ def _format_pool_details(pool, probabilities):
         message += f"花费: {pool['cost_premium_currency']} 高级货币 / 次\n\n"
     else:
         message += f"花费: {pool['cost_coins']} 金币 / 次\n\n"
+    if pity_threshold > 0:
+        message += f"【🎯 保底规则】连续 {pity_threshold} 抽未出本卡池最稀有物品时，下一抽必出\n\n"
     message += "【📋 物品概率】\n"
     if probabilities:
         for item in probabilities:
@@ -78,12 +80,15 @@ async def gacha(self: "FishingPlugin", event: AstrMessageEvent):
             items = result.get("results", [])
             message = f"🎉 抽卡成功！您抽到了 {len(items)} 件物品：\n"
             for item in items:
-                # 构造输出信息
                 if item.get("type") == "coins":
-                    # 金币类型的物品
                     message += f"⭐ {item['quantity']} 金币！\n"
                 else:
                     message += f"{'⭐' * item.get('rarity', 1)} {item['name']}\n"
+            pity = result.get("pity", 0)
+            pity_threshold = result.get("pity_threshold", 0)
+            if pity_threshold > 0:
+                remaining = max(0, pity_threshold - pity)
+                message += f"\n🎯 距离保底还有 {remaining} 抽"
             yield event.plain_result(message)
         else:
             yield event.plain_result(f"❌ 抽卡失败：{result['message']}")
@@ -132,12 +137,15 @@ async def ten_gacha(self: "FishingPlugin", event: AstrMessageEvent):
             items = result.get("results", [])
             message = f"🎉 十连抽卡成功！您抽到了 {len(items)} 件物品：\n"
             for item in items:
-                # 构造输出信息
                 if item.get("type") == "coins":
-                    # 金币类型的物品
                     message += f"⭐ {item['quantity']} 金币！\n"
                 else:
                     message += f"{'⭐' * item.get('rarity', 1)} {item['name']}\n"
+            pity = result.get("pity", 0)
+            pity_threshold = result.get("pity_threshold", 0)
+            if pity_threshold > 0:
+                remaining = max(0, pity_threshold - pity)
+                message += f"\n🎯 距离保底还有 {remaining} 抽"
             yield event.plain_result(message)
         else:
             yield event.plain_result(f"❌ 抽卡失败：{result['message']}")
@@ -146,18 +154,16 @@ async def ten_gacha(self: "FishingPlugin", event: AstrMessageEvent):
 
 
 async def multi_ten_gacha(self: "FishingPlugin", event: AstrMessageEvent, pool_id: int, times: int):
-    """多次十连抽卡，使用合并统计"""
+    """多次十连抽卡，单次调用并合并统计"""
     user_id = self._get_effective_user_id(event)
-    
-    # 获取卡池信息以计算消耗
+    total_draws = times * 10
+
     pool = self.gacha_service.gacha_repo.get_pool_by_id(pool_id)
     if not pool:
         yield event.plain_result("❌ 卡池不存在")
         return
-    
-    # 计算总消耗
+
     use_premium_currency = (getattr(pool, "cost_premium_currency", 0) or 0) > 0
-    total_draws = times * 10  # 每次十连是10次抽卡
     if use_premium_currency:
         total_cost = (pool.cost_premium_currency or 0) * total_draws
         cost_type = "高级货币"
@@ -166,73 +172,53 @@ async def multi_ten_gacha(self: "FishingPlugin", event: AstrMessageEvent, pool_i
         total_cost = (pool.cost_coins or 0) * total_draws
         cost_type = "金币"
         cost_unit = ""
-    
-    # 统计信息
-    total_items = 0
-    item_counts = {}  # 物品名称 -> 数量
-    rarity_counts = {i: 0 for i in range(1, 11)}  # 稀有度统计，支持1-10星
+
+    result = self.gacha_service.perform_draw(user_id, pool_id, num_draws=total_draws)
+    if not result or not result.get("success"):
+        yield event.plain_result(f"❌ 抽卡失败：{result.get('message', '未知错误')}")
+        return
+
+    items = result.get("results", [])
+    pity = result.get("pity", 0)
+    pity_threshold = result.get("pity_threshold", 0)
+
+    # 合并统计
+    total_items = len(items)
+    item_counts = {}
+    rarity_counts = {i: 0 for i in range(1, 11)}
     coin_total = 0
-    
-    # 执行多次十连抽卡
-    for i in range(times):
-        if result := self.gacha_service.perform_draw(user_id, pool_id, num_draws=10):
-            if result["success"]:
-                items = result.get("results", [])
-                total_items += len(items)
-                
-                for item in items:
-                    if item.get("type") == "coins":
-                        coin_total += item['quantity']
-                    else:
-                        item_name = item['name']
-                        rarity = item.get('rarity', 1)
-                        
-                        # 统计物品数量
-                        if item_name in item_counts:
-                            item_counts[item_name] += 1
-                        else:
-                            item_counts[item_name] = 1
-                        
-                        # 统计稀有度
-                        if rarity in rarity_counts:
-                            rarity_counts[rarity] += 1
-                        elif rarity > 10:
-                            # 超过10星的物品归类到10星
-                            rarity_counts[10] += 1
-            else:
-                yield event.plain_result(f"❌ 第{i+1}次十连抽卡失败：{result['message']}")
-                return
+
+    for item in items:
+        if item.get("type") == "coins":
+            coin_total += item['quantity']
         else:
-            yield event.plain_result(f"❌ 第{i+1}次十连抽卡出错！")
-            return
-    
-    # 生成合并统计报告
+            name = item['name']
+            rarity = item.get('rarity', 1)
+            item_counts[name] = item_counts.get(name, 0) + 1
+            r = rarity if rarity <= 10 else 10
+            rarity_counts[r] = rarity_counts.get(r, 0) + 1
+
     message = f"🎉 {times}次十连抽卡完成！共获得 {total_items} 件物品：\n\n"
-    
-    # 消耗统计
-    message += f"【💰 消耗统计】\n"
-    message += f"消耗{cost_type}：{total_cost:,}{cost_unit}\n\n"
-    
-    # 稀有度统计
+    message += f"【💰 消耗统计】\n消耗{cost_type}：{total_cost:,}{cost_unit}\n\n"
+
     message += "【📊 稀有度统计】\n"
-    for rarity in [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]:  # 从高到低显示
-        count = rarity_counts[rarity]
+    for rarity in [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]:
+        count = rarity_counts.get(rarity, 0)
         if count > 0:
-            stars = "⭐" * rarity
-            message += f"{stars} {count} 件\n"
-    
-    # 金币统计
+            message += f"{'⭐' * rarity} {count} 件\n"
+
     if coin_total > 0:
         message += f"\n💰 金币总计：{coin_total}\n"
-    
-    # 物品统计（按稀有度排序）
+
     if item_counts:
         message += "\n【🎁 物品详情】\n"
-        # 按物品名称排序
-        sorted_items = sorted(item_counts.items())
-        for item_name, count in sorted_items:
-            message += f"{item_name} × {count}\n"
-    
+        for name, count in sorted(item_counts.items()):
+            message += f"{name} × {count}\n"
+
+    if pity_threshold > 0:
+        remaining = max(0, pity_threshold - pity)
+        message += f"\n🎯 距离保底还有 {remaining} 抽"
+
     yield event.plain_result(message)
 
 
@@ -251,7 +237,8 @@ async def view_gacha_pool(self: "FishingPlugin", event: AstrMessageEvent):
         if result["success"]:
             pool = result.get("pool", {})
             probabilities = result.get("probabilities", [])
-            yield event.plain_result(_format_pool_details(pool, probabilities))
+            pity_threshold = getattr(self.gacha_service, "pity_threshold", 0)
+            yield event.plain_result(_format_pool_details(pool, probabilities, pity_threshold))
         else:
             yield event.plain_result(f"❌ 查看卡池失败：{result['message']}")
     else:

@@ -271,8 +271,10 @@ class FishingPlugin(Star):
                                                           self.item_template_repo, self.buff_repo, self.game_config)
 
         # 3.3 实例化其他核心服务
+        gacha_config = config.get("gacha", {})
         self.gacha_service = GachaService(self.gacha_repo, self.user_repo, self.inventory_repo, self.item_template_repo,
-                                         self.log_repo, self.achievement_repo)
+                                         self.log_repo, self.achievement_repo,
+                                         pity_threshold=gacha_config.get("pity_threshold", 80))
         # UserService 依赖 GachaService，因此在 GachaService 之后实例化
         self.user_service = UserService(self.user_repo, self.log_repo, self.inventory_repo, self.item_template_repo, self.gacha_service, self.game_config, self.achievement_repo)
         self.inventory_service = InventoryService(

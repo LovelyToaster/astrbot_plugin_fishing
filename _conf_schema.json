@@ -672,5 +672,17 @@
         "hint": "image(图片)或text(文本)"
       }
     }
+  },
+  "gacha": {
+    "description": "抽卡系统配置",
+    "type": "object",
+    "items": {
+      "pity_threshold": {
+        "description": "保底抽数",
+        "type": "int",
+        "hint": "连续抽卡未出最稀有物品达到此抽数时触发保底（0=关闭保底）",
+        "default": 80
+      }
+    }
   }
 }

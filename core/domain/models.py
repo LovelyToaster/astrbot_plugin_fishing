@@ -136,6 +136,13 @@ class GachaPool:
         return getattr(self, item)
 
 @dataclass
+class UserGachaPity:
+    """代表用户在某卡池的保底计数"""
+    user_id: str
+    gacha_pool_id: int
+    current_pity: int = 0
+
+@dataclass
 class Commodity:
     """代表一种大宗商品的模板信息"""
     commodity_id: str  # e.g., 'dried_fish', 'fish_roe', 'fish_oil'

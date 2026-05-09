@@ -4,7 +4,7 @@ from typing import Optional, List, Dict, Any
 
 # 导入抽象基类和领域模型
 from .abstract_repository import AbstractGachaRepository
-from ..domain.models import GachaPool, GachaPoolItem
+from ..domain.models import GachaPool, GachaPoolItem, UserGachaPity
 
 class SqliteGachaRepository(AbstractGachaRepository):
     """抽卡仓储的SQLite实现"""
@@ -274,4 +274,26 @@ class SqliteGachaRepository(AbstractGachaRepository):
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM gacha_pool_items WHERE gacha_pool_item_id = ?", (item_pool_id,))
+            conn.commit()
+
+    # --- Pity System Methods ---
+    def get_user_pity(self, user_id: str, pool_id: int) -> Optional[UserGachaPity]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM user_gacha_pity WHERE user_id = ? AND gacha_pool_id = ?",
+                (user_id, pool_id)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return UserGachaPity(user_id=row["user_id"], gacha_pool_id=row["gacha_pool_id"], current_pity=row["current_pity"])
+
+    def set_user_pity(self, user_id: str, pool_id: int, current_pity: int) -> None:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO user_gacha_pity (user_id, gacha_pool_id, current_pity) VALUES (?, ?, ?)",
+                (user_id, pool_id, current_pity)
+            )
             conn.commit()
