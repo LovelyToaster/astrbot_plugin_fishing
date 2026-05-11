@@ -223,6 +223,9 @@ class User:
     fishing_zone_id: int = 1  # 默认钓鱼区域ID
     exchange_account_status: bool = False # 交易所账户状态
 
+    makeup_count_month: Optional[int] = None  # 补签计数月份（YYYYMM格式）
+    makeup_count: int = 0  # 当月已补签次数
+
     max_wipe_bomb_multiplier: float = 0.0
     min_wipe_bomb_multiplier: Optional[float] = None
 

@@ -222,6 +222,30 @@
         "type": "string",
         "hint": "JSON字典，key为天数，value为奖励数量，如 {\"7\": 10, \"14\": 15, \"21\": 20, \"28\": 25}",
         "default": "{\"7\": 10, \"14\": 15, \"21\": 20, \"28\": 25}"
+      },
+      "makeup_cost_base": {
+        "description": "补签消耗基数",
+        "type": "int",
+        "hint": "当月第1次补签消耗的高级货币数量",
+        "default": 1
+      },
+      "makeup_cost_increment": {
+        "description": "补签消耗递增数",
+        "type": "int",
+        "hint": "每多补签一次增加消耗的高级货币数量",
+        "default": 1
+      },
+      "makeup_max_per_month": {
+        "description": "每月最多补签次数",
+        "type": "int",
+        "hint": "每个用户每月可补签的最大次数",
+        "default": 3
+      },
+      "makeup_max_days_ago": {
+        "description": "可补签的最大天数",
+        "type": "int",
+        "hint": "只能补签过去N天内的签到（不含今天）",
+        "default": 7
       }
     }
   },

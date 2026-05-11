@@ -2,7 +2,7 @@ import random
 import json
 import calendar
 from typing import Dict, Any, Optional
-from datetime import timedelta, datetime, timezone
+from datetime import timedelta, datetime, timezone, date
 
 # 导入仓储接口和领域模型
 from ..repositories.abstract_repository import (
@@ -170,16 +170,8 @@ class UserService:
         if self.log_repo.has_checked_in(user_id, today):
             return {"success": False, "message": "你今天已经签到过了，明天再来吧！"}
 
-        # 月度重置判断
-        if user.last_login_time:
-            if user.last_login_time.year != today.year or user.last_login_time.month != today.month:
-                user.consecutive_login_days = 0
-            else:
-                yesterday = today - timedelta(days=1)
-                if not self.log_repo.has_checked_in(user_id, yesterday):
-                    user.consecutive_login_days = 0
-        else:
-            user.consecutive_login_days = 0
+        # 以数据库签到记录为准重算连续天数（不受 last_login_time 跨月影响）
+        user.consecutive_login_days = self._recalculate_consecutive_days(user_id)
 
         consecutive_before = user.consecutive_login_days
         user.consecutive_login_days += 1
@@ -244,6 +236,82 @@ class UserService:
             "total_premium": total_premium,
             "consecutive_days": consecutive_before + 1,
             "consecutive_before": consecutive_before
+        }
+
+    def _recalculate_consecutive_days(self, user_id: str) -> int:
+        """从今天往前遍历签到记录，计算当月连续签到天数（跨月重置）"""
+        days = 0
+        today = get_today()
+        current = today if self.log_repo.has_checked_in(user_id, today) else today - timedelta(days=1)
+        while (self.log_repo.has_checked_in(user_id, current)
+               and current.year == today.year
+               and current.month == today.month):
+            days += 1
+            current -= timedelta(days=1)
+        return days
+
+    def makeup_sign_in(self, user_id: str) -> Dict[str, Any]:
+        """补签：自动找到最近未签到的一天进行补签"""
+        user = self.user_repo.get_by_id(user_id)
+        if not user:
+            return {"success": False, "message": "请先注册才能补签"}
+
+        today = get_today()
+        signin_config = self.config.get("signin", {})
+        max_days_ago = signin_config.get("makeup_max_days_ago", 7)
+        max_per_month = signin_config.get("makeup_max_per_month", 3)
+        cost_base = signin_config.get("makeup_cost_base", 1)
+        cost_increment = signin_config.get("makeup_cost_increment", 1)
+
+        # 从昨天往前找最近未签到的一天
+        target_date = None
+        for i in range(1, max_days_ago + 1):
+            d = today - timedelta(days=i)
+            if not self.log_repo.has_checked_in(user_id, d):
+                target_date = d
+                break
+
+        if target_date is None:
+            return {"success": False, "message": f"最近{max_days_ago}天已全部签到，无需补签"}
+
+        # 检查当月补签次数
+        current_month = today.year * 100 + today.month
+        if user.makeup_count_month != current_month:
+            user.makeup_count_month = current_month
+            user.makeup_count = 0
+
+        if user.makeup_count >= max_per_month:
+            return {"success": False, "message": f"本月补签次数已达上限（{max_per_month}次）"}
+
+        # 计算消耗
+        cost = cost_base + user.makeup_count * cost_increment
+
+        # 检查高级货币
+        if user.premium_currency < cost:
+            return {"success": False, "message": f"高级货币不足，补签需要 {cost} 高级货币（当前：{user.premium_currency}）"}
+
+        # 执行补签
+        user.premium_currency -= cost
+        user.makeup_count += 1
+
+        # 先写入签到记录，再重算连续天数
+        self.log_repo.add_check_in(user_id, target_date)
+        new_consecutive = self._recalculate_consecutive_days(user_id)
+        user.consecutive_login_days = new_consecutive
+
+        self.user_repo.update(user)
+
+        remaining = max_per_month - user.makeup_count
+
+        return {
+            "success": True,
+            "message": f"补签{target_date.month}月{target_date.day}日成功，消耗{cost}高级货币\n"
+                       f"当前连续签到：{new_consecutive}天\n"
+                       f"本月剩余补签次数：{remaining}次",
+            "target_date": str(target_date),
+            "cost": cost,
+            "consecutive_days": new_consecutive,
+            "remaining": remaining
         }
 
     def get_monthly_checkin_dates(self, user_id: str, year: int, month: int):

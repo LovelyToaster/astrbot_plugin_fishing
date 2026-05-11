@@ -759,6 +759,12 @@ class FishingPlugin(Star):
         async for r in common_handlers.sign_in(self, event):
             yield r
 
+    @filter.command("补签")
+    async def makeup_sign_in(self, event: AstrMessageEvent):
+        """补签最近漏签的一天，消耗高级货币"""
+        async for r in common_handlers.makeup_sign_in(self, event):
+            yield r
+
     @filter.command("自动钓鱼")
     async def auto_fish(self, event: AstrMessageEvent):
         """开启或关闭自动钓鱼功能，自动钓鱼会定期帮你钓鱼"""

@@ -90,6 +90,9 @@ class SqliteUserRepository(AbstractUserRepository):
             # --- 每日深海探险追踪 ---
             deep_sea_attempts_today=row["deep_sea_attempts_today"] if "deep_sea_attempts_today" in row_keys else 0,
             last_deep_sea_date=row["last_deep_sea_date"] if "last_deep_sea_date" in row_keys else None,
+            # --- 补签计数 ---
+            makeup_count_month=row["makeup_count_month"] if "makeup_count_month" in row_keys else None,
+            makeup_count=row["makeup_count"] if "makeup_count" in row_keys else 0,
             # =========================================================
 
             # --- [关键修复] 添加所有命运之轮字段的读取 ---

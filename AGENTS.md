@@ -18,9 +18,32 @@
 - **目标根路径**: `/vol2/1000/Docker/astrbot/data/plugins/astrbot_plugin_fishing`
 - **身份验证**: 使用本地私钥 `astrbot_fishing` (当前目录)。
 - **操作规范**: 
-  - 根据更新范围手动构建 `scp` 或 `rsync` 指令。
+  - 使用 `scp` 传输文件。
   - 同步后务必执行 `md5sum` 校验以确保文件完整性。
   - 若涉及敏感操作，优先同步单个受影响的文件。
+
+### scp 上传命令模板
+
+```bash
+# 上传单个文件
+scp -i ./astrbot_fishing <本地路径> VerdantGem@192.168.0.9:<远程目标路径>
+
+# 上传多个文件
+scp -i ./astrbot_fishing \
+  _conf_schema.json \
+  core/domain/models.py \
+  core/services/user_service.py \
+  VerdantGem@192.168.0.9:/vol2/1000/Docker/astrbot/data/plugins/astrbot_plugin_fishing/
+
+# md5sum 校验
+ssh -i ./astrbot_fishing VerdantGem@192.168.0.9 "md5sum <远程目标路径>/<文件名>" && md5sum <文件名>
+```
+
+### 多文件上传（使用 tar + ssh）
+
+```bash
+tar czf - <文件1> <文件2> ... | ssh -i ./astrbot_fishing VerdantGem@192.168.0.9 "tar xzf - -C /vol2/1000/Docker/astrbot/data/plugins/astrbot_plugin_fishing/"
+```
 
 ## 关键目录说明
 - `core/database/migrations`: 包含所有数据库版本迁移脚本，系统启动时会自动执行。
@@ -56,6 +79,20 @@
 - **税收**: 包含起征点、阶梯税率以及每日自动清算。
 - **交易所**: 动态价格波动系统，支持技术分析指标（RSI, MA）。
 - **银行**: 区分活期与定期存款，利率随资金池规模动态波动。
+
+### 签到与补签系统 (`UserService`)
+
+#### 签到 (`daily_sign_in`)
+- **奖励结构**: 基础保底 + 连续天数线性加成 + 里程碑奖励（金币/高级货币各独立计算）。
+- **连续天数**: 依赖数据库签到记录，通过 `_recalculate_consecutive_days()` 从今天往前遍历 `check_ins` 表计算，不依赖 `last_login_time`。
+- **每日免费抽卡**: 签到成功后可触发每日免费补给抽卡。
+
+#### 补签 (`makeup_sign_in`)
+- **指令**: `/补签` — 自动从昨天往前找最近未签到的一天（可配置范围内，默认7天）。
+- **消耗**: 高级货币，递增消耗。第1次=base，第2次=base+increment，依次类推。
+- **限制**: 每月可配置上限（默认3次）；仅能补签过去N天内（默认7天）。
+- **连续天数恢复**: 补签后自动重算连续天数，`daily_sign_in` 的跨月检查也改为查库重算，确保补签恢复的连续天数持久有效。
+- **计数字段**: 存储在 `User.makeup_count_month`（YYYYMM格式）和 `User.makeup_count` 中，跨月自动重置。
 
 ### 抽卡保底系统 (`GachaService`)
 - **全局硬保底**: 通过 `_conf_schema.json` 的 `gacha.pity_threshold` 配置（默认80抽），0=关闭。

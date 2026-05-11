@@ -35,6 +35,12 @@ async def sign_in(self: "FishingPlugin", event: AstrMessageEvent):
     except Exception:
         yield event.plain_result(result.get("message", "出错了"))
 
+async def makeup_sign_in(self: "FishingPlugin", event: AstrMessageEvent):
+    """补签"""
+    user_id = self._get_effective_user_id(event)
+    result = self.user_service.makeup_sign_in(user_id)
+    yield event.plain_result(result["message"])
+
 async def state(self: "FishingPlugin", event: AstrMessageEvent):
     """查看用户状态"""
     user_id = self._get_effective_user_id(event)
