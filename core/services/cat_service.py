@@ -203,6 +203,12 @@ class CatService:
         if disease_result:
             result["disease"] = disease_result
 
+        fresh = self.cat_repo.get_cat_instance(cat_instance_id)
+        if fresh:
+            result["new_hunger"] = fresh.hunger
+            result["new_mood"] = fresh.mood
+            result["star"] = fresh.star
+
         return result
 
     def play_with_cat(self, user_id: str, cat_instance_id: int) -> Dict[str, Any]:
@@ -241,6 +247,10 @@ class CatService:
         event_result = self.trigger_random_event(user_id, cat_instance_id, "play")
         if event_result:
             result["event"] = event_result
+
+        fresh = self.cat_repo.get_cat_instance(cat_instance_id)
+        if fresh:
+            result["new_mood"] = fresh.mood
 
         return result
 
@@ -515,6 +525,10 @@ class CatService:
 
                 event_result = self.trigger_random_event(user_id, cat.cat_instance_id, "play")
 
+                fresh = self.cat_repo.get_cat_instance(cat.cat_instance_id)
+                if fresh:
+                    cat = fresh
+
                 result_entry = {
                     "cat_name": cat.nickname,
                     "status": "success",
@@ -659,6 +673,10 @@ class CatService:
 
                 event_result = self.trigger_random_event(user_id, cat.cat_instance_id, "feed")
                 disease_result = self.check_disease_onset(user_id, cat.cat_instance_id)
+
+                fresh = self.cat_repo.get_cat_instance(cat.cat_instance_id)
+                if fresh:
+                    cat = fresh
 
                 result_entry = {
                     "cat_name": cat.nickname,
