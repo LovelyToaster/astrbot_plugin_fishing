@@ -454,6 +454,13 @@ class GameMechanicsService:
         if user.user_id in self._wof_pending_protection:
             del self._wof_pending_protection[user.user_id]
             
+        # 清除"操纵现实"buff
+        active_boost = self.buff_repo.get_active_by_user_and_type(
+            user.user_id, "WOF_PROBABILITY_BOOST"
+        )
+        if active_boost:
+            self.buff_repo.delete(active_boost.id)
+
         self.user_repo.update(user)
 
     def handle_wof_timeout(self, user_id: str) -> Dict[str, Any] | None:
@@ -581,7 +588,18 @@ class GameMechanicsService:
         levels = config.get("levels", [])
         next_level_index = user.wof_current_level
 
-        # --- 1. 处理“补救”逻辑：如果当前正处于等待保护确认状态 ---
+        # 检测"操纵现实"buff
+        boost_multiplier = None
+        boost_max_prob = None
+        active_boost_buff = self.buff_repo.get_active_by_user_and_type(
+            user_id, "WOF_PROBABILITY_BOOST"
+        )
+        if active_boost_buff:
+            boost_payload = json.loads(active_boost_buff.payload or "{}")
+            boost_multiplier = boost_payload.get("probability_multiplier", 1.2)
+            boost_max_prob = boost_payload.get("max_probability", 0.95)
+
+        # --- 1. 处理"补救"逻辑：如果当前正处于等待保护确认状态 ---
         used_protection = False
         if self._wof_pending_protection.get(user_id, False):
             # 尝试正式消耗道具
@@ -604,7 +622,11 @@ class GameMechanicsService:
 
             level_data = levels[next_level_index]
             success_rate = level_data.get("success_rate", 0.5)
-            is_success = random.random() < success_rate
+            if boost_multiplier is not None:
+                adjusted_rate = min(success_rate * boost_multiplier, boost_max_prob)
+            else:
+                adjusted_rate = success_rate
+            is_success = random.random() < adjusted_rate
 
             if not is_success:
                 # --- 3. 失败拦截：如果持有保护道具，不直接结算而是询问 ---
@@ -644,13 +666,18 @@ class GameMechanicsService:
             self.user_repo.update(user)
             
             next_level_data = levels[user.wof_current_level]
-            next_success_rate = int(next_level_data.get("success_rate", 0.5) * 100)
+            raw_next_rate = next_level_data.get("success_rate", 0.5)
+            if boost_multiplier is not None:
+                adjusted_next = min(raw_next_rate * boost_multiplier, boost_max_prob)
+                rate_display = f"{int(adjusted_next * 100)}%（🔮原始{int(raw_next_rate * 100)}%）"
+            else:
+                rate_display = f"{int(raw_next_rate * 100)}%"
             
             protection_msg = "（✨ 触发了【逆转天平】，抵消了一次失败！）" if used_protection else ""
             
             return {
                 "success": True, "status": "ongoing",
-                "message": (f"[CQ:at,qq={user_id}] 🎯 第 {user.wof_current_level} 层幸存！{protection_msg} (下一层成功率: {next_success_rate}%)\n"
+                "message": (f"[CQ:at,qq={user_id}] 🎯 第 {user.wof_current_level} 层幸存！{protection_msg} (下一层成功率: {rate_display})\n"
                             f"💰 当前累积奖金 {user.wof_current_prize} 金币。\n"
                             f"⏱️ 请在{config.get('timeout_seconds', 60)}秒内回复【继续】或【放弃】！")
             }

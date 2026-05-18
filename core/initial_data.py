@@ -463,6 +463,18 @@ ITEM_DATA = [
         "WOF_PROTECTION",
         '{}',
     ),
+    (
+        0,
+        "操纵现实",
+        "蕴含改写因果律力量的禁忌卷轴，据说使用者能在命运之轮中窥见更高的胜算。",
+        5,
+        "在下一次命运之轮游戏中，每一层的成功率获得乘法系数提升。（效果持续至游戏结束或7天未使用）",
+        0,
+        True,
+        None,
+        "WOF_PROBABILITY_BOOST",
+        '{"probability_multiplier": 1.2, "max_probability": 0.95, "duration_days": 7}',
+    ),
 ]
 
 SHOP_DATA = [
