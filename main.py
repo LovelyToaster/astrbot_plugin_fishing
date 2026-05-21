@@ -24,6 +24,7 @@ from .core.repositories.sqlite_red_packet_repo import SqliteRedPacketRepository
 from .core.repositories.sqlite_loan_repo import SqliteLoanRepository
 from .core.repositories.sqlite_bank_repo import SqliteBankRepository
 from .core.repositories.sqlite_cat_repo import SQLiteCatRepository
+from .core.repositories.sqlite_notification_repo import SqliteNotificationRepository
 
 from .core.services.data_setup_service import DataSetupService
 from .core.services.item_template_service import ItemTemplateService
@@ -345,6 +346,9 @@ class FishingPlugin(Star):
             system_loan_ratio=loan_config.get("system_loan_ratio", 0.10),
             system_loan_days=loan_config.get("system_loan_days", 7)
         )
+
+        # 初始化通知仓储
+        self.notification_repo = SqliteNotificationRepository(db_path)
 
         # 初始化银行服务
         self.bank_service = BankService(
@@ -1584,7 +1588,13 @@ class FishingPlugin(Star):
         """查看你的税收缴纳记录"""
         async for r in social_handlers.tax_record(self, event):
             yield r
-            
+
+    @filter.command("消息", alias={"通知"})
+    async def view_notifications(self, event: AstrMessageEvent):
+        """查看你的通知消息，包括被偷鱼和被电鱼的记录"""
+        async for r in social_handlers.view_notifications(self, event):
+            yield r
+
     # =========== 银行系统 ==========
 
     @filter.command("银行", alias={"银行帮助"})

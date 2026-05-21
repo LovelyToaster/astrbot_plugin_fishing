@@ -108,6 +108,13 @@ tar czf - <文件1> <文件2> ... | ssh -i ./astrbot_fishing VerdantGem@192.168.
 ### 道具效果扩展
 若要添加新道具效果，在 `core/services/item_effects/` 目录下创建继承自 `AbstractEffect` 的类即可，系统会自动扫描并注册。
 
+### 消息通知系统 (`NotificationService`)
+- **被动通知收件箱**: 偷鱼/电鱼成功后，系统自动为被操作方写入通知记录，存储在 `notifications` 表中。
+- **命令**: `/消息` 查看未读通知，`/消息 全部` 查看全部，`/消息 已读` 全部标记已读。
+- **状态提示**: `/状态` 图片中新增"未读通知"行，有未读时高亮显示。
+- **数据存储**: `core/repositories/sqlite_notification_repo.py`，迁移脚本 `047_add_notification_system.py`。
+- **通知类型**: `steal`（偷鱼）、`electric_fish`（电鱼），详情以 JSON 存储在 `details` 字段。
+
 ## 贡献规范
 - **代码风格**: 遵循 PEP 8。
 - **提交信息**: 必须包含规范的前缀（如 `feat:`, `fix:`, `docs:`）。

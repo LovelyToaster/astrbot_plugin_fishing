@@ -1,5 +1,6 @@
 import os
 import time
+import json
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.core.message.components import At
 from astrbot.api import logger
@@ -124,6 +125,16 @@ async def steal_fish(plugin: "FishingPlugin", event: AstrMessageEvent):
 
     result = plugin.game_mechanics_service.steal_fish(user_id, target_id)
     if result:
+        if result.get("success") and result.get("victim_notification"):
+            try:
+                plugin.notification_repo.add_notification(
+                    recipient_id=target_id,
+                    sender_nickname=result["thief_nickname"],
+                    noti_type="steal",
+                    details=result["victim_notification"]
+                )
+            except Exception as e:
+                logger.error(f"写入偷鱼通知失败: {e}")
         yield event.plain_result(result["message"])
     else:
         yield event.plain_result("❌ 出错啦！请稍后再试。")
@@ -162,6 +173,16 @@ async def electric_fish(plugin: "FishingPlugin", event: AstrMessageEvent):
 
     result = plugin.game_mechanics_service.electric_fish(user_id, target_id)
     if result:
+        if result.get("success") and result.get("victim_notification"):
+            try:
+                plugin.notification_repo.add_notification(
+                    recipient_id=target_id,
+                    sender_nickname=result["thief_nickname"],
+                    noti_type="electric_fish",
+                    details=result["victim_notification"]
+                )
+            except Exception as e:
+                logger.error(f"写入电鱼通知失败: {e}")
         yield event.plain_result(result["message"])
     else:
         yield event.plain_result("❌ 出错啦！请稍后再试。")
@@ -285,3 +306,57 @@ async def tax_record(plugin: "FishingPlugin", event: AstrMessageEvent):
         yield event.plain_result(message)
     else:
         yield event.plain_result(f"❌ 查看税收记录失败：{result.get('message', '未知错误')}")
+
+
+async def view_notifications(plugin: "FishingPlugin", event: AstrMessageEvent):
+    """查看通知消息"""
+    user_id = plugin._get_effective_user_id(event)
+    args = event.message_str.strip().split()
+    subcmd = args[1] if len(args) > 1 else None
+
+    include_read = subcmd == "全部"
+    if include_read:
+        notifications = plugin.notification_repo.get_all_notifications(user_id, limit=20)
+    else:
+        notifications = plugin.notification_repo.get_unread_notifications(user_id, limit=10)
+
+    if not notifications:
+        yield event.plain_result("📩 暂无通知消息。")
+        return
+
+    unread_count = plugin.notification_repo.get_unread_count(user_id)
+    header = f"📩 通知 ({unread_count}条未读)" if unread_count > 0 else "📩 通知"
+    lines = [header]
+
+    type_labels = {"steal": "🕵️", "electric_fish": "⚡"}
+
+    for i, noti in enumerate(notifications, 1):
+        prefix = type_labels.get(noti["type"], "📨")
+        sender = noti["sender_nickname"] or "未知用户"
+        details = noti["details"]
+        created = noti["created_at"]
+
+        if noti["type"] == "steal":
+            quality = "✨高品质" if details.get("quality_level") == 1 else "常规品质"
+            rarity_stars = "★" * details.get("rarity", 0)
+            desc = f"从你的鱼塘偷走了一条{rarity_stars}【{details.get('stolen_fish_name', '未知')}】（{quality}），价值 {details.get('value', 0)} 金币"
+        elif noti["type"] == "electric_fish":
+            summary = "、".join(details.get("stolen_summary", []))
+            desc = (
+                f"对你的鱼塘使用了电鱼：捕获 {details.get('stolen_count', 0)} 条鱼"
+                f"（占 {details.get('steal_percentage', 0):.1f}%），总价值 {details.get('total_value', 0)} 金币\n"
+                f"   捕获：{summary}"
+            )
+        else:
+            desc = str(details)
+
+        lines.append(f"#{i} {prefix}【{sender}】{desc}")
+        lines.append(f"   时间: {created}")
+
+    if unread_count > 0:
+        plugin.notification_repo.mark_all_as_read(user_id)
+
+    if not include_read:
+        lines.append("💡 使用「/消息 全部」获取全部消息")
+
+    yield event.plain_result("\n".join(lines))

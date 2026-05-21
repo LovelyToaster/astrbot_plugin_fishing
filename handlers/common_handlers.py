@@ -54,7 +54,8 @@ async def state(self: "FishingPlugin", event: AstrMessageEvent):
         self.buff_repo,
         self.game_config,
         user_id,
-        self.bank_service,  # 添加银行服务
+        self.bank_service,
+        notification_repo=self.notification_repo,
     )
 
     if not user_data:

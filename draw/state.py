@@ -137,7 +137,7 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, avatar_conf
 
     # 用户基本信息卡片
     current_y = title_y + title_h + 15
-    card_height = 85
+    card_height = 95
     card_margin = 15
     
     # 用户信息卡片
@@ -155,6 +155,7 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, avatar_conf
     # 行位置
     row1_y = current_y + 12
     row2_y = current_y + 52
+    row3_y = current_y + 72
 
     # 绘制用户头像 - 如有
     if user_id := user_data.get('user_id'):
@@ -195,19 +196,28 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, avatar_conf
     # 金币
     coins = user_data.get('coins', 0)
     coins_text = f"金币: {coins:,}"
-    draw.text((col1_x, row2_y - 12), coins_text, font=small_font, fill=gold_color)
+    draw.text((col1_x, row2_y), coins_text, font=small_font, fill=gold_color)
     
-    # 高级货币（另起一行，避免与右侧“钓鱼次数”重叠）
+    # 高级货币
     if 'premium_currency' in user_data:
         premium = user_data.get('premium_currency', 0)
         premium_text = f"高级货币: {premium:,}"
-        # 另起新行显示并整体上移，避免超出白色卡片底部
-        draw.text((col1_x, row2_y + 8), premium_text, font=small_font, fill=primary_light)
+        draw.text((col1_x, row3_y), premium_text, font=small_font, fill=primary_light)
     
     # 钓鱼次数 - 调整列位置以均分
     total_fishing = user_data.get('total_fishing_count', 0)
     fishing_text = f"钓鱼次数: {total_fishing:,}"
     draw.text((col2_x, row2_y), fishing_text, font=small_font, fill=text_primary)
+
+    # 未读通知
+    unread_count = user_data.get('unread_notification_count', 0)
+    if unread_count > 0:
+        noti_text = f"未读通知: {unread_count} 条"
+        noti_color = warning_color
+    else:
+        noti_text = "无未读通知"
+        noti_color = text_muted
+    draw.text((col2_x, row3_y), noti_text, font=small_font, fill=noti_color)
 
     # 偷鱼总价值 - 调整列位置以均分 TODO
     # steal_total = user_data.get('steal_total_value', 0)
@@ -374,7 +384,7 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, avatar_conf
     draw.text((card_margin, current_y), status_title, font=subtitle_font, fill=primary_medium)
     current_y += 30
 
-    # 状态卡片 - 扩展高度容纳第八行信息
+    # 状态卡片
     status_card_height = 210
     draw_rounded_rectangle(draw,
                          (card_margin, current_y, width - card_margin, current_y + status_card_height),
@@ -529,7 +539,7 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, avatar_conf
     return image
 
 
-def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo, buff_repo, game_config, user_id: str, bank_service=None) -> Optional[Dict[str, Any]]:
+def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo, buff_repo, game_config, user_id: str, bank_service=None, notification_repo=None) -> Optional[Dict[str, Any]]:
     """
     获取用户状态数据
     
@@ -775,6 +785,14 @@ def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo,
             # 获取银行信息失败，使用默认值
             pass
 
+    # 查询未读通知数量
+    unread_notification_count = 0
+    if notification_repo:
+        try:
+            unread_notification_count = notification_repo.get_unread_count(user_id)
+        except Exception:
+            pass
+
     return {
         'user_id': user.user_id,
         'nickname': user.nickname or user.user_id,
@@ -800,4 +818,5 @@ def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo,
         'settlement_countdown': settlement_countdown,  # 下次结算倒计时
         'matured_fixed_count': matured_fixed_count,  # 到期定期存款笔数
         'has_bank_account': has_bank_account,  # 是否有银行账户
+        'unread_notification_count': unread_notification_count,  # 未读通知数
     }

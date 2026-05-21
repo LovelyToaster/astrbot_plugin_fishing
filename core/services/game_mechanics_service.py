@@ -827,6 +827,13 @@ class GameMechanicsService:
         return {
             "success": True,
             "message": f"{counter_message}✅ 成功从【{victim.nickname}】的鱼塘里偷到了一条{stolen_fish_template.rarity}★【{stolen_fish_template.name}】{quality_info}！价值 {actual_value} 金币",
+            "thief_nickname": thief.nickname or thief.user_id,
+            "victim_notification": {
+                "stolen_fish_name": stolen_fish_template.name,
+                "rarity": stolen_fish_template.rarity,
+                "quality_level": stolen_fish_item.quality_level,
+                "value": actual_value,
+            },
         }
 
     # ============================================================
@@ -1063,6 +1070,13 @@ class GameMechanicsService:
         return {
             "success": True,
             "message": f"{counter_message}{success_type}！成功对【{victim.nickname}】的鱼塘进行了电击，捕获了{actual_stolen_count}条鱼（占其总数的{steal_percentage:.1f}%），总价值 {total_value_stolen} 金币！\n分别是：{stolen_details}。\n💡 本次成功率为 {final_success_rate*100:.1f}%",
+            "thief_nickname": thief.nickname or thief.user_id,
+            "victim_notification": {
+                "stolen_count": actual_stolen_count,
+                "stolen_summary": stolen_summary,
+                "total_value": total_value_stolen,
+                "steal_percentage": steal_percentage,
+            },
         }
     # ============================================================
     # ===================== 新增功能：电鱼 结束 =====================
