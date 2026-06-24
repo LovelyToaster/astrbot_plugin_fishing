@@ -123,6 +123,28 @@ class SqliteUserBuffRepository(AbstractUserBuffRepository):
             )
             conn.commit()
 
+    def update_payload_if_match(self, buff_id: int, old_payload: Optional[str], new_payload: str, new_expires_at: Optional[datetime] = None) -> bool:
+        """
+        乐观锁更新：仅当当前 payload 与 old_payload 匹配时才更新。
+        返回 True 表示更新成功，False 表示并发冲突。
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            expires_str = new_expires_at.strftime(DATETIME_FORMAT) if new_expires_at else None
+            
+            if old_payload is None:
+                cursor.execute(
+                    "UPDATE user_buffs SET payload = ?, expires_at = ? WHERE id = ? AND payload IS NULL",
+                    (new_payload, expires_str, buff_id),
+                )
+            else:
+                cursor.execute(
+                    "UPDATE user_buffs SET payload = ?, expires_at = ? WHERE id = ? AND payload = ?",
+                    (new_payload, expires_str, buff_id, old_payload),
+                )
+            conn.commit()
+            return cursor.rowcount > 0
+
     def delete(self, buff_id: int):
         with self._get_connection() as conn:
             cursor = conn.cursor()

@@ -400,7 +400,7 @@ ITEM_DATA = [
         True,
         None,
         "STEAL_PROTECTION_BUFF",
-        '{"duration_hours": 4}',
+        '{"layers_per_use": 1, "max_layers": 2, "duration_hours": 4, "resist_chance": 0.05, "break_threshold": 3}',
     ),
     (
         0,
@@ -449,7 +449,7 @@ ITEM_DATA = [
         True,
         None,
         "SHADOW_CLOAK_BUFF",
-        '{}',
+        '{"charges": 1}',
     ),
     (
         0,

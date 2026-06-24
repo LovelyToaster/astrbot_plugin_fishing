@@ -770,7 +770,7 @@ class GameMechanicsService:
             remaining = int(cooldown_seconds - (now - last_steal_time).total_seconds())
             return {"success": False, "message": f"偷鱼冷却中，请等待 {remaining // 60} 分钟后再试"}
 
-        # 1. 检查受害者是否受保护，以及偷窃者是否有反制能力
+        # ========== 守护海灵破盾机制（三段式）==========
         protection_buff = self.buff_repo.get_active_by_user_and_type(
             victim_id, "STEAL_PROTECTION_BUFF"
         )
@@ -782,12 +782,102 @@ class GameMechanicsService:
             thief_id, "SHADOW_CLOAK_BUFF"
         )
         
+        shield_broken = False  # 标志：本次攻击是否打破了盾
+        
         if protection_buff:
-            if not penetration_buff and not shadow_cloak_buff:
-                return {"success": False, "message": f"❌ 无法偷窃，【{victim.nickname}】的鱼塘似乎被神秘力量守护着！"}
+            prot_payload = json.loads(protection_buff.payload or "{}")
+            current_layers = prot_payload.get("layers", 1)
+            max_layers = prot_payload.get("max_layers", 2)
+            resist_chance = prot_payload.get("resist_chance", 0.05)
+            break_threshold = prot_payload.get("break_threshold", 3)
+            broken_steals = prot_payload.get("broken_steals", 0)
+            old_payload_str = protection_buff.payload  # 乐观锁用
+            
+            if current_layers > 0:
+                # Phase 1: 盾还在，需要穿透才能减层（但偷不到鱼）
+                if not penetration_buff and not shadow_cloak_buff:
+                    return {"success": False, "message": f"❌ 无法偷窃，【{victim.nickname}】的鱼塘被守护海灵保护着！"}
+                
+                # 抵抗判定
+                if random.random() < resist_chance:
+                    # 抵抗成功，暗影斗篷消耗1次
+                    msg = f"🛡️ 守护海灵抵抗了你的穿透！（目标还剩 {current_layers} 层守护）"
+                    if shadow_cloak_buff:
+                        sc_payload = json.loads(shadow_cloak_buff.payload or "{}")
+                        sc_charges = sc_payload.get("charges", 1) - 1
+                        if sc_charges <= 0:
+                            self.buff_repo.delete(shadow_cloak_buff.id)
+                            msg += "\n🌑 暗影斗篷消耗了最后 1 次反制机会，已消失。"
+                        else:
+                            shadow_cloak_buff.payload = json.dumps({"charges": sc_charges})
+                            self.buff_repo.update(shadow_cloak_buff)
+                            msg += f"\n🌑 暗影斗篷消耗了 1 次反制机会（剩余 {sc_charges} 次）。"
+                    return {"success": False, "message": msg}
+                
+                # 穿透成功：减层但仍挡偷
+                current_layers -= 1
+                
+                if current_layers > 0:
+                    # 盾还在
+                    new_payload = json.dumps({
+                        "layers": current_layers,
+                        "max_layers": max_layers,
+                        "resist_chance": resist_chance,
+                        "break_threshold": break_threshold,
+                        "broken_steals": broken_steals,
+                    })
+                    updated = self.buff_repo.update_payload_if_match(
+                        protection_buff.id, old_payload_str, new_payload, protection_buff.expires_at
+                    )
+                    if not updated:
+                        return {"success": False, "message": "⚠️ 操作冲突，请重试。"}
+                    
+                    # 消耗暗影斗篷
+                    if shadow_cloak_buff:
+                        sc_payload = json.loads(shadow_cloak_buff.payload or "{}")
+                        sc_charges = sc_payload.get("charges", 1) - 1
+                        if sc_charges <= 0:
+                            self.buff_repo.delete(shadow_cloak_buff.id)
+                        else:
+                            shadow_cloak_buff.payload = json.dumps({"charges": sc_charges})
+                            self.buff_repo.update(shadow_cloak_buff)
+                    
+                    counter_msg = "⚡ 破灵符的力量穿透了海灵守护！" if penetration_buff else "🌑 暗影斗篷让你在阴影中行动！"
+                    return {"success": False, "message": f"{counter_msg}\n但守护海灵挡住了你的偷窃！（目标还剩 {current_layers} 层守护）"}
+                else:
+                    # 盾破了！
+                    shield_broken = True
+                    new_payload = json.dumps({
+                        "layers": 0,
+                        "max_layers": max_layers,
+                        "resist_chance": resist_chance,
+                        "break_threshold": break_threshold,
+                        "broken_steals": 0,
+                    })
+                    updated = self.buff_repo.update_payload_if_match(
+                        protection_buff.id, old_payload_str, new_payload, protection_buff.expires_at
+                    )
+                    if not updated:
+                        return {"success": False, "message": "⚠️ 操作冲突，请重试。"}
+                    
+                    # 消耗暗影斗篷
+                    if shadow_cloak_buff:
+                        sc_payload = json.loads(shadow_cloak_buff.payload or "{}")
+                        sc_charges = sc_payload.get("charges", 1) - 1
+                        if sc_charges <= 0:
+                            self.buff_repo.delete(shadow_cloak_buff.id)
+                        else:
+                            shadow_cloak_buff.payload = json.dumps({"charges": sc_charges})
+                            self.buff_repo.update(shadow_cloak_buff)
+                    
+                    counter_msg = "⚡ 破灵符的力量穿透了海灵守护！" if penetration_buff else "🌑 暗影斗篷让你在阴影中行动！"
+                    return {"success": False, "message": f"{counter_msg}\n💥 守护海灵的护盾破碎了！鱼塘现在毫无防备！"}
+            
             else:
-                if shadow_cloak_buff:
-                    self.buff_repo.delete(shadow_cloak_buff.id)
+                # Phase 2: 盾已破（layers == 0），可以偷鱼
+                pass  # 继续往下走到偷鱼逻辑
+        
+        # ========== 守护海灵机制结束 ==========
 
         # 2. 检查受害者是否有鱼可偷
         victim_inventory = self.inventory_repo.get_fish_inventory(victim_id)
@@ -809,14 +899,61 @@ class GameMechanicsService:
         thief.last_steal_time = now
         self.user_repo.update(thief)
 
-        # 6. 生成成功消息
-        counter_message = ""
+        # ========== 盾破后配额计数与恢复 ==========
+        shield_recovery_msg = ""
         if protection_buff:
-            if penetration_buff:
-                counter_message = "⚡ 破灵符的力量穿透了海灵守护！"
-            elif shadow_cloak_buff:
-                counter_message = "🌑 暗影斗篷让你在阴影中行动！"
-
+            prot_payload = json.loads(protection_buff.payload or "{}")
+            current_layers = prot_payload.get("layers", 0)
+            
+            if current_layers == 0:
+                # 盾破状态，计数 +1
+                max_layers = prot_payload.get("max_layers", 2)
+                resist_chance = prot_payload.get("resist_chance", 0.05)
+                break_threshold = prot_payload.get("break_threshold", 3)
+                broken_steals = prot_payload.get("broken_steals", 0) + 1
+                
+                if broken_steals >= break_threshold:
+                    # 配额用完，恢复满层
+                    new_payload = json.dumps({
+                        "layers": max_layers,
+                        "max_layers": max_layers,
+                        "resist_chance": resist_chance,
+                        "break_threshold": break_threshold,
+                        "broken_steals": 0,
+                    })
+                    old_payload_str = protection_buff.payload
+                    updated = self.buff_repo.update_payload_if_match(
+                        protection_buff.id, old_payload_str, new_payload, protection_buff.expires_at
+                    )
+                    if not updated:
+                        # 并发冲突，退化为普通更新（数据最终一致）
+                        protection_buff.payload = new_payload
+                        self.buff_repo.update(protection_buff)
+                    shield_recovery_msg = "\n🛡️ 守护海灵恢复了力量！鱼塘重新被守护。"
+                else:
+                    # 更新 broken_steals
+                    new_payload = json.dumps({
+                        "layers": 0,
+                        "max_layers": max_layers,
+                        "resist_chance": resist_chance,
+                        "break_threshold": break_threshold,
+                        "broken_steals": broken_steals,
+                    })
+                    old_payload_str = protection_buff.payload
+                    updated = self.buff_repo.update_payload_if_match(
+                        protection_buff.id, old_payload_str, new_payload, protection_buff.expires_at
+                    )
+                    if not updated:
+                        # 并发冲突，退化为普通更新（数据最终一致）
+                        protection_buff.payload = new_payload
+                        self.buff_repo.update(protection_buff)
+                    remaining = break_threshold - broken_steals
+                    shield_recovery_msg = f"\n💥 守护海灵护盾已碎！还可偷 {remaining} 次后恢复。"
+            elif shield_broken:
+                # 刚破盾的情况（本次穿透成功减层至0），无需额外计数
+                pass
+        # ========== 盾破计数结束（steal_fish）==========
+        # 6. 生成成功消息
         # 构建品质信息
         quality_info = ""
         actual_value = stolen_fish_template.base_value
@@ -826,7 +963,7 @@ class GameMechanicsService:
         
         return {
             "success": True,
-            "message": f"{counter_message}✅ 成功从【{victim.nickname}】的鱼塘里偷到了一条{stolen_fish_template.rarity}★【{stolen_fish_template.name}】{quality_info}！价值 {actual_value} 金币",
+            "message": f"✅ 成功从【{victim.nickname}】的鱼塘里偷到了一条{stolen_fish_template.rarity}★【{stolen_fish_template.name}】{quality_info}！价值 {actual_value} 金币{shield_recovery_msg}",
             "thief_nickname": thief.nickname or thief.user_id,
             "victim_notification": {
                 "stolen_fish_name": stolen_fish_template.name,
@@ -873,7 +1010,7 @@ class GameMechanicsService:
             remaining = int(cooldown_seconds - (now - last_electric_fish_time).total_seconds())
             return {"success": False, "message": f"电鱼冷却中，请等待 {remaining // 60} 分钟后再试"}
     
-        # 1. 检查受害者是否受保护，逻辑同偷鱼
+        # ========== 守护海灵破盾机制（三段式）==========
         protection_buff = self.buff_repo.get_active_by_user_and_type(
             victim_id, "STEAL_PROTECTION_BUFF"
         )
@@ -885,13 +1022,103 @@ class GameMechanicsService:
             thief_id, "SHADOW_CLOAK_BUFF"
         )
         
+        shield_broken = False  # 标志：本次攻击是否打破了盾
+        
         if protection_buff:
-            if not penetration_buff and not shadow_cloak_buff:
-                return {"success": False, "message": f"❌ 无法电鱼，【{victim.nickname}】的鱼塘似乎被神秘力量守护着！"}
+            prot_payload = json.loads(protection_buff.payload or "{}")
+            current_layers = prot_payload.get("layers", 1)
+            max_layers = prot_payload.get("max_layers", 2)
+            resist_chance = prot_payload.get("resist_chance", 0.05)
+            break_threshold = prot_payload.get("break_threshold", 3)
+            broken_steals = prot_payload.get("broken_steals", 0)
+            old_payload_str = protection_buff.payload  # 乐观锁用
+            
+            if current_layers > 0:
+                # Phase 1: 盾还在，需要穿透才能减层（但电不到鱼）
+                if not penetration_buff and not shadow_cloak_buff:
+                    return {"success": False, "message": f"❌ 无法电鱼，【{victim.nickname}】的鱼塘被守护海灵保护着！"}
+                
+                # 抵抗判定
+                if random.random() < resist_chance:
+                    # 抵抗成功，暗影斗篷消耗1次
+                    msg = f"🛡️ 守护海灵抵抗了你的穿透！（目标还剩 {current_layers} 层守护）"
+                    if shadow_cloak_buff:
+                        sc_payload = json.loads(shadow_cloak_buff.payload or "{}")
+                        sc_charges = sc_payload.get("charges", 1) - 1
+                        if sc_charges <= 0:
+                            self.buff_repo.delete(shadow_cloak_buff.id)
+                            msg += "\n🌑 暗影斗篷消耗了最后 1 次反制机会，已消失。"
+                        else:
+                            shadow_cloak_buff.payload = json.dumps({"charges": sc_charges})
+                            self.buff_repo.update(shadow_cloak_buff)
+                            msg += f"\n🌑 暗影斗篷消耗了 1 次反制机会（剩余 {sc_charges} 次）。"
+                    return {"success": False, "message": msg}
+                
+                # 穿透成功：减层但仍挡电
+                current_layers -= 1
+                
+                if current_layers > 0:
+                    # 盾还在
+                    new_payload = json.dumps({
+                        "layers": current_layers,
+                        "max_layers": max_layers,
+                        "resist_chance": resist_chance,
+                        "break_threshold": break_threshold,
+                        "broken_steals": broken_steals,
+                    })
+                    updated = self.buff_repo.update_payload_if_match(
+                        protection_buff.id, old_payload_str, new_payload, protection_buff.expires_at
+                    )
+                    if not updated:
+                        return {"success": False, "message": "⚠️ 操作冲突，请重试。"}
+                    
+                    # 消耗暗影斗篷
+                    if shadow_cloak_buff:
+                        sc_payload = json.loads(shadow_cloak_buff.payload or "{}")
+                        sc_charges = sc_payload.get("charges", 1) - 1
+                        if sc_charges <= 0:
+                            self.buff_repo.delete(shadow_cloak_buff.id)
+                        else:
+                            shadow_cloak_buff.payload = json.dumps({"charges": sc_charges})
+                            self.buff_repo.update(shadow_cloak_buff)
+                    
+                    counter_msg = "⚡ 破灵符的力量穿透了海灵守护！" if penetration_buff else "🌑 暗影斗篷让你在阴影中行动！"
+                    return {"success": False, "message": f"{counter_msg}\n但守护海灵挡住了你的电鱼！（目标还剩 {current_layers} 层守护）"}
+                else:
+                    # 盾破了！
+                    shield_broken = True
+                    new_payload = json.dumps({
+                        "layers": 0,
+                        "max_layers": max_layers,
+                        "resist_chance": resist_chance,
+                        "break_threshold": break_threshold,
+                        "broken_steals": 0,
+                    })
+                    updated = self.buff_repo.update_payload_if_match(
+                        protection_buff.id, old_payload_str, new_payload, protection_buff.expires_at
+                    )
+                    if not updated:
+                        return {"success": False, "message": "⚠️ 操作冲突，请重试。"}
+                    
+                    # 消耗暗影斗篷
+                    if shadow_cloak_buff:
+                        sc_payload = json.loads(shadow_cloak_buff.payload or "{}")
+                        sc_charges = sc_payload.get("charges", 1) - 1
+                        if sc_charges <= 0:
+                            self.buff_repo.delete(shadow_cloak_buff.id)
+                        else:
+                            shadow_cloak_buff.payload = json.dumps({"charges": sc_charges})
+                            self.buff_repo.update(shadow_cloak_buff)
+                    
+                    counter_msg = "⚡ 破灵符的力量穿透了海灵守护！" if penetration_buff else "🌑 暗影斗篷让你在阴影中行动！"
+                    return {"success": False, "message": f"{counter_msg}\n💥 守护海灵的护盾破碎了！鱼塘现在毫无防备！"}
+            
             else:
-                if shadow_cloak_buff:
-                    self.buff_repo.delete(shadow_cloak_buff.id)
-    
+                # Phase 2: 盾已破（layers == 0），可以电鱼
+                pass  # 继续往下走到电鱼逻辑
+        
+        # ========== 守护海灵机制结束 ==========
+
         # 2. 检查受害者鱼塘数量是否达标
         victim_inventory = self.inventory_repo.get_fish_inventory(victim_id)
         if not victim_inventory:
@@ -900,7 +1127,7 @@ class GameMechanicsService:
         total_fish_count = sum(item.quantity for item in victim_inventory)
         if total_fish_count < 100:
             return {"success": False, "message": f"目标用户【{victim.nickname}】的鱼塘里鱼太少了（{total_fish_count}/100），电不到什么好东西，还是放过他吧。"}
-        
+
         # 3. 计算成功率并进行判定
         # 所有目标用户的成功率相同，只使用基础成功率
         final_success_rate = self.config.get("electric_fish", {}).get("base_success_rate", 0.6)
@@ -1053,14 +1280,62 @@ class GameMechanicsService:
         thief.last_electric_fish_time = now
         self.user_repo.update(thief)
     
-        # 11. 生成成功消息
-        counter_message = ""
+        # ========== 盾破后配额计数与恢复 ==========
+        shield_recovery_msg = ""
         if protection_buff:
-            if penetration_buff:
-                counter_message = "⚡ 破灵符的力量穿透了海灵守护！\n"
-            elif shadow_cloak_buff:
-                counter_message = "🌑 暗影斗篷让你在阴影中行动！\n"
+            prot_payload = json.loads(protection_buff.payload or "{}")
+            current_layers = prot_payload.get("layers", 0)
+            
+            if current_layers == 0:
+                # 盾破状态，计数 +1
+                max_layers = prot_payload.get("max_layers", 2)
+                resist_chance = prot_payload.get("resist_chance", 0.05)
+                break_threshold = prot_payload.get("break_threshold", 3)
+                broken_steals = prot_payload.get("broken_steals", 0) + 1
+                
+                if broken_steals >= break_threshold:
+                    # 配额用完，恢复满层
+                    new_payload = json.dumps({
+                        "layers": max_layers,
+                        "max_layers": max_layers,
+                        "resist_chance": resist_chance,
+                        "break_threshold": break_threshold,
+                        "broken_steals": 0,
+                    })
+                    old_payload_str = protection_buff.payload
+                    updated = self.buff_repo.update_payload_if_match(
+                        protection_buff.id, old_payload_str, new_payload, protection_buff.expires_at
+                    )
+                    if not updated:
+                        # 并发冲突，退化为普通更新（数据最终一致）
+                        protection_buff.payload = new_payload
+                        self.buff_repo.update(protection_buff)
+                    shield_recovery_msg = "\n🛡️ 守护海灵恢复了力量！鱼塘重新被守护。"
+                else:
+                    # 更新 broken_steals
+                    new_payload = json.dumps({
+                        "layers": 0,
+                        "max_layers": max_layers,
+                        "resist_chance": resist_chance,
+                        "break_threshold": break_threshold,
+                        "broken_steals": broken_steals,
+                    })
+                    old_payload_str = protection_buff.payload
+                    updated = self.buff_repo.update_payload_if_match(
+                        protection_buff.id, old_payload_str, new_payload, protection_buff.expires_at
+                    )
+                    if not updated:
+                        # 并发冲突，退化为普通更新（数据最终一致）
+                        protection_buff.payload = new_payload
+                        self.buff_repo.update(protection_buff)
+                    remaining = break_threshold - broken_steals
+                    shield_recovery_msg = f"\n💥 守护海灵护盾已碎！还可偷 {remaining} 次后恢复。"
+            elif shield_broken:
+                # 刚破盾的情况（本次穿透成功减层至0），无需额外计数
+                pass
+        # ========== 盾破计数结束（electric_fish）==========
     
+        # 11. 生成成功消息
         stolen_details = "、".join(stolen_summary)
         actual_stolen_count = len(final_stolen_fish_ids)
         
@@ -1069,7 +1344,7 @@ class GameMechanicsService:
         
         return {
             "success": True,
-            "message": f"{counter_message}{success_type}！成功对【{victim.nickname}】的鱼塘进行了电击，捕获了{actual_stolen_count}条鱼（占其总数的{steal_percentage:.1f}%），总价值 {total_value_stolen} 金币！\n分别是：{stolen_details}。\n💡 本次成功率为 {final_success_rate*100:.1f}%",
+            "message": f"{success_type}！成功对【{victim.nickname}】的鱼塘进行了电击，捕获了{actual_stolen_count}条鱼（占其总数的{steal_percentage:.1f}%），总价值 {total_value_stolen} 金币！\n分别是：{stolen_details}。\n💡 本次成功率为 {final_success_rate*100:.1f}%{shield_recovery_msg}",
             "thief_nickname": thief.nickname or thief.user_id,
             "victim_notification": {
                 "stolen_count": actual_stolen_count,
@@ -1084,7 +1359,7 @@ class GameMechanicsService:
 
     def dispel_steal_protection(self, target_id: str) -> Dict[str, Any]:
         """
-        驱散目标的海灵守护效果
+        破除目标的海灵守护（三段式机制：破盾→偷鱼配额→配额用完恢复，不再直接删除）
         """
         target = self.user_repo.get_by_id(target_id)
         if not target:
@@ -1097,11 +1372,39 @@ class GameMechanicsService:
         if not protection_buff:
             return {"success": False, "message": f"【{target.nickname}】没有海灵守护效果"}
         
-        self.buff_repo.delete(protection_buff.id)
+        # 读取当前 payload
+        prot_payload = json.loads(protection_buff.payload or "{}")
+        current_layers = prot_payload.get("layers", 0)
+        max_layers = prot_payload.get("max_layers", 2)
+        resist_chance = prot_payload.get("resist_chance", 0.05)
+        break_threshold = prot_payload.get("break_threshold", 3)
+        
+        if current_layers == 0:
+            return {"success": False, "message": f"【{target.nickname}】的海灵守护已经被击破，无需再驱散！"}
+        
+        # 破盾：将 layers 设为 0，重置 broken_steals，后续由偷鱼配额机制接管
+        old_payload_str = protection_buff.payload
+        new_payload = json.dumps({
+            "layers": 0,
+            "max_layers": max_layers,
+            "resist_chance": resist_chance,
+            "break_threshold": break_threshold,
+            "broken_steals": 0,
+        })
+        updated = self.buff_repo.update_payload_if_match(
+            protection_buff.id, old_payload_str, new_payload, protection_buff.expires_at
+        )
+        if not updated:
+            # 并发冲突，退化为普通更新
+            protection_buff.payload = new_payload
+            self.buff_repo.update(protection_buff)
         
         return {
-            "success": True, 
-            "message": f"成功驱散了【{target.nickname}】的海灵守护效果"
+            "success": True,
+            "message": (
+                f"💥 成功击破了【{target.nickname}】的守护海灵！"
+                f"\n盾破后鱼塘可被偷 {break_threshold} 次，之后海灵会自动恢复。"
+            )
         }
 
     def check_steal_protection(self, target_id: str) -> Dict[str, Any]:

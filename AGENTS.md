@@ -14,7 +14,7 @@
   - `manager/`: 基于 Quart 的 Web 管理端。
 
 ## 部署说明
-- **远程服务器**: `VerdantGem@192.168.0.9`
+- **远程服务器**: `VerdantGem@10.0.0.4`
 - **目标根路径**: `/vol2/1000/Docker/astrbot/data/plugins/astrbot_plugin_fishing`
 - **身份验证**: 使用本地私钥 `astrbot_fishing` (当前目录)。
 - **操作规范**: 
@@ -26,23 +26,23 @@
 
 ```bash
 # 上传单个文件
-scp -i ./astrbot_fishing <本地路径> VerdantGem@192.168.0.9:<远程目标路径>
+scp -i ./astrbot_fishing <本地路径> VerdantGem@10.0.0.4:<远程目标路径>
 
 # 上传多个文件
 scp -i ./astrbot_fishing \
   _conf_schema.json \
   core/domain/models.py \
   core/services/user_service.py \
-  VerdantGem@192.168.0.9:/vol2/1000/Docker/astrbot/data/plugins/astrbot_plugin_fishing/
+  VerdantGem@10.0.0.4:/vol2/1000/Docker/astrbot/data/plugins/astrbot_plugin_fishing/
 
 # md5sum 校验
-ssh -i ./astrbot_fishing VerdantGem@192.168.0.9 "md5sum <远程目标路径>/<文件名>" && md5sum <文件名>
+ssh -i ./astrbot_fishing VerdantGem@10.0.0.4 "md5sum <远程目标路径>/<文件名>" && md5sum <文件名>
 ```
 
 ### 多文件上传（使用 tar + ssh）
 
 ```bash
-tar czf - <文件1> <文件2> ... | ssh -i ./astrbot_fishing VerdantGem@192.168.0.9 "tar xzf - -C /vol2/1000/Docker/astrbot/data/plugins/astrbot_plugin_fishing/"
+tar czf - <文件1> <文件2> ... | ssh -i ./astrbot_fishing VerdantGem@10.0.0.4 "tar xzf - -C /vol2/1000/Docker/astrbot/data/plugins/astrbot_plugin_fishing/"
 ```
 
 ## 关键目录说明
