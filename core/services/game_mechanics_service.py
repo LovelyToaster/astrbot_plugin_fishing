@@ -82,7 +82,8 @@ class GameMechanicsService:
         inventory_repo: AbstractInventoryRepository,
         item_template_repo: AbstractItemTemplateRepository,
         buff_repo: AbstractUserBuffRepository,
-        config: Dict[str, Any]
+        config: Dict[str, Any],
+        statistics_repo=None,
     ):
         self.user_repo = user_repo
         self.log_repo = log_repo
@@ -90,12 +91,37 @@ class GameMechanicsService:
         self.item_template_repo = item_template_repo
         self.buff_repo = buff_repo
         self.config = config
+        self.statistics_repo = statistics_repo
         # 服务器级别的抑制状态
         self._server_suppressed = False
         self._last_suppression_date = None
         self.thread_pool = ThreadPoolExecutor(max_workers=5)
         # 命运之轮：跨回合补救期状态缓存 (user_id -> bool)
         self._wof_pending_protection = {}
+
+    def _add_statistics_log(
+        self,
+        user_id: str,
+        action_type: str,
+        success: bool,
+        target_id: Optional[str] = None,
+        fish_count: int = 0,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        """安全写入统计日志，写入失败不影响主业务。"""
+        if not self.statistics_repo:
+            return
+        try:
+            self.statistics_repo.add_log(
+                user_id=user_id,
+                target_id=target_id,
+                action_type=action_type,
+                success=success,
+                fish_count=fish_count,
+                details=details,
+            )
+        except Exception as e:
+            logger.warning(f"[统计] 写入统计日志失败: {e} (action={action_type}, user={user_id})")
 
     def _check_server_suppression(self) -> bool:
         """检查服务器级别的抑制状态，如果需要则重置"""
@@ -745,14 +771,35 @@ class GameMechanicsService:
         处理"偷鱼"的逻辑。
         """
         if thief_id == victim_id:
+            self._add_statistics_log(
+                user_id=thief_id,
+                target_id=victim_id,
+                action_type="steal",
+                success=False,
+                details={"reason": "self_target"},
+            )
             return {"success": False, "message": "不能偷自己的鱼！"}
 
         thief = self.user_repo.get_by_id(thief_id)
         if not thief:
+            self._add_statistics_log(
+                user_id=thief_id,
+                target_id=victim_id,
+                action_type="steal",
+                success=False,
+                details={"reason": "thief_not_found"},
+            )
             return {"success": False, "message": "偷窃者用户不存在"}
 
         victim = self.user_repo.get_by_id(victim_id)
         if not victim:
+            self._add_statistics_log(
+                user_id=thief_id,
+                target_id=victim_id,
+                action_type="steal",
+                success=False,
+                details={"reason": "victim_not_found"},
+            )
             return {"success": False, "message": "目标用户不存在"}
 
         # 0. 首先检查偷窃CD
@@ -768,6 +815,13 @@ class GameMechanicsService:
 
         if last_steal_time and (now - last_steal_time).total_seconds() < cooldown_seconds:
             remaining = int(cooldown_seconds - (now - last_steal_time).total_seconds())
+            self._add_statistics_log(
+                user_id=thief_id,
+                target_id=victim_id,
+                action_type="steal",
+                success=False,
+                details={"reason": "cooldown", "remaining_seconds": remaining},
+            )
             return {"success": False, "message": f"偷鱼冷却中，请等待 {remaining // 60} 分钟后再试"}
 
         # ========== 守护海灵破盾机制（三段式）==========
@@ -796,6 +850,13 @@ class GameMechanicsService:
             if current_layers > 0:
                 # Phase 1: 盾还在，需要穿透才能减层（但偷不到鱼）
                 if not penetration_buff and not shadow_cloak_buff:
+                    self._add_statistics_log(
+                        user_id=thief_id,
+                        target_id=victim_id,
+                        action_type="steal",
+                        success=False,
+                        details={"reason": "protected", "layers": current_layers},
+                    )
                     return {"success": False, "message": f"❌ 无法偷窃，【{victim.nickname}】的鱼塘被守护海灵保护着！"}
                 
                 # 抵抗判定
@@ -812,6 +873,13 @@ class GameMechanicsService:
                             shadow_cloak_buff.payload = json.dumps({"charges": sc_charges})
                             self.buff_repo.update(shadow_cloak_buff)
                             msg += f"\n🌑 暗影斗篷消耗了 1 次反制机会（剩余 {sc_charges} 次）。"
+                    self._add_statistics_log(
+                        user_id=thief_id,
+                        target_id=victim_id,
+                        action_type="steal",
+                        success=False,
+                        details={"reason": "protection_resisted", "layers": current_layers},
+                    )
                     return {"success": False, "message": msg}
                 
                 # 穿透成功：减层但仍挡偷
@@ -830,6 +898,13 @@ class GameMechanicsService:
                         protection_buff.id, old_payload_str, new_payload, protection_buff.expires_at
                     )
                     if not updated:
+                        self._add_statistics_log(
+                            user_id=thief_id,
+                            target_id=victim_id,
+                            action_type="steal",
+                            success=False,
+                            details={"reason": "conflict"},
+                        )
                         return {"success": False, "message": "⚠️ 操作冲突，请重试。"}
                     
                     # 消耗暗影斗篷
@@ -843,6 +918,13 @@ class GameMechanicsService:
                             self.buff_repo.update(shadow_cloak_buff)
                     
                     counter_msg = "⚡ 破灵符的力量穿透了海灵守护！" if penetration_buff else "🌑 暗影斗篷让你在阴影中行动！"
+                    self._add_statistics_log(
+                        user_id=thief_id,
+                        target_id=victim_id,
+                        action_type="steal",
+                        success=False,
+                        details={"reason": "shield_blocked", "remaining_layers": current_layers},
+                    )
                     return {"success": False, "message": f"{counter_msg}\n但守护海灵挡住了你的偷窃！（目标还剩 {current_layers} 层守护）"}
                 else:
                     # 盾破了！
@@ -858,6 +940,13 @@ class GameMechanicsService:
                         protection_buff.id, old_payload_str, new_payload, protection_buff.expires_at
                     )
                     if not updated:
+                        self._add_statistics_log(
+                            user_id=thief_id,
+                            target_id=victim_id,
+                            action_type="steal",
+                            success=False,
+                            details={"reason": "conflict"},
+                        )
                         return {"success": False, "message": "⚠️ 操作冲突，请重试。"}
                     
                     # 消耗暗影斗篷
@@ -871,8 +960,14 @@ class GameMechanicsService:
                             self.buff_repo.update(shadow_cloak_buff)
                     
                     counter_msg = "⚡ 破灵符的力量穿透了海灵守护！" if penetration_buff else "🌑 暗影斗篷让你在阴影中行动！"
+                    self._add_statistics_log(
+                        user_id=thief_id,
+                        target_id=victim_id,
+                        action_type="steal",
+                        success=False,
+                        details={"reason": "shield_broken"},
+                    )
                     return {"success": False, "message": f"{counter_msg}\n💥 守护海灵的护盾破碎了！鱼塘现在毫无防备！"}
-            
             else:
                 # Phase 2: 盾已破（layers == 0），可以偷鱼
                 pass  # 继续往下走到偷鱼逻辑
@@ -882,6 +977,13 @@ class GameMechanicsService:
         # 2. 检查受害者是否有鱼可偷
         victim_inventory = self.inventory_repo.get_fish_inventory(victim_id)
         if not victim_inventory:
+            self._add_statistics_log(
+                user_id=thief_id,
+                target_id=victim_id,
+                action_type="steal",
+                success=False,
+                details={"reason": "empty_pond"},
+            )
             return {"success": False, "message": f"目标用户【{victim.nickname}】的鱼塘是空的！"}
 
         # 3. 随机选择一条鱼偷取
@@ -889,6 +991,16 @@ class GameMechanicsService:
         stolen_fish_template = self.item_template_repo.get_fish_by_id(stolen_fish_item.fish_id)
 
         if not stolen_fish_template:
+            self._add_statistics_log(
+                user_id=thief_id,
+                target_id=victim_id,
+                action_type="steal",
+                success=False,
+                details={
+                    "reason": "fish_template_not_found",
+                    "fish_id": stolen_fish_item.fish_id,
+                },
+            )
             return {"success": False, "message": "发生内部错误，无法识别被偷的鱼"}
 
         # 4. 执行偷窃事务（保持品质属性）
@@ -961,6 +1073,21 @@ class GameMechanicsService:
             quality_info = "（✨高品质）"
             actual_value = stolen_fish_template.base_value * 2
         
+        # 写入偷鱼统计日志
+        self._add_statistics_log(
+            user_id=thief_id,
+            target_id=victim_id,
+            action_type="steal",
+            success=True,
+            fish_count=1,
+            details={
+                "fish_id": stolen_fish_item.fish_id,
+                "fish_name": stolen_fish_template.name,
+                "rarity": stolen_fish_template.rarity,
+                "quality_level": stolen_fish_item.quality_level,
+            },
+        )
+
         return {
             "success": True,
             "message": f"✅ 成功从【{victim.nickname}】的鱼塘里偷到了一条{stolen_fish_template.rarity}★【{stolen_fish_template.name}】{quality_info}！价值 {actual_value} 金币{shield_recovery_msg}",
@@ -986,14 +1113,35 @@ class GameMechanicsService:
         - 其中最多只能包含一条5星及以上的鱼
         """
         if thief_id == victim_id:
+            self._add_statistics_log(
+                user_id=thief_id,
+                target_id=victim_id,
+                action_type="electric_fish",
+                success=False,
+                details={"reason": "self_target"},
+            )
             return {"success": False, "message": "不能电自己的鱼！"}
     
         thief = self.user_repo.get_by_id(thief_id)
         if not thief:
+            self._add_statistics_log(
+                user_id=thief_id,
+                target_id=victim_id,
+                action_type="electric_fish",
+                success=False,
+                details={"reason": "user_not_found"},
+            )
             return {"success": False, "message": "使用者用户不存在"}
     
         victim = self.user_repo.get_by_id(victim_id)
         if not victim:
+            self._add_statistics_log(
+                user_id=thief_id,
+                target_id=victim_id,
+                action_type="electric_fish",
+                success=False,
+                details={"reason": "victim_not_found"},
+            )
             return {"success": False, "message": "目标用户不存在"}
     
         # 0. 检查电鱼CD
@@ -1008,6 +1156,13 @@ class GameMechanicsService:
     
         if last_electric_fish_time and (now - last_electric_fish_time).total_seconds() < cooldown_seconds:
             remaining = int(cooldown_seconds - (now - last_electric_fish_time).total_seconds())
+            self._add_statistics_log(
+                user_id=thief_id,
+                target_id=victim_id,
+                action_type="electric_fish",
+                success=False,
+                details={"reason": "cooldown", "remaining_seconds": remaining},
+            )
             return {"success": False, "message": f"电鱼冷却中，请等待 {remaining // 60} 分钟后再试"}
     
         # ========== 守护海灵破盾机制（三段式）==========
@@ -1036,6 +1191,13 @@ class GameMechanicsService:
             if current_layers > 0:
                 # Phase 1: 盾还在，需要穿透才能减层（但电不到鱼）
                 if not penetration_buff and not shadow_cloak_buff:
+                    self._add_statistics_log(
+                        user_id=thief_id,
+                        target_id=victim_id,
+                        action_type="electric_fish",
+                        success=False,
+                        details={"reason": "protected", "layers": current_layers},
+                    )
                     return {"success": False, "message": f"❌ 无法电鱼，【{victim.nickname}】的鱼塘被守护海灵保护着！"}
                 
                 # 抵抗判定
@@ -1052,6 +1214,13 @@ class GameMechanicsService:
                             shadow_cloak_buff.payload = json.dumps({"charges": sc_charges})
                             self.buff_repo.update(shadow_cloak_buff)
                             msg += f"\n🌑 暗影斗篷消耗了 1 次反制机会（剩余 {sc_charges} 次）。"
+                    self._add_statistics_log(
+                        user_id=thief_id,
+                        target_id=victim_id,
+                        action_type="electric_fish",
+                        success=False,
+                        details={"reason": "protection_resisted", "layers": current_layers},
+                    )
                     return {"success": False, "message": msg}
                 
                 # 穿透成功：减层但仍挡电
@@ -1070,6 +1239,13 @@ class GameMechanicsService:
                         protection_buff.id, old_payload_str, new_payload, protection_buff.expires_at
                     )
                     if not updated:
+                        self._add_statistics_log(
+                            user_id=thief_id,
+                            target_id=victim_id,
+                            action_type="electric_fish",
+                            success=False,
+                            details={"reason": "conflict"},
+                        )
                         return {"success": False, "message": "⚠️ 操作冲突，请重试。"}
                     
                     # 消耗暗影斗篷
@@ -1083,6 +1259,13 @@ class GameMechanicsService:
                             self.buff_repo.update(shadow_cloak_buff)
                     
                     counter_msg = "⚡ 破灵符的力量穿透了海灵守护！" if penetration_buff else "🌑 暗影斗篷让你在阴影中行动！"
+                    self._add_statistics_log(
+                        user_id=thief_id,
+                        target_id=victim_id,
+                        action_type="electric_fish",
+                        success=False,
+                        details={"reason": "shield_blocked", "remaining_layers": current_layers},
+                    )
                     return {"success": False, "message": f"{counter_msg}\n但守护海灵挡住了你的电鱼！（目标还剩 {current_layers} 层守护）"}
                 else:
                     # 盾破了！
@@ -1098,6 +1281,13 @@ class GameMechanicsService:
                         protection_buff.id, old_payload_str, new_payload, protection_buff.expires_at
                     )
                     if not updated:
+                        self._add_statistics_log(
+                            user_id=thief_id,
+                            target_id=victim_id,
+                            action_type="electric_fish",
+                            success=False,
+                            details={"reason": "conflict"},
+                        )
                         return {"success": False, "message": "⚠️ 操作冲突，请重试。"}
                     
                     # 消耗暗影斗篷
@@ -1111,8 +1301,14 @@ class GameMechanicsService:
                             self.buff_repo.update(shadow_cloak_buff)
                     
                     counter_msg = "⚡ 破灵符的力量穿透了海灵守护！" if penetration_buff else "🌑 暗影斗篷让你在阴影中行动！"
+                    self._add_statistics_log(
+                        user_id=thief_id,
+                        target_id=victim_id,
+                        action_type="electric_fish",
+                        success=False,
+                        details={"reason": "shield_broken"},
+                    )
                     return {"success": False, "message": f"{counter_msg}\n💥 守护海灵的护盾破碎了！鱼塘现在毫无防备！"}
-            
             else:
                 # Phase 2: 盾已破（layers == 0），可以电鱼
                 pass  # 继续往下走到电鱼逻辑
@@ -1122,10 +1318,24 @@ class GameMechanicsService:
         # 2. 检查受害者鱼塘数量是否达标
         victim_inventory = self.inventory_repo.get_fish_inventory(victim_id)
         if not victim_inventory:
+            self._add_statistics_log(
+                user_id=thief_id,
+                target_id=victim_id,
+                action_type="electric_fish",
+                success=False,
+                details={"reason": "empty_pond"},
+            )
             return {"success": False, "message": f"目标用户【{victim.nickname}】的鱼塘是空的！"}
         
         total_fish_count = sum(item.quantity for item in victim_inventory)
         if total_fish_count < 100:
+            self._add_statistics_log(
+                user_id=thief_id,
+                target_id=victim_id,
+                action_type="electric_fish",
+                success=False,
+                details={"reason": "not_enough_fish", "fish_count": total_fish_count},
+            )
             return {"success": False, "message": f"目标用户【{victim.nickname}】的鱼塘里鱼太少了（{total_fish_count}/100），电不到什么好东西，还是放过他吧。"}
 
         # 3. 计算成功率并进行判定
@@ -1167,6 +1377,20 @@ class GameMechanicsService:
             else:
                 severity = "⚡⚡⚡⚡ 毁灭性天罚"
             
+            # 写入电鱼失败统计日志
+            self._add_statistics_log(
+                user_id=thief_id,
+                target_id=victim_id,
+                action_type="electric_fish",
+                success=False,
+                fish_count=0,
+                details={
+                    "reason": "random_failed",
+                    "penalty_rate": penalty_rate,
+                    "success_rate": final_success_rate,
+                },
+            )
+
             return {
                 "success": False,
                 "message": f"❌ 电鱼失败！{severity}降临，雷电击中了你，损失了 {penalty_coins} 金币（{penalty_rate*100:.1f}%）！\n💡 本次成功率为 {final_success_rate*100:.1f}%"
@@ -1342,6 +1566,19 @@ class GameMechanicsService:
         # 计算收益占比
         steal_percentage = (actual_stolen_count / total_fish_count) * 100
         
+        # 写入电鱼成功统计日志
+        self._add_statistics_log(
+            user_id=thief_id,
+            target_id=victim_id,
+            action_type="electric_fish",
+            success=True,
+            fish_count=actual_stolen_count,
+            details={
+                "success_type": success_type,
+                "stolen_summary": stolen_summary,
+            },
+        )
+
         return {
             "success": True,
             "message": f"{success_type}！成功对【{victim.nickname}】的鱼塘进行了电击，捕获了{actual_stolen_count}条鱼（占其总数的{steal_percentage:.1f}%），总价值 {total_value_stolen} 金币！\n分别是：{stolen_details}。\n💡 本次成功率为 {final_success_rate*100:.1f}%{shield_recovery_msg}",

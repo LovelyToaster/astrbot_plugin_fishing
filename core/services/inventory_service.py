@@ -2,6 +2,8 @@ import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 
+from astrbot.api import logger
+
 # 导入仓储接口和领域模型
 from ..repositories.abstract_repository import (
     AbstractInventoryRepository,
@@ -24,6 +26,7 @@ class InventoryService:
         effect_manager: EffectManager,
         game_mechanics_service: GameMechanicsService,
         config: Dict[str, Any],
+        statistics_repo=None,
     ):
         self.inventory_repo = inventory_repo
         self.user_repo = user_repo
@@ -31,6 +34,7 @@ class InventoryService:
         self.effect_manager = effect_manager
         self.game_mechanics_service = game_mechanics_service
         self.config = config
+        self.statistics_repo = statistics_repo
 
     # === 短码解析 ===
     def _to_base36(self, n: int) -> str:
@@ -258,32 +262,64 @@ class InventoryService:
         if not fish_inventory:
             return {"success": False, "message": "❌ 你没有可以卖出的鱼"}
         
-        # 计算总价值（高品质鱼双倍价值）
+        # 计算总价值（高品质鱼双倍价值）和卖出鱼数
         total_value = 0
+        total_fish_count = 0
         sold_details = {"普通": 0, "✨高品质": 0}
         
         for item in fish_inventory:
             fish_template = self.item_template_repo.get_fish_by_id(item.fish_id)
             if fish_template:
                 # 高品质鱼按双倍价值计算
+                sell_qty = max(0, item.quantity - 1) if keep_one else item.quantity
                 item_value = fish_template.base_value * item.quantity * (1 + item.quality_level)
+                
+                if keep_one:
+                    # 保留一条时的实际卖出金额需由 repo 方法精确计算
+                    total_fish_count += sell_qty
+                else:
+                    total_fish_count += item.quantity
+                
                 total_value += item_value
                 
                 if item.quality_level == 1:
                     sold_details["✨高品质"] += item.quantity
                 else:
                     sold_details["普通"] += item.quantity
-        
+
         if keep_one:
             # 调用仓储方法执行"保留一条"的数据库操作
             sold_value = self.inventory_repo.sell_fish_keep_one(user_id)
+            # 重新计算保留一条场景下的实际卖出鱼数
+            fish_count_sold = sum(
+                max(0, it.quantity - 1)
+                for it in fish_inventory
+            )
         else:
             sold_value = total_value
+            fish_count_sold = total_fish_count
             self.inventory_repo.clear_fish_inventory(user_id)
 
         # 更新用户金币
         user.coins += sold_value
         self.user_repo.update(user)
+
+        # 写入卖鱼统计日志
+        if self.statistics_repo and fish_count_sold > 0:
+            try:
+                self.statistics_repo.add_log(
+                    user_id=user_id,
+                    action_type="sell_fish",
+                    success=True,
+                    fish_count=fish_count_sold,
+                    details={
+                        "keep_one": keep_one,
+                        "normal_count": sold_details["普通"],
+                        "high_quality_count": sold_details["✨高品质"],
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"[统计] 写入卖鱼统计日志失败: {e}")
 
         # 构建详细消息
         message = f"💰 成功卖出鱼，获得 {sold_value} 金币"
@@ -307,6 +343,7 @@ class InventoryService:
         # 获取用户的鱼库存
         fish_inventory = self.inventory_repo.get_fish_inventory(user_id)
         total_value = 0
+        total_fish_count = 0
         sold_details = {"普通": 0, "✨高品质": 0}
 
         for item in fish_inventory:
@@ -316,6 +353,7 @@ class InventoryService:
                 # 计算鱼的总价值（高品质鱼双倍价值）
                 item_value = fish_info.base_value * item.quantity * (1 + item.quality_level)
                 total_value += item_value
+                total_fish_count += item.quantity
                 
                 if item.quality_level == 1:
                     sold_details["✨高品质"] += item.quantity
@@ -332,6 +370,23 @@ class InventoryService:
         # 更新用户金币
         user.coins += total_value
         self.user_repo.update(user)
+
+        # 写入卖鱼统计日志
+        if self.statistics_repo and total_fish_count > 0:
+            try:
+                self.statistics_repo.add_log(
+                    user_id=user_id,
+                    action_type="sell_fish",
+                    success=True,
+                    fish_count=total_fish_count,
+                    details={
+                        "rarity": rarity,
+                        "normal_count": sold_details["普通"],
+                        "high_quality_count": sold_details["✨高品质"],
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"[统计] 写入卖鱼统计日志失败: {e}")
 
         # 构建详细消息
         message = f"💰 成功卖出稀有度 {rarity} 的鱼，获得 {total_value} 金币"
@@ -400,6 +455,33 @@ class InventoryService:
         # 6. 更新用户金币
         user.coins += total_value
         self.user_repo.update(user)
+
+        # 6.5 写入卖鱼统计日志
+        if self.statistics_repo:
+            total_fish_count = sum(
+                details["count"] for details in sold_fish_details.values()
+            )
+            log_sold_fish_details = {
+                rarity: {
+                    "count": details["count"],
+                    "normal": details["normal"],
+                    "high_quality": details["high_quality"],
+                }
+                for rarity, details in sold_fish_details.items()
+            }
+            try:
+                self.statistics_repo.add_log(
+                    user_id=user_id,
+                    action_type="sell_fish",
+                    success=True,
+                    fish_count=total_fish_count,
+                    details={
+                        "rarities": sorted(list(unique_rarities)),
+                        "sold_details": log_sold_fish_details,
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"[统计] 写入卖鱼统计日志失败: {e}")
 
         # 7. 构建并返回成功的消息
         rarity_str_sold = ", ".join(map(str, sorted(sold_fish_details.keys())))
@@ -489,6 +571,22 @@ class InventoryService:
         # 更新用户金币（出售所得）
         user.coins += total_value
         self.user_repo.update(user)
+
+        # 写入砸锅卖铁中鱼类出售的统计日志
+        if self.statistics_repo and sold_items["fish_count"] > 0:
+            try:
+                self.statistics_repo.add_log(
+                    user_id=user_id,
+                    action_type="sell_fish",
+                    success=True,
+                    fish_count=sold_items["fish_count"],
+                    details={
+                        "source": "sell_everything",
+                        "fish_count": sold_items["fish_count"],
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"[统计] 写入砸锅卖铁鱼类统计日志失败: {e}")
 
         # 4. 自动消耗“钱袋”类道具（ADD_COINS），并统计获得金币
         coins_from_bags = self._auto_consume_money_bags(user)

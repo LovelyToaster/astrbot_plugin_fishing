@@ -25,6 +25,8 @@ from .core.repositories.sqlite_loan_repo import SqliteLoanRepository
 from .core.repositories.sqlite_bank_repo import SqliteBankRepository
 from .core.repositories.sqlite_cat_repo import SQLiteCatRepository
 from .core.repositories.sqlite_notification_repo import SqliteNotificationRepository
+from .core.repositories.sqlite_statistics_repo import SqliteStatisticsRepository
+from .core.services.statistics_service import StatisticsService
 
 from .core.services.data_setup_service import DataSetupService
 from .core.services.item_template_service import ItemTemplateService
@@ -79,6 +81,7 @@ from .handlers import (
     bank_handlers,
     blackjack_handlers,
     slot_handlers,
+    statistics_handlers,
 )
 from .handlers.fishing_handlers import FishingHandlers
 from .handlers.aquarium_handlers import AquariumHandlers
@@ -265,11 +268,15 @@ class FishingPlugin(Star):
         self.bank_repo = SqliteBankRepository(db_path)
         self.cat_repo = SQLiteCatRepository(self.db_manager)
 
+        # 统计仓储（必须在所有使用它的服务之前初始化）
+        self.statistics_repo = SqliteStatisticsRepository(db_path)
+
         # --- 3. 组合根：实例化所有服务层，并注入依赖 ---
         # 3.1 核心服务必须在效果管理器之前实例化，以解决依赖问题
         self.fishing_zone_service = FishingZoneService(self.item_template_repo, self.inventory_repo, self.game_config)
         self.game_mechanics_service = GameMechanicsService(self.user_repo, self.log_repo, self.inventory_repo,
-                                                          self.item_template_repo, self.buff_repo, self.game_config)
+                                                          self.item_template_repo, self.buff_repo, self.game_config,
+                                                          statistics_repo=self.statistics_repo)
 
         # 3.3 实例化其他核心服务
         gacha_config = config.get("gacha", {})
@@ -285,6 +292,7 @@ class FishingPlugin(Star):
             None,  # 先设为None，稍后设置
             self.game_mechanics_service,
             self.game_config,
+            statistics_repo=self.statistics_repo,
         )
         self.shop_service = ShopService(self.item_template_repo, self.inventory_repo, self.user_repo, self.shop_repo, self.game_config)
         # MarketService 依赖 exchange_repo
@@ -385,6 +393,9 @@ class FishingPlugin(Star):
         )
         
         self.fishing_service.cat_service = self.cat_service
+
+        # 初始化统计服务
+        self.statistics_service = StatisticsService(self.statistics_repo, self.user_repo)
         
         # 初始化交易所处理器
         self.exchange_handlers = ExchangeHandlers(self)
@@ -1593,6 +1604,12 @@ class FishingPlugin(Star):
     async def view_notifications(self, event: AstrMessageEvent):
         """查看你的通知消息，包括被偷鱼和被电鱼的记录"""
         async for r in social_handlers.view_notifications(self, event):
+            yield r
+
+    @filter.command("统计")
+    async def statistics(self, event: AstrMessageEvent):
+        """查看你的偷鱼、电鱼、卖鱼统计数据，支持排行榜。用法：/统计 [今天/本周/本月] 或 /统计 排行榜 [今天/本周/本月]"""
+        async for r in statistics_handlers.statistics(self, event):
             yield r
 
     # =========== 银行系统 ==========
