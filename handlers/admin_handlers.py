@@ -542,7 +542,7 @@ async def reward_all_items(plugin: "FishingPlugin", event: AstrMessageEvent):
 
 
 async def replenish_fish_pools(plugin: "FishingPlugin", event: AstrMessageEvent):
-    """补充鱼池 - 重置所有钓鱼区域的稀有鱼剩余数量"""
+    """补充鱼池 - 重置所有钓鱼区域的稀有鱼当前周期剩余数量"""
     try:
         # 获取所有钓鱼区域
         all_zones = plugin.inventory_repo.get_all_zones()
@@ -551,26 +551,31 @@ async def replenish_fish_pools(plugin: "FishingPlugin", event: AstrMessageEvent)
             yield event.plain_result("❌ 没有找到任何钓鱼区域。")
             return
         
-        # 重置所有有配额的区域的稀有鱼计数
+        # 重置所有有配额的区域的稀有鱼周期计数
+        from ..core.utils import get_now
+        now = get_now()
         reset_count = 0
         zone_details = []
         
         for zone in all_zones:
-            if zone.daily_rare_fish_quota > 0:  # 只重置有配额的区域
-                zone.rare_fish_caught_today = 0
+            quota = zone.rare_fish_quota_per_cycle if zone.rare_fish_quota_per_cycle is not None else zone.daily_rare_fish_quota
+            if quota > 0:  # 只重置有配额的区域
+                zone.rare_fish_caught_this_cycle = 0
+                zone.rare_fish_caught_today = 0  # 同步旧字段
+                zone.rare_fish_quota_last_reset_at = now
                 plugin.inventory_repo.update_fishing_zone(zone)
                 reset_count += 1
-                zone_details.append(f"🎣 {zone.name}：配额 {zone.daily_rare_fish_quota} 条")
+                zone_details.append(f"🎣 {zone.name}：每周期配额 {quota} 条")
         
         if reset_count == 0:
             yield event.plain_result("❌ 没有找到任何有稀有鱼配额的钓鱼区域。")
             return
         
         # 构建结果消息
-        result_msg = f"✅ 鱼池补充完成！已重置 {reset_count} 个钓鱼区域的稀有鱼剩余数量。\n\n"
+        result_msg = f"✅ 鱼池补充完成！已重置 {reset_count} 个钓鱼区域的稀有鱼周期剩余数量。\n\n"
         result_msg += "📋 重置详情：\n"
         result_msg += "\n".join(zone_details)
-        result_msg += f"\n\n🔄 所有区域的稀有鱼(4星及以上)剩余数量已重置为满配额状态。"
+        result_msg += f"\n\n🔄 所有区域的稀有鱼(4星及以上)剩余数量已重置为本周期满配额状态。"
         
         yield event.plain_result(result_msg)
         

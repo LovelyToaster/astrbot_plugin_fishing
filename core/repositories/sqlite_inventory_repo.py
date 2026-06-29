@@ -440,7 +440,7 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
                 row_dict = dict(row)
                 if 'configs' in row_dict and isinstance(row_dict['configs'], str):
                     row_dict['configs'] = json.loads(row_dict['configs'])
-                for key in ('available_from', 'available_until'):
+                for key in ('available_from', 'available_until', 'rare_fish_quota_last_reset_at'):
                     val = row_dict.get(key)
                     if isinstance(val, str) and val.strip():  # 检查非空字符串
                         try:
@@ -461,14 +461,40 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
             else:
                 raise ValueError(f"钓鱼区域ID {zone_id} 不存在。")
     def update_fishing_zone(self, zone: FishingZone) -> None:
-        """更新钓鱼区域信息"""
+        """更新钓鱼区域信息（写新字段，同步回写旧字段）"""
+        # 新字段兜底
+        quota_per_cycle = zone.rare_fish_quota_per_cycle if zone.rare_fish_quota_per_cycle is not None else zone.daily_rare_fish_quota
+        caught_this_cycle = zone.rare_fish_caught_this_cycle if zone.rare_fish_caught_this_cycle is not None else zone.rare_fish_caught_today
+        last_reset_at_str = None
+        if zone.rare_fish_quota_last_reset_at:
+            if isinstance(zone.rare_fish_quota_last_reset_at, datetime):
+                from ..utils import DATETIME_FORMAT
+                last_reset_at_str = zone.rare_fish_quota_last_reset_at.strftime(DATETIME_FORMAT)
+            else:
+                last_reset_at_str = str(zone.rare_fish_quota_last_reset_at)
+
         with self._connection_manager.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE fishing_zones
-                SET name = ?, description = ?, daily_rare_fish_quota = ?, rare_fish_caught_today = ?
+                SET name = ?,
+                    description = ?,
+                    daily_rare_fish_quota = ?,
+                    rare_fish_caught_today = ?,
+                    rare_fish_quota_per_cycle = ?,
+                    rare_fish_caught_this_cycle = ?,
+                    rare_fish_quota_last_reset_at = ?
                 WHERE id = ?
-            """, (zone.name, zone.description, zone.daily_rare_fish_quota, zone.rare_fish_caught_today, zone.id))
+            """, (
+                zone.name,
+                zone.description,
+                quota_per_cycle,          # 同步旧字段
+                caught_this_cycle,        # 同步旧字段
+                quota_per_cycle,
+                caught_this_cycle,
+                last_reset_at_str,
+                zone.id
+            ))
             conn.commit()
 
     def get_all_zones(self) -> List[FishingZone]:
@@ -483,7 +509,7 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
                 if 'configs' in row_dict and isinstance(row_dict['configs'], str):
                     row_dict['configs'] = json.loads(row_dict['configs'])
                 # 解析时间字段
-                for key in ('available_from', 'available_until'):
+                for key in ('available_from', 'available_until', 'rare_fish_quota_last_reset_at'):
                     val = row_dict.get(key)
                     if isinstance(val, str) and val.strip():  # 检查非空字符串
                         try:
@@ -517,14 +543,21 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
         with self._connection_manager.get_connection() as conn:
             cursor = conn.cursor()
             try:
+                # 兼容旧字段和新字段
+                quota = zone_data.get('rare_fish_quota_per_cycle')
+                if quota is None:
+                    quota = zone_data.get('daily_rare_fish_quota', 0)
                 cursor.execute("""
-                    INSERT INTO fishing_zones (id, name, description, daily_rare_fish_quota, configs, is_active, available_from, available_until, required_item_id, requires_pass, fishing_cost)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO fishing_zones (id, name, description, daily_rare_fish_quota, rare_fish_caught_today, rare_fish_quota_per_cycle, rare_fish_caught_this_cycle, configs, is_active, available_from, available_until, required_item_id, requires_pass, fishing_cost)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     zone_data['id'],
                     zone_data['name'],
                     zone_data['description'],
-                    zone_data['daily_rare_fish_quota'],
+                    quota,  # 同步旧字段
+                    0,      # rare_fish_caught_today
+                    quota,  # 新字段
+                    0,      # rare_fish_caught_this_cycle
                     json.dumps(zone_data.get('configs', {})),
                     zone_data.get('is_active', True),
                     zone_data.get('available_from'),
@@ -545,14 +578,19 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
     def update_zone(self, zone_id: int, zone_data: Dict[str, Any]) -> None:
         with self._connection_manager.get_connection() as conn:
             cursor = conn.cursor()
+            # 兼容旧字段和新字段
+            quota = zone_data.get('rare_fish_quota_per_cycle')
+            if quota is None:
+                quota = zone_data.get('daily_rare_fish_quota', 0)
             cursor.execute("""
                 UPDATE fishing_zones
-                SET name = ?, description = ?, daily_rare_fish_quota = ?, configs = ?, is_active = ?, available_from = ?, available_until = ?, required_item_id = ?, requires_pass = ?, fishing_cost = ?
+                SET name = ?, description = ?, daily_rare_fish_quota = ?, rare_fish_quota_per_cycle = ?, configs = ?, is_active = ?, available_from = ?, available_until = ?, required_item_id = ?, requires_pass = ?, fishing_cost = ?
                 WHERE id = ?
             """, (
                 zone_data['name'],
                 zone_data['description'],
-                zone_data['daily_rare_fish_quota'],
+                quota,  # 同步旧字段
+                quota,  # 新字段
                 json.dumps(zone_data.get('configs', {})),
                 zone_data.get('is_active', True),
                 zone_data.get('available_from'),

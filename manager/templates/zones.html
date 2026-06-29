@@ -56,7 +56,7 @@
                     {{ zone.available_until if zone.available_until else '不限' }}
                 </p>
                 {% endif %}
-                <p><strong>稀有鱼每日配额:</strong> {{ zone.daily_rare_fish_quota }}</p>
+                <p><strong>稀有鱼每周期配额:</strong> {{ zone.rare_fish_quota_per_cycle if zone.rare_fish_quota_per_cycle is not none else zone.daily_rare_fish_quota }}</p>
                 <p><strong>钓鱼消耗:</strong> {{ zone.fishing_cost }} 金币</p>
                 {% if zone.requires_pass and zone.required_item_id %}
                 <p><strong>通行证要求:</strong> 

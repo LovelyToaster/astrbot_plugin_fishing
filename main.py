@@ -188,6 +188,7 @@ class FishingPlugin(Star):
             "wheel_of_fate_daily_limit": game_global_config.get("wheel_of_fate_daily_limit", 3),
             "deep_sea_daily_limit": game_global_config.get("deep_sea_daily_limit", 3),
             "daily_reset_hour": game_global_config.get("daily_reset_hour", 0),
+            "rare_fish_pool_refresh_interval_hours": game_global_config.get("rare_fish_pool_refresh_interval_hours", 1),
             "user": {
                 "initial_coins": user_config.get("initial_coins", 200)
             },
@@ -393,6 +394,7 @@ class FishingPlugin(Star):
         )
         
         self.fishing_service.cat_service = self.cat_service
+        self.cat_service._fishing_service = self.fishing_service
 
         # 初始化统计服务
         self.statistics_service = StatisticsService(self.statistics_repo, self.user_repo)

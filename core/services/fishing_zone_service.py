@@ -135,11 +135,13 @@ class FishingZoneService:
         zones_data = []
         for zone in zones:
             specific_fish_ids = self.inventory_repo.get_specific_fish_ids_for_zone(zone.id)
+            quota = zone.rare_fish_quota_per_cycle if zone.rare_fish_quota_per_cycle is not None else zone.daily_rare_fish_quota
             zones_data.append({
                 "id": zone.id,
                 "name": zone.name,
                 "description": zone.description,
-                "daily_rare_fish_quota": zone.daily_rare_fish_quota,
+                "daily_rare_fish_quota": quota,
+                "rare_fish_quota_per_cycle": quota,
                 "configs": zone.configs,
                 "is_active": zone.is_active,
                 "available_from": zone.available_from.isoformat() if zone.available_from else None,

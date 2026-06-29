@@ -36,6 +36,34 @@ def get_last_reset_time(reset_hour: int = 0) -> datetime:
         # 否则返回昨天的刷新时间点
         return today_reset - timedelta(days=1)
 
+def get_last_interval_reset_time(interval_hours: int = 1) -> datetime:
+    """
+    获取最近一次周期刷新的时间点。
+
+    以当天 00:00 为基准，将小时向下对齐到 interval_hours 的倍数。
+    示例：
+    - 10:23, interval=1，返回 10:00
+    - 11:23, interval=2，返回 10:00
+    - 17:59, interval=6，返回 12:00
+
+    Args:
+        interval_hours: 周期小时数（1-24），非法值兜底为 1。
+
+    Returns:
+        最近一次周期刷新时间点（datetime 对象，UTC+8）。
+    """
+    if not isinstance(interval_hours, int) or interval_hours < 1 or interval_hours > 24:
+        interval_hours = 1
+    now = get_now()
+    # 当天 00:00
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    # 从当天 00:00 到现在经过的小时数（浮点）
+    hours_since_midnight = (now - day_start).total_seconds() / 3600
+    # 向下取整到 interval 的倍数
+    cycles = int(hours_since_midnight // interval_hours)
+    return day_start + timedelta(hours=cycles * interval_hours)
+
+
 def calculate_after_refine(before_value: float, refine_level: int, rarity: int = None) -> float:
     """
     计算经过精炼后的值

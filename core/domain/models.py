@@ -386,10 +386,16 @@ class FishingZone:
     id: int
     name: str
     description: str
-    # 当天稀有鱼（4星及以上）的配额
+    # 当天稀有鱼（4星及以上）的配额（旧字段，兼容保留）
     daily_rare_fish_quota: int
-    # 今天已被钓走的稀有鱼数量
+    # 今天已被钓走的稀有鱼数量（旧字段，兼容保留）
     rare_fish_caught_today: int = 0
+    # 每周期稀有鱼（4星及以上）的配额（新字段）
+    rare_fish_quota_per_cycle: Optional[int] = None
+    # 当前周期已捕获稀有鱼数量（新字段）
+    rare_fish_caught_this_cycle: Optional[int] = None
+    # 最近一次鱼池刷新周期起点（新字段，可空）
+    rare_fish_quota_last_reset_at: Optional[datetime] = None
     # 区域的特定配置
     configs: Dict[str, Any] = field(default_factory=dict)
     is_active: bool = True
@@ -405,6 +411,20 @@ class FishingZone:
     def __post_init__(self):
         if isinstance(self.is_active, int):
             self.is_active = bool(self.is_active)
+        # 处理 reset 时间字符串转 datetime
+        if isinstance(self.rare_fish_quota_last_reset_at, str):
+            try:
+                from ..utils import DATETIME_FORMAT
+                self.rare_fish_quota_last_reset_at = datetime.strptime(
+                    self.rare_fish_quota_last_reset_at, DATETIME_FORMAT
+                )
+            except (ValueError, TypeError):
+                self.rare_fish_quota_last_reset_at = None
+        # 新字段为空时从旧字段补齐
+        if self.rare_fish_quota_per_cycle is None:
+            self.rare_fish_quota_per_cycle = self.daily_rare_fish_quota
+        if self.rare_fish_caught_this_cycle is None:
+            self.rare_fish_caught_this_cycle = self.rare_fish_caught_today
 
     def __getitem__(self, item):
         """允许通过属性名访问字段"""

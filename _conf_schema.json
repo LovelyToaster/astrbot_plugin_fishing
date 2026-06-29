@@ -138,10 +138,18 @@
     "type": "object",
     "items": {
       "daily_reset_hour": {
-        "description": "每日刷新时间点",
+        "description": "每日刷新时间点（税收等每日系统使用）",
         "type": "int",
-        "hint": "每日重置鱼塘配额、税收等的时间点（小时，0-23），默认为0表示0点刷新",
+        "hint": "每日重置税收等的时间点（小时，0-23），默认为0表示0点刷新",
         "default": 0
+      },
+      "rare_fish_pool_refresh_interval_hours": {
+        "description": "稀有鱼池刷新间隔（小时）",
+        "type": "int",
+        "hint": "稀有鱼池每N小时刷新一次，建议1-24。1=每个整点，2=00/02/04…，6=00/06/12/18",
+        "default": 1,
+        "min": 1,
+        "max": 24
       },
       "wheel_of_fate_daily_limit": {
         "description": "命运轮盘每日次数限制",

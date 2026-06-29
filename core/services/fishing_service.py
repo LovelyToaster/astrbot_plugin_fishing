@@ -18,7 +18,7 @@ from ..repositories.abstract_repository import (
 from ..domain.models import FishingRecord, TaxRecord, FishingZone
 from ..services.fishing_zone_service import FishingZoneService
 from .fish_weight_service import FishWeightService
-from ..utils import get_now, get_last_reset_time, calculate_after_refine
+from ..utils import get_now, get_last_reset_time, get_last_interval_reset_time, calculate_after_refine
 
 
 class FishingService:
@@ -47,7 +47,10 @@ class FishingService:
 
         # 获取每日刷新时间配置
         self.daily_reset_hour = self.config.get("daily_reset_hour", 0)
-        self.last_reset_time = get_last_reset_time(self.daily_reset_hour)
+        # 稀有鱼池周期刷新配置
+        self.rare_fish_pool_refresh_interval_hours = self.config.get("rare_fish_pool_refresh_interval_hours", 1)
+        # 初始化为 None，确保服务启动后首次检查会补齐各区域的周期刷新时间
+        self.last_rare_fish_pool_reset_time = None
         # 自动钓鱼线程相关属性
         self.auto_fishing_thread: Optional[threading.Thread] = None
         self.auto_fishing_running = False
@@ -135,8 +138,8 @@ class FishingService:
         Returns:
             一个包含结果的字典。
         """
-        # 在执行钓鱼前，先检查并执行每日重置（如果需要）
-        self._reset_rare_fish_daily_quota()
+        # 在执行钓鱼前，先检查并执行周期鱼池重置（如果需要）
+        self._reset_rare_fish_pool_quota()
         
         user = self.user_repo.get_by_id(user_id)
         if not user:
@@ -331,7 +334,9 @@ class FishingService:
         rarity_distribution = strategy.get_fish_rarity_distribution(user)
         
         zone = self.inventory_repo.get_zone_by_id(user.fishing_zone_id)
-        is_rare_fish_available = zone.rare_fish_caught_today < zone.daily_rare_fish_quota
+        quota = zone.rare_fish_quota_per_cycle if zone.rare_fish_quota_per_cycle is not None else zone.daily_rare_fish_quota
+        caught = zone.rare_fish_caught_this_cycle if zone.rare_fish_caught_this_cycle is not None else zone.rare_fish_caught_today
+        is_rare_fish_available = caught < quota
         
         if not is_rare_fish_available:
             # 稀有鱼定义：4星及以上（包括5星和6+星组合）
@@ -454,7 +459,11 @@ class FishingService:
             # 如果是4星及以上稀有鱼，增加用户的稀有鱼捕获计数
             zone = self.inventory_repo.get_zone_by_id(user.fishing_zone_id)
             if zone:
-                zone.rare_fish_caught_today += 1
+                if zone.rare_fish_caught_this_cycle is not None:
+                    zone.rare_fish_caught_this_cycle += 1
+                else:
+                    zone.rare_fish_caught_this_cycle = zone.rare_fish_caught_today + 1
+                zone.rare_fish_caught_today = zone.rare_fish_caught_this_cycle  # 同步旧字段
                 self.inventory_repo.update_fishing_zone(zone)
 
         # 6. 更新数据库
@@ -641,12 +650,17 @@ class FishingService:
                 item_template = self.item_template_repo.get_item_by_id(zone.required_item_id)
                 required_item_name = item_template.name if item_template else f"道具ID{zone.required_item_id}"
             
+            quota = zone.rare_fish_quota_per_cycle if zone.rare_fish_quota_per_cycle is not None else zone.daily_rare_fish_quota
+            caught = zone.rare_fish_caught_this_cycle if zone.rare_fish_caught_this_cycle is not None else zone.rare_fish_caught_today
             zones_info.append({
                 "zone_id": zone.id,
                 "name": zone.name,
                 "description": zone.description,
-                "daily_rare_fish_quota": zone.daily_rare_fish_quota,
-                "rare_fish_caught_today": zone.rare_fish_caught_today,
+                "daily_rare_fish_quota": quota,
+                "rare_fish_caught_today": caught,
+                "rare_fish_quota_per_cycle": quota,
+                "rare_fish_caught_this_cycle": caught,
+                "rare_fish_quota_last_reset_at": zone.rare_fish_quota_last_reset_at,
                 "whether_in_use": zone.id == user.fishing_zone_id,
                 "is_active": zone.is_active,
                 "requires_pass": zone.requires_pass,
@@ -988,9 +1002,9 @@ class FishingService:
         if relocated_users:
             logger.info(f"被传送用户详情：{relocated_users}")
 
-    def _reset_rare_fish_daily_quota(self) -> bool:
+    def _reset_rare_fish_pool_quota(self) -> bool:
         """
-        检查并重置所有区域的稀有鱼每日配额计数。
+        检查并重置所有区域的稀有鱼周期配额计数。
         
         使用快速路径检查模式优化性能：
         1. 快速路径：无锁检查时间，如果不需要重置直接返回（99.9%的情况）
@@ -1000,30 +1014,37 @@ class FishingService:
             bool: 如果执行了重置返回 True，否则返回 False
         """
         # 快速路径：无锁检查，避免大多数情况下的锁竞争
-        current_reset_time = get_last_reset_time(self.daily_reset_hour)
-        if current_reset_time == self.last_reset_time:
+        current_reset_time = get_last_interval_reset_time(self.rare_fish_pool_refresh_interval_hours)
+        if current_reset_time == self.last_rare_fish_pool_reset_time:
             # 不需要重置，直接返回（99.9%的情况）
             return False
         
         # 慢速路径：可能需要重置，获取锁后再次确认（double-check pattern）
         with self.rare_fish_reset_lock:
             # 再次检查，防止在获取锁的过程中其他线程已经执行了重置
-            current_reset_time = get_last_reset_time(self.daily_reset_hour)
-            if current_reset_time != self.last_reset_time:
-                # 如果刷新时间点变了，执行每日重置任务
-                logger.info(f"检测到刷新时间点变更（每日{self.daily_reset_hour}点刷新），从 {self.last_reset_time} 到 {current_reset_time}，开始执行稀有鱼配额重置...")
-                self.last_reset_time = current_reset_time
+            current_reset_time = get_last_interval_reset_time(self.rare_fish_pool_refresh_interval_hours)
+            if current_reset_time != self.last_rare_fish_pool_reset_time:
+                # 如果刷新时间点变了，执行周期重置任务
+                interval = self.rare_fish_pool_refresh_interval_hours
+                logger.info(f"检测到周期刷新时间点变更（每{interval}小时刷新），从 {self.last_rare_fish_pool_reset_time} 到 {current_reset_time}，开始执行稀有鱼配额重置...")
+                self.last_rare_fish_pool_reset_time = current_reset_time
                 
                 # 重置所有受配额限制区域的稀有鱼计数（4星及以上）
                 all_zones = self.inventory_repo.get_all_zones()
                 reset_count = 0
+                updated_reset_time_count = 0
                 for zone in all_zones:
-                    if zone.daily_rare_fish_quota > 0:  # 只重置有配额的区域
-                        zone.rare_fish_caught_today = 0
+                    quota = zone.rare_fish_quota_per_cycle if zone.rare_fish_quota_per_cycle is not None else zone.daily_rare_fish_quota
+                    if zone.rare_fish_quota_last_reset_at != current_reset_time:
+                        zone.rare_fish_quota_last_reset_at = current_reset_time
+                        if quota > 0:
+                            zone.rare_fish_caught_this_cycle = 0
+                            zone.rare_fish_caught_today = 0  # 同步旧字段
+                            reset_count += 1
                         self.inventory_repo.update_fishing_zone(zone)
-                        reset_count += 1
+                        updated_reset_time_count += 1
                 
-                logger.info(f"稀有鱼配额重置完成，共重置 {reset_count} 个区域的计数")
+                logger.info(f"稀有鱼周期配额重置完成，共重置 {reset_count} 个区域的计数，更新 {updated_reset_time_count} 个区域的周期时间")
                 return True
         
         return False
@@ -1128,10 +1149,10 @@ class FishingService:
 
         while self.auto_fishing_running:
             try:
-                # 检查并执行每日重置（如果需要）
-                if self._reset_rare_fish_daily_quota():
-                    # 如果执行了重置，说明是新的一天，执行其他每日任务
-                    logger.info("自动钓鱼线程检测到新的一天，开始执行每日任务...")
+                # 检查并执行周期鱼池重置（如果需要）
+                if self._reset_rare_fish_pool_quota():
+                    # 如果执行了重置，说明进入新的周期
+                    logger.info("自动钓鱼线程检测到新周期，开始执行周期任务...")
                     
                     # 注意：每日税收已由独立的税收线程处理，不再在此执行
                     

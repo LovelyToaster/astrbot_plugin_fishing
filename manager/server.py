@@ -1341,9 +1341,11 @@ async def create_zone_api():
         if not data.get('name'):
             errors['name'] = '区域名称不能为空'
             
-        quota = data.get('daily_rare_fish_quota')
+        quota = data.get('rare_fish_quota_per_cycle')
+        if quota is None and 'daily_rare_fish_quota' in data:
+            quota = data.get('daily_rare_fish_quota')
         if quota is None or not str(quota).isdigit() or int(quota) < 0:
-            errors['daily_rare_fish_quota'] = '稀有鱼每日配额必须是一个非负整数'
+            errors['rare_fish_quota_per_cycle'] = '稀有鱼每周期配额必须是一个非负整数'
             
         fishing_cost = data.get('fishing_cost')
         if fishing_cost is None or not str(fishing_cost).isdigit() or int(fishing_cost) < 1:
@@ -1353,6 +1355,9 @@ async def create_zone_api():
             return jsonify({"success": False, "message": "数据校验失败", "errors": errors}), 400
         # --- End of Validation ---
 
+        # 兼容旧字段
+        if 'daily_rare_fish_quota' in data and 'rare_fish_quota_per_cycle' not in data:
+            data['rare_fish_quota_per_cycle'] = data['daily_rare_fish_quota']
         new_zone = fishing_zone_service.create_zone(data)
         # create_zone 已返回字典，直接返回
         return jsonify({"success": True, "message": "钓鱼区域创建成功", "zone": new_zone})
@@ -1375,9 +1380,11 @@ async def update_zone_api(zone_id):
         if not data.get('name'):
             errors['name'] = '区域名称不能为空'
             
-        quota = data.get('daily_rare_fish_quota')
+        quota = data.get('rare_fish_quota_per_cycle')
+        if quota is None and 'daily_rare_fish_quota' in data:
+            quota = data.get('daily_rare_fish_quota')
         if quota is None or not str(quota).isdigit() or int(quota) < 0:
-            errors['daily_rare_fish_quota'] = '稀有鱼每日配额必须是一个非负整数'
+            errors['rare_fish_quota_per_cycle'] = '稀有鱼每周期配额必须是一个非负整数'
             
         fishing_cost = data.get('fishing_cost')
         if fishing_cost is None or not str(fishing_cost).isdigit() or int(fishing_cost) < 1:
@@ -1387,6 +1394,9 @@ async def update_zone_api(zone_id):
             return jsonify({"success": False, "message": "数据校验失败", "errors": errors}), 400
         # --- End of Validation ---
 
+        # 兼容旧字段
+        if 'daily_rare_fish_quota' in data and 'rare_fish_quota_per_cycle' not in data:
+            data['rare_fish_quota_per_cycle'] = data['daily_rare_fish_quota']
         fishing_zone_service.update_zone(zone_id, data)
         # 前端会刷新页面，这里不必返回完整对象
         return jsonify({"success": True, "message": "钓鱼区域更新成功"})

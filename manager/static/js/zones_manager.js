@@ -106,8 +106,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
                 <div class="row">
                     <div class="col-md-4 mb-3">
-                        <label for="daily_rare_fish_quota" class="form-label">稀有鱼每日配额</label>
-                        <input type="number" class="form-control" name="daily_rare_fish_quota" value="${zone?.daily_rare_fish_quota || 0}">
+                        <label for="rare_fish_quota_per_cycle" class="form-label">稀有鱼每周期配额</label>
+                        <input type="number" class="form-control" name="rare_fish_quota_per_cycle" value="${zone?.rare_fish_quota_per_cycle ?? zone?.daily_rare_fish_quota ?? 0}">
                     </div>
                     <div class="col-md-4 mb-3">
                         <label for="fishing_cost" class="form-label">钓鱼消耗 (金币)</label>
@@ -582,7 +582,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Data processing
             payload.id = parseInt(payload.id);
-            payload.daily_rare_fish_quota = parseInt(payload.daily_rare_fish_quota) || 0;
+            payload.rare_fish_quota_per_cycle = parseInt(payload.rare_fish_quota_per_cycle) || 0;
             payload.fishing_cost = parseInt(payload.fishing_cost) || 10;
             payload.is_active = form.querySelector('input[name="is_active"]').checked;
             if (!form.querySelector('input[name="limit_time"]').checked) {

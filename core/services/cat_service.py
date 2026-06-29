@@ -55,6 +55,7 @@ class CatService:
         self._decay_thread: Optional[threading.Thread] = None
         self._decay_running = False
         self._decay_interval = config.get("cat", {}).get("decay_interval_minutes", 30)
+        self._fishing_service: Any = None  # 将在外部设置，用于触发周期鱼池刷新
 
     def adopt_cat(self, user_id: str, nickname: Optional[str] = None) -> Dict[str, Any]:
         user = self.user_repo.get_by_id(user_id)
@@ -909,6 +910,12 @@ class CatService:
 
     def _roll_fish_by_zone(self, user_id: str) -> Optional[Any]:
         """根据用户当前钓鱼区域的稀有度分布随机获取一条鱼"""
+        # 触发周期鱼池刷新检查，避免跨周期后仍用旧计数
+        if self._fishing_service and hasattr(self._fishing_service, '_reset_rare_fish_pool_quota'):
+            try:
+                self._fishing_service._reset_rare_fish_pool_quota()
+            except Exception:
+                pass
         user = self.user_repo.get_by_id(user_id)
         if not user:
             return None
@@ -924,7 +931,9 @@ class CatService:
             rarity_dist.append(0.0)
         rarity_dist = rarity_dist[:6]
 
-        is_rare_fish_available = zone.rare_fish_caught_today < zone.daily_rare_fish_quota
+        quota = zone.rare_fish_quota_per_cycle if zone.rare_fish_quota_per_cycle is not None else zone.daily_rare_fish_quota
+        caught = zone.rare_fish_caught_this_cycle if zone.rare_fish_caught_this_cycle is not None else zone.rare_fish_caught_today
+        is_rare_fish_available = caught < quota
 
         if not is_rare_fish_available:
             if len(rarity_dist) >= 4:
@@ -948,7 +957,11 @@ class CatService:
 
         fish = self._select_fish_by_rarity(rarity)
         if fish and is_rare_fish_available and rarity >= 4:
-            zone.rare_fish_caught_today += 1
+            if zone.rare_fish_caught_this_cycle is not None:
+                zone.rare_fish_caught_this_cycle += 1
+            else:
+                zone.rare_fish_caught_this_cycle = zone.rare_fish_caught_today + 1
+            zone.rare_fish_caught_today = zone.rare_fish_caught_this_cycle  # 同步旧字段
             self.inventory_repo.update_fishing_zone(zone)
         return fish
 

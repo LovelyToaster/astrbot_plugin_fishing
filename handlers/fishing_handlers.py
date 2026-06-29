@@ -145,11 +145,15 @@ class FishingHandlers:
                     elif zone.get("available_until"):
                         until_time = zone["available_until"].strftime("%Y-%m-%d %H:%M")
                         message += f"至 {until_time} 结束\n"
-                remaining_rare = max(
-                    0, zone["daily_rare_fish_quota"] - zone["rare_fish_caught_today"]
-                )
-                if zone.get("daily_rare_fish_quota", 0) > 0:
-                    message += f"剩余稀有鱼类数量: {remaining_rare}\n"
+                quota = zone.get("rare_fish_quota_per_cycle")
+                if quota is None:
+                    quota = zone.get("daily_rare_fish_quota", 0)
+                caught = zone.get("rare_fish_caught_this_cycle")
+                if caught is None:
+                    caught = zone.get("rare_fish_caught_today", 0)
+                remaining_rare = max(0, quota - caught)
+                if quota > 0:
+                    message += f"本周期剩余稀有鱼类数量: {remaining_rare}/{quota}\n"
                 message += "\n"
             message += "使用「/钓鱼区域 ID」命令切换钓鱼区域。\n"
             yield event.plain_result(message)
