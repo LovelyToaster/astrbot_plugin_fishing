@@ -1177,8 +1177,6 @@ class GameMechanicsService:
             thief_id, "SHADOW_CLOAK_BUFF"
         )
         
-        shield_broken = False  # 标志：本次攻击是否打破了盾
-        
         if protection_buff:
             prot_payload = json.loads(protection_buff.payload or "{}")
             current_layers = prot_payload.get("layers", 1)
@@ -1504,60 +1502,34 @@ class GameMechanicsService:
         thief.last_electric_fish_time = now
         self.user_repo.update(thief)
     
-        # ========== 盾破后配额计数与恢复 ==========
+        # ========== 电鱼成功后守护海灵立即恢复 ==========
         shield_recovery_msg = ""
         if protection_buff:
             prot_payload = json.loads(protection_buff.payload or "{}")
             current_layers = prot_payload.get("layers", 0)
             
             if current_layers == 0:
-                # 盾破状态，计数 +1
+                # 电鱼成功后直接恢复满层，不累计配额
                 max_layers = prot_payload.get("max_layers", 2)
                 resist_chance = prot_payload.get("resist_chance", 0.05)
                 break_threshold = prot_payload.get("break_threshold", 3)
-                broken_steals = prot_payload.get("broken_steals", 0) + 1
-                
-                if broken_steals >= break_threshold:
-                    # 配额用完，恢复满层
-                    new_payload = json.dumps({
-                        "layers": max_layers,
-                        "max_layers": max_layers,
-                        "resist_chance": resist_chance,
-                        "break_threshold": break_threshold,
-                        "broken_steals": 0,
-                    })
-                    old_payload_str = protection_buff.payload
-                    updated = self.buff_repo.update_payload_if_match(
-                        protection_buff.id, old_payload_str, new_payload, protection_buff.expires_at
-                    )
-                    if not updated:
-                        # 并发冲突，退化为普通更新（数据最终一致）
-                        protection_buff.payload = new_payload
-                        self.buff_repo.update(protection_buff)
-                    shield_recovery_msg = "\n🛡️ 守护海灵恢复了力量！鱼塘重新被守护。"
-                else:
-                    # 更新 broken_steals
-                    new_payload = json.dumps({
-                        "layers": 0,
-                        "max_layers": max_layers,
-                        "resist_chance": resist_chance,
-                        "break_threshold": break_threshold,
-                        "broken_steals": broken_steals,
-                    })
-                    old_payload_str = protection_buff.payload
-                    updated = self.buff_repo.update_payload_if_match(
-                        protection_buff.id, old_payload_str, new_payload, protection_buff.expires_at
-                    )
-                    if not updated:
-                        # 并发冲突，退化为普通更新（数据最终一致）
-                        protection_buff.payload = new_payload
-                        self.buff_repo.update(protection_buff)
-                    remaining = break_threshold - broken_steals
-                    shield_recovery_msg = f"\n💥 守护海灵护盾已碎！还可偷 {remaining} 次后恢复。"
-            elif shield_broken:
-                # 刚破盾的情况（本次穿透成功减层至0），无需额外计数
-                pass
-        # ========== 盾破计数结束（electric_fish）==========
+                new_payload = json.dumps({
+                    "layers": max_layers,
+                    "max_layers": max_layers,
+                    "resist_chance": resist_chance,
+                    "break_threshold": break_threshold,
+                    "broken_steals": 0,
+                })
+                old_payload_str = protection_buff.payload
+                updated = self.buff_repo.update_payload_if_match(
+                    protection_buff.id, old_payload_str, new_payload, protection_buff.expires_at
+                )
+                if not updated:
+                    # 并发冲突，退化为普通更新（数据最终一致）
+                    protection_buff.payload = new_payload
+                    self.buff_repo.update(protection_buff)
+                shield_recovery_msg = "\n🛡️ 守护海灵护盾立即恢复！"
+        # ========== 电鱼后守护海灵恢复结束 ==========
     
         # 11. 生成成功消息
         stolen_details = "、".join(stolen_summary)
