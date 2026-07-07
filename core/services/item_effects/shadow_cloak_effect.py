@@ -23,7 +23,7 @@ class ShadowCloakEffect(AbstractItemEffect):
             # 解析已有 payload，兼容旧格式（空 payload 或无 charges 字段默认 1）
             existing_payload = json.loads(existing_buff.payload or "{}")
             current_charges = existing_payload.get("charges", 1)
-            new_charges = current_charges + 1
+            new_charges = current_charges + quantity
             existing_buff.payload = json.dumps({"charges": new_charges})
             self.buff_repo.update(existing_buff)
             message = f"🌑 暗影斗篷的力量已叠加！当前共 {new_charges} 次反制机会！"
@@ -34,11 +34,11 @@ class ShadowCloakEffect(AbstractItemEffect):
                 id=0,
                 user_id=user.user_id,
                 buff_type=self.effect_type,
-                payload=json.dumps({"charges": 1}),
+                payload=json.dumps({"charges": quantity}),
                 started_at=now,
                 expires_at=None,  # 无限时间
             )
             self.buff_repo.add(new_buff)
-            message = f"🌑 暗影斗篷激活！你获得了 1 次无视海灵守护的反制机会！"
+            message = f"🌑 暗影斗篷激活！你获得了 {quantity} 次无视海灵守护的反制机会！"
             
         return {"success": True, "message": message}
