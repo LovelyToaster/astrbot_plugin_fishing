@@ -95,40 +95,55 @@ class FishingZoneService:
         self.config = config
         self.strategies = self._load_strategies()
 
+    def _create_strategy(self, zone) -> FishingZoneStrategy:
+        """根据区域实体构造对应的稀有度分布策略。"""
+        # 确保限定鱼列表已就位，供策略/后续抽取使用
+        if getattr(zone, "specific_fish_ids", None) is None:
+            zone.specific_fish_ids = self.inventory_repo.get_specific_fish_ids_for_zone(zone.id)
+
+        zone_config = zone.configs if zone.configs else {}
+        if zone.id == 1:
+            return Zone1Strategy(self.item_template_repo, self.config, zone_config)
+        elif zone.id == 2:
+            return Zone2Strategy(self.item_template_repo, self.config, zone_config)
+        elif zone.id == 3:
+            return Zone3Strategy(self.item_template_repo, self.config, zone_config)
+        else:
+            # 对于自定义区域（ID > 3），使用专门的自定义策略
+            return CustomZoneStrategy(self.item_template_repo, self.config, zone_config)
+
     def _load_strategies(self) -> Dict[int, FishingZoneStrategy]:
+        # 注意：这里不再按 available_from/available_until 过滤区域。
+        # 时间窗口的准入判断交由 FishingService.go_fish 在运行时处理，
+        # 避免策略缓存在启动时被冻结（时间限定区域开放后仍拿不到自身分布，
+        # 从而静默回退到区域1的分布，导致 5★/6★+ 稀有鱼永远无法钓获）。
         zones = self.inventory_repo.get_all_zones()
         strategies = {}
         for zone in zones:
             if not zone.is_active:
                 continue
-
-            from ..utils import get_now
-            now = get_now()
-            if zone.available_from and now < zone.available_from:
-                continue
-            if zone.available_until and now > zone.available_until:
-                continue
-            
             zone.specific_fish_ids = self.inventory_repo.get_specific_fish_ids_for_zone(zone.id)
-            
-            zone_config = zone.configs if zone.configs else {}
-            if zone.id == 1:
-                strategies[zone.id] = Zone1Strategy(self.item_template_repo, self.config, zone_config)
-            elif zone.id == 2:
-                strategies[zone.id] = Zone2Strategy(self.item_template_repo, self.config, zone_config)
-            elif zone.id == 3:
-                strategies[zone.id] = Zone3Strategy(self.item_template_repo, self.config, zone_config)
-            else:
-                # 对于自定义区域（ID > 3），使用专门的自定义策略
-                strategies[zone.id] = CustomZoneStrategy(self.item_template_repo, self.config, zone_config)
+            strategies[zone.id] = self._create_strategy(zone)
         return strategies
 
     def get_strategy(self, zone_id: int) -> FishingZoneStrategy:
         strategy = self.strategies.get(zone_id)
-        if not strategy:
-            # 默认返回区域1的策略
-            return self.strategies.get(1)
-        return strategy
+        if strategy:
+            return strategy
+
+        # 缓存未命中：不再静默回退到区域1（会用错分布），
+        # 而是按该区域自身配置现场构造策略并缓存。
+        try:
+            zone = self.inventory_repo.get_zone_by_id(zone_id)
+        except Exception:
+            zone = None
+        if zone is not None:
+            strategy = self._create_strategy(zone)
+            self.strategies[zone_id] = strategy
+            return strategy
+
+        # 区域确实不存在时，才退回到区域1作为兜底
+        return self.strategies.get(1)
 
     def get_all_zones(self) -> List[Dict[str, Any]]:
         zones = self.inventory_repo.get_all_zones()
