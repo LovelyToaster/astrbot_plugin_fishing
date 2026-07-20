@@ -268,6 +268,12 @@ class User:
     deep_sea_attempts_today: int = 0
     last_deep_sea_date: Optional[str] = None # YYYY-MM-DD 格式
 
+    # --- 新增：AI 玩家标志 ---
+    is_ai: bool = False
+
+    # --- 新增：系统账户标志（如银行托管、市场托管等，AI 选目标时跳过）---
+    is_system: bool = False
+
     def can_afford(self, cost: int) -> bool:
         """判断用户金币是否足够"""
         return self.coins >= cost
@@ -721,3 +727,30 @@ class DeepSeaAdventure:
     horizontal_range: int = 0  # 水平边界限制，0=无限制
     premium_currency_earned: int = 0  # 本局已获得高级货币
     premium_currency_cap: int = 0  # 本局高级货币上限，0=无上限
+
+
+@dataclass
+class AIPlayerState:
+    """AI 玩家状态：持久化节流/惩罚时间戳，防止重启后滥用"""
+    user_id: str
+    last_sell_fish_ts: float = 0.0
+    last_sell_equipment_ts: float = 0.0
+    last_paid_gacha_ts: float = 0.0
+    last_free_gacha_date: str = ""
+
+
+@dataclass
+class AIDecisionSnapshot:
+    """AI 决策快照：记录每次决策的目标特征、预测概率与执行结果，供离线训练使用"""
+    action_type: str
+    features_json: str
+    id: Optional[int] = None
+    ai_user_id: str = ""
+    target_user_id: Optional[str] = None
+    predicted_prob: Optional[float] = None
+    executed: int = 0
+    success: Optional[int] = None
+    fail_reason: Optional[str] = None
+    reward_value: Optional[int] = None
+    created_at: Optional[str] = None
+    completed_at: Optional[str] = None

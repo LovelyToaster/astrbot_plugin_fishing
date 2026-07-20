@@ -26,6 +26,8 @@ from .core.repositories.sqlite_bank_repo import SqliteBankRepository
 from .core.repositories.sqlite_cat_repo import SQLiteCatRepository
 from .core.repositories.sqlite_notification_repo import SqliteNotificationRepository
 from .core.repositories.sqlite_statistics_repo import SqliteStatisticsRepository
+from .core.repositories.sqlite_ai_state_repo import SqliteAIPlayerStateRepository
+from .core.repositories.sqlite_ai_snapshot_repo import SqliteAIDecisionSnapshotRepository
 from .core.services.statistics_service import StatisticsService
 
 from .core.services.data_setup_service import DataSetupService
@@ -49,6 +51,9 @@ from .core.services.fish_weight_service import FishWeightService
 from .core.services.cat_service import CatService
 from .core.services.blackjack_service import BlackjackService
 from .core.services.slot_service import SlotService
+
+from .core.services.ai_player_service import AIPlayerService
+from .core.services.ai.feature_extractor import FeatureExtractor
 
 from .handlers.deep_sea_handlers import (
     deep_sea_start,
@@ -95,6 +100,7 @@ class FishingPlugin(Star):
 
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
+        self._main_loop = asyncio.get_event_loop()
         self.config = config
 
         # --- 1. 加载配置 ---
@@ -248,6 +254,7 @@ class FishingPlugin(Star):
             "sicbo": config.get("sicbo", {}),  # 骰宝配置
             "blackjack": config.get("blackjack", {}),  # 21点配置
             "slot": config.get("slot", {}),  # 拉杆机配置
+            "ai_player": config.get("ai_player", {}),  # AI 玩家配置
         }
         
         # 初始化数据库模式
@@ -271,6 +278,11 @@ class FishingPlugin(Star):
 
         # 统计仓储（必须在所有使用它的服务之前初始化）
         self.statistics_repo = SqliteStatisticsRepository(db_path)
+
+        # AI 玩家状态仓储
+        self.ai_state_repo = SqliteAIPlayerStateRepository(db_path)
+        # AI 决策快照仓储（供离线训练使用）
+        self.ai_snapshot_repo = SqliteAIDecisionSnapshotRepository(db_path)
 
         # --- 3. 组合根：实例化所有服务层，并注入依赖 ---
         # 3.1 核心服务必须在效果管理器之前实例化，以解决依赖问题
@@ -476,6 +488,29 @@ class FishingPlugin(Star):
         # --- 6. (临时) 实例化数据服务，供调试命令使用 ---
         self.data_setup_service = data_setup_service
 
+        # --- 6.1. 初始化 AI 玩家服务 ---
+        ai_feature_extractor = FeatureExtractor(db_path)
+        self.ai_player_service = AIPlayerService(
+            user_repo=self.user_repo,
+            inventory_repo=self.inventory_repo,
+            item_template_repo=self.item_template_repo,
+            user_service=self.user_service,
+            fishing_service=self.fishing_service,
+            game_mechanics_service=self.game_mechanics_service,
+            inventory_service=self.inventory_service,
+            gacha_service=self.gacha_service,
+            ai_state_repo=self.ai_state_repo,
+            snapshot_repo=self.ai_snapshot_repo,
+            feature_extractor=ai_feature_extractor,
+            statistics_repo=self.statistics_repo,
+            config=self.game_config,
+            broadcast_callback=self._ai_broadcast_sync,
+        )
+        ai_cfg = self.game_config.get("ai_player", {})
+        if ai_cfg.get("enabled", False):
+            self.ai_player_service.ensure_ai_user_exists()
+            self.ai_player_service.start_ai_loop()
+
         # --- Web后台配置 ---
         self.web_admin_task = None
         webui_config = config.get("webui", {})
@@ -647,6 +682,29 @@ class FishingPlugin(Star):
         except Exception as e:
             logger.error(f"主动发送消息时发生错误: {e}")
             return False
+
+    def _ai_broadcast_sync(self, message: str) -> None:
+        """同步桥接方法：将 AI 广播消息通过事件循环发送到指定群。"""
+        try:
+            ai_cfg = self.game_config.get("ai_player", {})
+            if not ai_cfg.get("broadcast_enabled", False):
+                return
+            group_id = ai_cfg.get("broadcast_group_id", "").strip()
+            if not group_id:
+                return
+            platform = ai_cfg.get("broadcast_platform", "aiocqhttp")
+            umo = f"{platform}:GroupMessage:{group_id}"
+            session_info = {"unified_msg_origin": umo}
+            loop = getattr(self, "_main_loop", None)
+            if loop is None or not loop.is_running():
+                logger.debug("事件循环未运行，跳过 AI 广播")
+                return
+            asyncio.run_coroutine_threadsafe(
+                self._send_initiative_message(session_info, message),
+                loop,
+            )
+        except Exception:
+            logger.debug("提交 AI 广播任务失败", exc_info=True)
 
     async def _send_blackjack_announcement(self, session_info: dict, result_data: dict):
         """发送21点游戏结果公告"""
@@ -1969,6 +2027,10 @@ class FishingPlugin(Star):
         self.exchange_service.stop_daily_price_update_task() # 终止交易所后台任务
         self.bank_service.stop_interest_settlement_task()  # 终止银行利息结算任务
         self.cat_service.stop_cat_decay_task()  # 终止猫咪属性衰减任务
+
+        # 终止 AI 玩家循环
+        if hasattr(self, 'ai_player_service') and self.ai_player_service:
+            self.ai_player_service.stop_ai_loop()
 
         # 取消红包清理任务
         if hasattr(self, '_red_packet_cleanup_task') and self._red_packet_cleanup_task:

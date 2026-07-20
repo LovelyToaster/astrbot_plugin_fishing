@@ -716,5 +716,159 @@
         "default": 80
       }
     }
+  },
+  "ai_player": {
+    "description": "AI 玩家系统配置",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用 AI 玩家",
+        "type": "bool",
+        "hint": "是否启用 AI 玩家系统",
+        "default": false
+      },
+      "user_id": {
+        "description": "AI 玩家 user_id",
+        "type": "string",
+        "hint": "AI 玩家的唯一标识",
+        "default": "AI_FISHER_001"
+      },
+      "nickname": {
+        "description": "AI 玩家昵称",
+        "type": "string",
+        "hint": "AI 玩家的显示昵称",
+        "default": "钓鱼机器人小蓝"
+      },
+      "tick_seconds": {
+        "description": "决策循环间隔（秒）",
+        "type": "int",
+        "hint": "AI 玩家每次决策之间的间隔时间，默认 600 秒（10 分钟）",
+        "default": 600
+      },
+      "initial_coins": {
+        "description": "AI 玩家初始金币",
+        "type": "int",
+        "hint": "AI 玩家创建时获得的金币数量",
+        "default": 10000
+      },
+      "pond_full_threshold": {
+        "description": "鱼塘满仓卖鱼阈值（0-1）",
+        "type": "float",
+        "hint": "鱼塘容量达到此比例时触发自动卖鱼",
+        "default": 0.5,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "sell_min_interval_seconds": {
+        "description": "两次卖鱼最小间隔（秒）",
+        "type": "int",
+        "hint": "两次自动卖鱼之间的最小时间间隔",
+        "default": 1800
+      },
+      "gacha_enabled": {
+        "description": "启用自动抽卡",
+        "type": "bool",
+        "hint": "是否允许 AI 玩家自动抽卡",
+        "default": true
+      },
+      "gacha_paid_interval_seconds": {
+        "description": "金币池抽卡最小间隔（秒）",
+        "type": "int",
+        "hint": "两次金币抽卡之间的最小时间间隔",
+        "default": 3600
+      },
+      "gacha_spending_ratio": {
+        "description": "单次抽卡消耗占当前金币的最大比例（0-1）",
+        "type": "float",
+        "hint": "单次抽卡最多消耗当前金币的此比例",
+        "default": 0.05,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "repair_enabled": {
+        "description": "允许 AI 自动修复鱼竿",
+        "type": "bool",
+        "hint": "耐久降到一半时自动修复鱼竿",
+        "default": true
+      },
+      "refine_enabled": {
+        "description": "允许 AI 自动精炼装备",
+        "type": "bool",
+        "hint": "是否允许 AI 自动精炼装备",
+        "default": true
+      },
+      "refine_reserve_coins": {
+        "description": "精炼储备金门槛（金币低于此值不精炼）",
+        "type": "int",
+        "hint": "精炼装备的预算闸门，金币低于此值时 AI 不会精炼，避免耗尽资金",
+        "default": 200000
+      },
+      "gacha_ten_pull_enabled": {
+        "description": "允许 AI 进行十连抽卡",
+        "type": "bool",
+        "hint": "是否允许 AI 进行十连抽卡",
+        "default": true
+      },
+      "gacha_ten_pull_multiplier": {
+        "description": "十连预算倍率",
+        "type": "float",
+        "hint": "十连最多花 当前金币×单次花费比例×此倍率",
+        "default": 5,
+        "min": 1
+      },
+      "broadcast_enabled": {
+        "description": "启用行为广播到指定群",
+        "type": "bool",
+        "hint": "开启后 AI 的重要行为会推送到下方群号",
+        "default": false
+      },
+      "broadcast_group_id": {
+        "description": "接收 AI 广播的群号",
+        "type": "string",
+        "hint": "留空则不推送。仅支持 1 个群号。",
+        "default": ""
+      },
+      "broadcast_platform": {
+        "description": "广播平台名称",
+        "type": "string",
+        "hint": "默认 aiocqhttp。除非使用其他平台否则无需修改",
+        "default": "aiocqhttp"
+      },
+
+      "electric_min_target_fish_count": {
+        "description": "电鱼规则：目标鱼塘至少需要多少条鱼",
+        "type": "int",
+        "hint": "候选目标的 target_fish_count 低于此值将被过滤。默认 100（避免电空鱼塘）",
+        "default": 100,
+        "min": 0
+      },
+      "steal_min_target_fish_count": {
+        "description": "偷鱼规则：目标鱼塘至少需要多少条鱼",
+        "type": "int",
+        "hint": "偷鱼每次仅偷 1 条，默认 1 表示有鱼就偷",
+        "default": 1,
+        "min": 0
+      },
+      "zone_switch_enabled": {
+        "description": "允许 AI 自动切换钓鱼区域",
+        "type": "bool",
+        "hint": "AI 根据金币余额自动从低收益区域切换到高收益区域",
+        "default": true
+      },
+      "zone_upgrade_threshold_multiplier": {
+        "description": "升级阈值：金币 ≥ 目标区域消耗 × 此值",
+        "type": "int",
+        "hint": "AI 金币达到目标区域钓鱼消耗的此倍数时，切换过去。默认 200 表示在目标区域可钓 200 次",
+        "default": 200,
+        "min": 1
+      },
+      "zone_downgrade_threshold_multiplier": {
+        "description": "降级阈值：金币 < 当前区域消耗 × 此值 时降级",
+        "type": "int",
+        "hint": "AI 金币低于当前区域消耗的此倍数时，退回到便宜区域。默认 20 表示剩余不足 20 次钓鱼时退回",
+        "default": 20,
+        "min": 1
+      }
+    }
   }
 }

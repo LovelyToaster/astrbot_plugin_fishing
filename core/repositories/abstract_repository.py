@@ -12,7 +12,8 @@ from ..domain.models import (
     GachaPool, GachaPoolItem, UserGachaPity, FishingZone, UserBuff, AquariumUpgrade,
     ShopOffer, ShopOfferCost, ShopOfferReward,
     Commodity, Exchange, UserCommodity,
-    CatTemplate, UserCatInstance, CatDisease, UserCatDisease, UserCatEventRecord
+    CatTemplate, UserCatInstance, CatDisease, UserCatDisease, UserCatEventRecord,
+    AIPlayerState, AIDecisionSnapshot,
 )
 
 # 定义用户成就进度的数据结构
@@ -75,6 +76,10 @@ class AbstractUserRepository(ABC):
     # 删除用户
     @abstractmethod
     def delete_user(self, user_id: str) -> bool: pass
+
+    # 随机获取一个活跃的真人用户
+    @abstractmethod
+    def get_random_active_human(self, exclude_ids: list = None) -> Optional[User]: pass
 
 class AbstractItemTemplateRepository(ABC):
     """物品模板数据仓储接口"""
@@ -826,4 +831,51 @@ class AbstractShopRepository(ABC):
     @abstractmethod
     def get_offer_by_id(self, offer_id: int) -> Optional[Dict[str, Any]]:
         """根据ID获取商品（兼容旧接口）"""
+        pass
+
+
+class AbstractAIPlayerStateRepository(ABC):
+    """AI 玩家状态仓储接口"""
+
+    @abstractmethod
+    def get_or_create(self, user_id: str) -> AIPlayerState:
+        """获取 AI 用户状态，不存在则创建默认行并返回"""
+        pass
+
+    @abstractmethod
+    def update_field(self, user_id: str, field: str, value) -> None:
+        """更新 AI 用户状态的单个字段（白名单校验字段名防注入）"""
+        pass
+
+
+class AbstractAIDecisionSnapshotRepository(ABC):
+    """AI 决策快照仓储接口"""
+
+    @abstractmethod
+    def create(
+        self,
+        ai_user_id: str,
+        action_type: str,
+        target_user_id: Optional[str],
+        features_json: str,
+        predicted_prob: Optional[float],
+    ) -> int:
+        """
+        创建决策快照，返回自增 id。
+        决策前调用，此时尚未执行动作。
+        """
+        pass
+
+    @abstractmethod
+    def complete(
+        self,
+        snapshot_id: int,
+        executed: int,
+        success: Optional[int],
+        fail_reason: Optional[str],
+        reward_value: Optional[int],
+    ) -> None:
+        """
+        回填决策执行结果。动作后调用。
+        """
         pass

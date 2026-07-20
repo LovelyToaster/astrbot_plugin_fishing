@@ -136,8 +136,9 @@ class InventoryService:
                 enriched_rods.append({
                     "name": rod_template.name,
                     "rarity": rod_template.rarity,
-                    "instance_id": rod_instance.rod_instance_id,
-                    "display_code": getattr(rod_instance, 'display_code', f"R{self._to_base36(rod_instance.rod_instance_id)}"),
+                "instance_id": rod_instance.rod_instance_id,
+                "rod_id": rod_instance.rod_id,
+                "display_code": getattr(rod_instance, 'display_code', f"R{self._to_base36(rod_instance.rod_instance_id)}"),
                     "description": rod_template.description,
                     "is_equipped": rod_instance.is_equipped,
                     "is_locked": rod_instance.is_locked,
@@ -197,8 +198,9 @@ class InventoryService:
                 enriched_accessories.append({
                     "name": accessory_template.name,
                     "rarity": accessory_template.rarity,
-                    "instance_id": accessory_instance.accessory_instance_id,
-                    "display_code": getattr(accessory_instance, 'display_code', f"A{self._to_base36(accessory_instance.accessory_instance_id)}"),
+                "instance_id": accessory_instance.accessory_instance_id,
+                "accessory_id": accessory_instance.accessory_id,
+                "display_code": getattr(accessory_instance, 'display_code', f"A{self._to_base36(accessory_instance.accessory_instance_id)}"),
                     "description": accessory_template.description,
                     "is_equipped": accessory_instance.is_equipped,
                     "is_locked": accessory_instance.is_locked,

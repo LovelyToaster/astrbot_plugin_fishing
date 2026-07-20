@@ -110,6 +110,12 @@ class SqliteUserRepository(AbstractUserRepository):
             
             # --- [新功能] 添加交易所账户状态字段的读取 ---
             exchange_account_status=bool(row["exchange_account_status"]) if "exchange_account_status" in row_keys else False,
+            
+            # --- [新功能] 添加 AI 玩家标志字段的读取 ---
+            is_ai=bool(row["is_ai"]) if "is_ai" in row_keys else False,
+
+            # --- [新功能] 添加系统账户标志字段的读取 ---
+            is_system=bool(row["is_system"]) if "is_system" in row_keys else False,
         )
 
     def get_by_id(self, user_id: str) -> Optional[User]:
@@ -206,6 +212,32 @@ class SqliteUserRepository(AbstractUserRepository):
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM users WHERE coins >= ?", (threshold,))
             return [self._row_to_user(row) for row in cursor.fetchall()]
+
+    def get_random_active_human(self, exclude_ids: list = None) -> Optional[User]:
+        """
+        随机获取一个活跃的真人用户（is_ai=0 且 is_system=0），排除指定 ID 列表。
+
+        Args:
+            exclude_ids: 需要排除的用户 ID 列表，默认为 None
+
+        Returns:
+            随机真人用户，若没有符合条件的用户则返回 None
+        """
+        base_where = "is_ai = 0 AND is_system = 0"
+
+        if exclude_ids:
+            placeholders = ", ".join(["?"] * len(exclude_ids))
+            sql = f"SELECT * FROM users WHERE {base_where} AND user_id NOT IN ({placeholders}) ORDER BY RANDOM() LIMIT 1"
+            params = exclude_ids
+        else:
+            sql = f"SELECT * FROM users WHERE {base_where} ORDER BY RANDOM() LIMIT 1"
+            params = ()
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            row = cursor.fetchone()
+            return self._row_to_user(row)
     
     # 其他辅助方法保持不变...
     def get_all_users(self, limit: int = 100, offset: int = 0) -> List[User]:

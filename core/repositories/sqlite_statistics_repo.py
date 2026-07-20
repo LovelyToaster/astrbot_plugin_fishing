@@ -182,3 +182,77 @@ class SqliteStatisticsRepository:
         except Exception as e:
             logger.error(f"[统计] 查询排行榜失败: {e}")
             return []
+
+    # ==================== AI 决策辅助 ====================
+
+    def get_top_attacker_of(
+        self,
+        target_id: str,
+        action_type: str,
+        hours: int = 24,
+    ) -> Optional[str]:
+        """
+        查过去 N 小时内对某目标施暴（同动作类型）次数最多的攻击者 user_id。
+        无攻击记录返回 None；异常返回 None 并记 debug。
+        不区分 success（失败也算"有意图"）。
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT user_id
+                FROM statistics_logs
+                WHERE target_id = ?
+                  AND action_type = ?
+                  AND created_at >= datetime('now', ?)
+                GROUP BY user_id
+                ORDER BY COUNT(*) DESC
+                LIMIT 1
+                """,
+                (target_id, action_type, f"-{int(hours)} hours"),
+            )
+            row = cursor.fetchone()
+            return row["user_id"] if row else None
+        except Exception as e:
+            logger.debug(f"[统计] get_top_attacker_of 查询失败: {e}")
+            return None
+
+    def get_top_actor(
+        self,
+        action_type: str,
+        hours: int = 24,
+        exclude_user_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        查过去 N 小时内该动作类型总次数最多的发起者 user_id（不区分目标）。
+
+        默认排除 SYSTEM；可通过 exclude_user_id 排除 AI 自己，避免 AI 把自己的
+        行为算作"最活跃玩家"，导致加权决策的 B 头名（30% 权重）失效。
+        无记录返回 None；异常返回 None 并记 debug。
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            params: List[Any] = [action_type, f"-{int(hours)} hours"]
+            sql = """
+                SELECT user_id
+                FROM statistics_logs
+                WHERE action_type = ?
+                  AND created_at >= datetime('now', ?)
+                  AND user_id <> 'SYSTEM'
+            """
+            if exclude_user_id is not None:
+                sql += " AND user_id <> ?"
+                params.append(exclude_user_id)
+            sql += """
+                GROUP BY user_id
+                ORDER BY COUNT(*) DESC
+                LIMIT 1
+            """
+            cursor.execute(sql, params)
+            row = cursor.fetchone()
+            return row["user_id"] if row else None
+        except Exception as e:
+            logger.debug(f"[统计] get_top_actor 查询失败: {e}")
+            return None
