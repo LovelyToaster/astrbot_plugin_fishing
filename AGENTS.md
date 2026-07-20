@@ -115,6 +115,24 @@ tar czf - <文件1> <文件2> ... | ssh -i ./astrbot_fishing VerdantGem@10.0.0.4
 - **数据存储**: `core/repositories/sqlite_notification_repo.py`，迁移脚本 `047_add_notification_system.py`。
 - **通知类型**: `steal`（偷鱼）、`electric_fish`（电鱼），详情以 JSON 存储在 `details` 字段。
 
+### AI 玩家系统 (`AIPlayerService`)
+- **定位**: 1 个由后台守护线程驱动的 AI 玩家账号，完全参与经济系统（上排行榜、缴税、被通知、可被反偷）。
+- **区分标记**: `User.is_ai` 字段（迁移脚本 `050_add_ai_player_flag.py`），目前仅用于「AI 选择偷/电目标时排除自己和其他 AI」。
+- **默认关闭**: `_conf_schema.json` 的 `ai_player.enabled=false`，需在管理后台手动启用。
+- **决策循环**: 默认每 300 秒一 tick，依次执行 8 个动作（不 short-circuit），每个动作有独立节流：
+  1. 装备最优鱼竿（幂等，按 rarity → refine_level 排序）
+  2. 装备最优饰品（幂等）
+  3. 使用最优鱼饵（无饵或过期时触发）
+  4. 卖鱼（30 分钟最小间隔 + 鱼塘 ≥ 80%）
+  5. 卖多余装备（30 分钟最小间隔，`sell_all_rods` / `sell_all_accessories` 自动跳过装备中和上锁的）
+  6. 偷鱼（依赖真人 `last_steal_time` 冷却）
+  7. 电鱼（依赖真人 `last_electric_fish_time` 冷却）
+  8. 免费抽卡（每日 1 次） + 智能金币抽卡（1 小时间隔 + 单抽消耗 ≤ 当前金币 × 5%，挑符合条件的最贵池）
+- **自动钓鱼**: 直接开启 AI 用户的 `auto_fishing_enabled`，由现有 `FishingService._auto_fishing_loop` 接管，自动扣金币、扣鱼饵、续鱼饵。
+- **初始装备**: `ensure_ai_user_exists()` 幂等创建 AI 账号，首次发放 10000 金币 + 新手木竿 + 100 个普通蚯蚓。
+- **仓储辅助方法**: `sqlite_user_repo.get_random_active_human(exclude_ids)` — 供 AI 挑选偷/电目标（自动过滤 `is_ai=1` 和 SYSTEM）。
+- **节流状态**: 进程内内存变量（`_last_sell_fish_ts` / `_last_sell_equipment_ts` / `_last_paid_gacha_ts` / `_last_free_gacha_date`），插件重启后重置。
+
 ## 贡献规范
 - **代码风格**: 遵循 PEP 8。
 - **提交信息**: 必须包含规范的前缀（如 `feat:`, `fix:`, `docs:`）。
