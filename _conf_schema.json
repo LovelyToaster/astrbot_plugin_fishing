@@ -498,48 +498,48 @@
       "bank_current_interest_rate": {
         "description": "活期基础利率",
         "type": "float",
-        "hint": "活期存款的每日基础利率，例如：0.001 表示 0.1%",
-        "default": 0.001,
+        "hint": "活期存款的每日基础利率，例如：0.0002 表示 0.02%",
+        "default": 0.0002,
         "min": 0.0,
         "max": 1.0
       },
       "bank_min_interest_rate": {
         "description": "最低活期利率",
         "type": "float",
-        "hint": "活期存款利率下限，例如：0.0008 表示 0.08%",
-        "default": 0.0008,
+        "hint": "活期存款利率下限，例如：0.00005 表示 0.005%",
+        "default": 0.00005,
         "min": 0.0,
         "max": 1.0
       },
       "bank_max_interest_rate": {
         "description": "最高活期利率",
         "type": "float",
-        "hint": "活期存款利率上限，例如：0.005 表示 0.5%",
-        "default": 0.005,
+        "hint": "活期存款利率上限，例如：0.0005 表示 0.05%",
+        "default": 0.0005,
         "min": 0.0,
         "max": 1.0
       },
       "bank_rate_volatility": {
         "description": "利率波动幅度",
         "type": "float",
-        "hint": "利率每日变化的最大幅度，例如：0.0003 表示 0.03%",
-        "default": 0.0003,
+        "hint": "利率每日变化的最大幅度，例如：0.00003 表示 0.003%",
+        "default": 0.00003,
         "min": 0.0,
         "max": 1.0
       },
       "bank_base_fixed_rate": {
         "description": "基础定期利率",
         "type": "float",
-        "hint": "定期存款的每日基础利率，例如：0.003 表示 0.3%",
-        "default": 0.003,
+        "hint": "定期存款的每日基础利率，例如：0.0005 表示 0.05%",
+        "default": 0.0005,
         "min": 0.0,
         "max": 1.0
       },
       "bank_max_fixed_rate": {
         "description": "最高定期利率",
         "type": "float",
-        "hint": "定期存款的最高利率（存期越长越接近此值），例如：0.15 表示 15%",
-        "default": 0.15,
+        "hint": "定期存款的最高利率（存期越长越接近此值），例如：0.08 表示 8%",
+        "default": 0.08,
         "min": 0.0,
         "max": 1.0
       },
