@@ -256,3 +256,65 @@ class SqliteStatisticsRepository:
         except Exception as e:
             logger.debug(f"[统计] get_top_actor 查询失败: {e}")
             return None
+
+    def get_user_action_counts_in_window(
+        self,
+        action_type: str,
+        hours: int = 24,
+    ) -> Dict[str, int]:
+        """
+        查过去 N 小时内各个玩家主动发起某动作的总次数。
+
+        Returns:
+            {user_id: count} 字典
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT user_id, COUNT(*) AS cnt
+                FROM statistics_logs
+                WHERE action_type = ?
+                  AND created_at >= datetime('now', ?)
+                  AND user_id <> 'SYSTEM'
+                GROUP BY user_id
+                """,
+                (action_type, f"-{int(hours)} hours"),
+            )
+            return {row["user_id"]: row["cnt"] for row in cursor.fetchall()}
+        except Exception as e:
+            logger.debug(f"[统计] get_user_action_counts_in_window 查询失败: {e}")
+            return {}
+
+    def get_victim_counts_in_window(
+        self,
+        action_type: str,
+        hours: int = 24,
+    ) -> Dict[str, int]:
+        """
+        查过去 N 小时内各个玩家作为目标被施加某动作的总次数（受害次数）。
+
+        Returns:
+            {target_id: count} 字典
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT target_id, COUNT(*) AS cnt
+                FROM statistics_logs
+                WHERE action_type = ?
+                  AND target_id IS NOT NULL
+                  AND target_id <> 'SYSTEM'
+                  AND created_at >= datetime('now', ?)
+                GROUP BY target_id
+                """,
+                (action_type, f"-{int(hours)} hours"),
+            )
+            return {row["target_id"]: row["cnt"] for row in cursor.fetchall()}
+        except Exception as e:
+            logger.debug(f"[统计] get_victim_counts_in_window 查询失败: {e}")
+            return {}
+

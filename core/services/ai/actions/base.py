@@ -11,6 +11,7 @@ AIAction 基类 + 决策工具函数。
 - A、B 缺席或不在合格候选中时权重合并入其余
 """
 
+import math
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple
 
@@ -52,34 +53,32 @@ def parse_int_safe(value) -> int:
 
 
 # 权重常量，需与设计文档一致
-WEIGHT_TOP_ATTACKER = 0.5  # 头名 A：过去 24h 对 AI 施暴最多
-WEIGHT_TOP_ACTOR = 0.3     # 头名 B：过去 24h 该动作总次数最多
+WEIGHT_TOP_ATTACKER = 0.5  # 传统模式头名 A 权重
+WEIGHT_TOP_ACTOR = 0.3     # 传统模式头名 B 权重
+WEIGHT_REVENGE = 0.40      # 多因子模式反击目标基础身份权重
 
 
 def build_weighted_pool(
     eligible: List[Tuple[str, Dict[str, float]]],
-    top_attacker_id: Optional[str],
-    top_actor_id: Optional[str],
+    top_attacker_id: Optional[str] = None,
+    top_actor_id: Optional[str] = None,
+    actor_counts: Optional[Dict[str, int]] = None,
+    victim_counts: Optional[Dict[str, int]] = None,
+    k_agg: float = 0.5,
+    gamma: float = 0.6,
+    min_factor: float = 0.1,
 ) -> Tuple[List[str], List[float]]:
     """
-    根据合格候选与两个头名 id 构造 (user_ids, weights) 供 random.choices 用。
+    根据合格候选与统计维度构造 (user_ids, weights) 供 random.choices 使用。
 
-    规则：
-    - 头名 A（top_attacker_id）占 WEIGHT_TOP_ATTACKER
-    - 头名 B（top_actor_id）占 WEIGHT_TOP_ACTOR
-    - 其余候选均分剩余
-    - A == B 时视为同一人，仅按 WEIGHT_TOP_ATTACKER 计
-    - A/B 不在 eligible 中 → 其对应权重合并入"其余"
-    - 若"其余"为空（eligible 全由 A/B 组成），剩余权重按 A/B 现有比例回补
+    当 actor_counts 或 victim_counts 传入时，采用多因子连续动态加权算法：
+      - W_identity: 反击目标 0.40，其余均分剩余 0.60
+      - beta(u) = 1.0 + k_agg * ln(1.0 + A(u))   (恶霸惩戒增益)
+      - alpha(u) = max(min_factor, gamma ** V(u))  (受害者保护衰减)
+      - W_raw(u) = W_identity(u) * beta(u) * alpha(u)
+      - 归一化总概率为 1.0
 
-    参数：
-        eligible: 合格候选列表 [(user_id, features), ...]，调用方保证非空
-        top_attacker_id: 头名 A 的 user_id 或 None
-        top_actor_id: 头名 B 的 user_id 或 None
-
-    返回：
-        (ids: List[str], weights: List[float])，长度相同，weights 总和归一到 1.0
-        若 eligible 为空则返回 ([], [])
+    当未传入 Counts 字典时，退回双头名分桶传统模式（50%/30%/20%）。
     """
     if not eligible:
         return [], []
@@ -87,15 +86,57 @@ def build_weighted_pool(
     eligible_ids = [uid for uid, _ in eligible]
     eligible_set = set(eligible_ids)
 
-    # 判定 A、B 是否有效（存在且在候选池内）
+    # 判定是否使用多因子连续加权模式
+    use_multi_factor = (actor_counts is not None) or (victim_counts is not None)
+
+    if use_multi_factor:
+        actor_counts = actor_counts or {}
+        victim_counts = victim_counts or {}
+
+        a_valid = top_attacker_id is not None and top_attacker_id in eligible_set
+        num_eligible = len(eligible_ids)
+
+        weights_map: Dict[str, float] = {}
+
+        for uid in eligible_ids:
+            # 1. 基础身份权重
+            if a_valid:
+                if uid == top_attacker_id:
+                    w_id = WEIGHT_REVENGE
+                else:
+                    w_id = (1.0 - WEIGHT_REVENGE) / (num_eligible - 1) if num_eligible > 1 else 1.0
+            else:
+                w_id = 1.0 / num_eligible
+
+            # 2. 恶霸惩戒增益 beta
+            a_cnt = actor_counts.get(uid, 0)
+            beta = 1.0 + k_agg * math.log(1.0 + max(0, a_cnt))
+
+            # 3. 受害保护衰减 alpha
+            v_cnt = victim_counts.get(uid, 0)
+            alpha = max(min_factor, gamma ** max(0, v_cnt))
+
+            w_raw = w_id * beta * alpha
+            weights_map[uid] = w_raw
+
+        ids = eligible_ids
+        weights = [weights_map[uid] for uid in ids]
+        total = sum(weights)
+        if total > 0:
+            weights = [w / total for w in weights]
+        else:
+            share = 1.0 / len(ids)
+            weights = [share] * len(ids)
+        return ids, weights
+
+    # ---------- 传统分桶模式 fallback ----------
     a_valid = top_attacker_id is not None and top_attacker_id in eligible_set
     b_valid = (
         top_actor_id is not None
         and top_actor_id in eligible_set
-        and top_actor_id != top_attacker_id  # A==B 时忽略 B
+        and top_actor_id != top_attacker_id
     )
 
-    # 剩余候选（不含 A/B）
     special_ids = set()
     if a_valid:
         special_ids.add(top_attacker_id)
@@ -107,36 +148,30 @@ def build_weighted_pool(
     weight_b = WEIGHT_TOP_ACTOR if b_valid else 0.0
     remaining = 1.0 - weight_a - weight_b
 
-    weights_map: Dict[str, float] = {}
+    legacy_weights_map: Dict[str, float] = {}
 
     if others:
-        # 常规：其余均分
         share = remaining / len(others)
         for uid in others:
-            weights_map[uid] = share
+            legacy_weights_map[uid] = share
     else:
-        # others 为空 ⇔ eligible 全被 A/B 占满 ⇔ A、B 至少一个有效
-        # remaining 按现有 A/B 权重比补回，避免浪费概率
         base = weight_a + weight_b
-        weight_a += remaining * (weight_a / base)
-        weight_b += remaining * (weight_b / base)
+        if base > 0:
+            weight_a += remaining * (weight_a / base)
+            weight_b += remaining * (weight_b / base)
 
     if a_valid:
-        weights_map[top_attacker_id] = weight_a
+        legacy_weights_map[top_attacker_id] = weight_a
     if b_valid:
-        weights_map[top_actor_id] = weight_b
+        legacy_weights_map[top_actor_id] = weight_b
 
-    # 保持 eligible 的顺序输出
-    ids: List[str] = []
-    weights: List[float] = []
-    for uid in eligible_ids:
-        ids.append(uid)
-        weights.append(weights_map.get(uid, 0.0))
+    ids = eligible_ids
+    weights = [legacy_weights_map.get(uid, 0.0) for uid in ids]
 
-    # 数值兜底：sum 极小时（如全 0）均分，避免 random.choices 抛异常
     total = sum(weights)
     if total <= 0:
         share = 1.0 / len(ids)
         weights = [share] * len(ids)
 
     return ids, weights
+

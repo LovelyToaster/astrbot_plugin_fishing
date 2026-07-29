@@ -56,9 +56,11 @@ class ElectricFishAction(AIAction):
             )
             return
 
-        # 4. 加权抽样：查两个 24h 头名 → 构造权重池 → random.choices
+        # 4. 加权抽样：查 24h 反击头名、全员发起与受害统计 → 构造多因子权重池 → random.choices
         top_attacker_id = None
         top_actor_id = None
+        actor_counts = {}
+        victim_counts = {}
         try:
             top_attacker_id = ctx.statistics_repo.get_top_attacker_of(
                 ctx.ai_user_id, "electric_fish", 24
@@ -66,10 +68,18 @@ class ElectricFishAction(AIAction):
             top_actor_id = ctx.statistics_repo.get_top_actor(
                 "electric_fish", 24, exclude_user_id=ctx.ai_user_id
             )
+            actor_counts = ctx.statistics_repo.get_user_action_counts_in_window("electric_fish", 24)
+            victim_counts = ctx.statistics_repo.get_victim_counts_in_window("electric_fish", 24)
         except Exception as e:
-            logger.debug(f"[AI] 电鱼：查询 24h 头名失败，回退到均匀抽样: {e}")
+            logger.debug(f"[AI] 电鱼：查询 24h 统计特征失败，回退默认参数: {e}")
 
-        ids, weights = build_weighted_pool(eligible, top_attacker_id, top_actor_id)
+        ids, weights = build_weighted_pool(
+            eligible,
+            top_attacker_id=top_attacker_id,
+            top_actor_id=top_actor_id,
+            actor_counts=actor_counts,
+            victim_counts=victim_counts,
+        )
         target_id = random.choices(ids, weights=weights, k=1)[0]
         features_map = {tid: feats for tid, feats in eligible}
         weight_map = dict(zip(ids, weights))
@@ -77,6 +87,8 @@ class ElectricFishAction(AIAction):
         features["weight_chosen"] = round(weight_map[target_id], 4)
         features["top_attacker_id"] = top_attacker_id or ""
         features["top_actor_id"] = top_actor_id or ""
+        features["target_actor_count"] = actor_counts.get(target_id, 0)
+        features["target_victim_count"] = victim_counts.get(target_id, 0)
 
         # 5. 写快照 → 执行 → 回填
         snapshot_id = ctx.snapshot.create(

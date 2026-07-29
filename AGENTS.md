@@ -130,7 +130,8 @@ tar czf - <文件1> <文件2> ... | ssh -i ./astrbot_fishing VerdantGem@10.0.0.4
   8. 免费抽卡（每日 1 次） + 智能金币抽卡（1 小时间隔 + 单抽消耗 ≤ 当前金币 × 5%，挑符合条件的最贵池）
 - **自动钓鱼**: 直接开启 AI 用户的 `auto_fishing_enabled`，由现有 `FishingService._auto_fishing_loop` 接管，自动扣金币、扣鱼饵、续鱼饵。
 - **初始装备**: `ensure_ai_user_exists()` 幂等创建 AI 账号，首次发放 10000 金币 + 新手木竿 + 100 个普通蚯蚓。
-- **仓储辅助方法**: `sqlite_user_repo.get_random_active_human(exclude_ids)` — 供 AI 挑选偷/电目标（自动过滤 `is_ai=1` 和 SYSTEM）。
+- **仓储辅助方法**: `sqlite_user_repo.get_random_active_human(exclude_ids)` — 供 AI 挑选目标；`sqlite_statistics_repo.get_user_action_counts_in_window` & `get_victim_counts_in_window` 供 24h 多因子加权抽样。
+- **偷/电加权算法**: 采用多因子连续加权模型 $W_{raw} = W_{identity} \times \beta(A) \times \alpha(V)$。$\beta$ 为恶霸惩戒增益（主动偷/电多的玩家权重提升），$\alpha$ 为受害者保护衰减（经常被偷/电的玩家权重指数级衰减），并保留反击目标优先级。
 - **节流状态**: 进程内内存变量（`_last_sell_fish_ts` / `_last_sell_equipment_ts` / `_last_paid_gacha_ts` / `_last_free_gacha_date`），插件重启后重置。
 
 ## 贡献规范
