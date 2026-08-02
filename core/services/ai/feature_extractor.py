@@ -147,13 +147,13 @@ class FeatureExtractor:
                 EXISTS(
                     SELECT 1 FROM user_buffs ub
                     WHERE ub.user_id = u.user_id
-                      AND ub.buff_type LIKE '%shield%'
+                      AND (ub.buff_type LIKE '%STEAL%SHIELD%' OR ub.buff_type LIKE '%STEAL%PROTECTION%')
                       AND (ub.expires_at IS NULL OR ub.expires_at > datetime('now'))
                 ) AS target_has_shield,
                 EXISTS(
                     SELECT 1 FROM user_buffs ub
                     WHERE ub.user_id = u.user_id
-                      AND ub.buff_type LIKE '%protection%'
+                      AND ub.buff_type LIKE '%STEAL%PROTECTION%'
                       AND (ub.expires_at IS NULL OR ub.expires_at > datetime('now'))
                 ) AS target_has_protection
             FROM users u
