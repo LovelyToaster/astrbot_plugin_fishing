@@ -190,6 +190,7 @@ class UserRodInstance:
     refine_level: int = 1  # 精炼等级，默认为1
     current_durability: Optional[int] = None
     is_locked: bool = False  # 是否锁定保护，默认为False
+    is_in_showcase: bool = False  # 是否在展示柜中
 
 @dataclass
 class UserAccessoryInstance:
@@ -201,6 +202,18 @@ class UserAccessoryInstance:
     obtained_at: datetime
     refine_level: int = 1
     is_locked: bool = False  # 是否锁定保护，默认为False
+    is_in_showcase: bool = False  # 是否在展示柜中
+
+@dataclass
+class UserShowcaseItem:
+    """代表用户展示柜中的一个槽位/物品项"""
+    id: int
+    user_id: str
+    item_type: str  # 'rod' 或 'accessory'
+    instance_id: int
+    slot_index: int
+    added_at: Optional[datetime] = None
+    detail: Optional[Any] = None  # 关联填充 UserRodInstance 或 UserAccessoryInstance
 
 @dataclass
 class User:
@@ -220,6 +233,8 @@ class User:
     consecutive_login_days: int = 0
     fish_pond_capacity: int = 480
     aquarium_capacity: int = 50  # 水族箱容量
+    showcase_capacity: int = 6  # 展示柜容量
+    showcase_signature: str = "快来参观我的展示柜吧！"  # 展示柜个性签名
     fishing_zone_id: int = 1  # 默认钓鱼区域ID
     exchange_account_status: bool = False # 交易所账户状态
 

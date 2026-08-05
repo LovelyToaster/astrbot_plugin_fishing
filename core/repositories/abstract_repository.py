@@ -13,7 +13,7 @@ from ..domain.models import (
     ShopOffer, ShopOfferCost, ShopOfferReward,
     Commodity, Exchange, UserCommodity,
     CatTemplate, UserCatInstance, CatDisease, UserCatDisease, UserCatEventRecord,
-    AIPlayerState, AIDecisionSnapshot,
+    AIPlayerState, AIDecisionSnapshot, UserShowcaseItem,
 )
 
 # 定义用户成就进度的数据结构
@@ -201,6 +201,14 @@ class AbstractInventoryRepository(ABC):
     @abstractmethod
     def update_fish_quantity(self, user_id: str, fish_id: int, delta: int, quality_level: int = 0) -> None: pass
     
+    # --- 展示柜相关方法 ---
+    @abstractmethod
+    def get_user_showcase(self, user_id: str) -> List[UserShowcaseItem]: pass
+    @abstractmethod
+    def add_to_showcase(self, user_id: str, item_type: str, instance_id: int, slot_index: int) -> bool: pass
+    @abstractmethod
+    def remove_from_showcase(self, user_id: str, item_type: str, instance_id: int) -> bool: pass
+
     # --- 水族箱相关方法 ---
     # 获取用户水族箱中的鱼
     @abstractmethod

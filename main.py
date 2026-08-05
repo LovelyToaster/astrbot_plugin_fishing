@@ -51,6 +51,7 @@ from .core.services.fish_weight_service import FishWeightService
 from .core.services.cat_service import CatService
 from .core.services.blackjack_service import BlackjackService
 from .core.services.slot_service import SlotService
+from .core.services.showcase_service import ShowcaseService
 
 from .core.services.ai_player_service import AIPlayerService
 from .core.services.ai.feature_extractor import FeatureExtractor
@@ -87,6 +88,7 @@ from .handlers import (
     blackjack_handlers,
     slot_handlers,
     statistics_handlers,
+    showcase_handlers,
 )
 from .handlers.fishing_handlers import FishingHandlers
 from .handlers.aquarium_handlers import AquariumHandlers
@@ -325,6 +327,11 @@ class FishingPlugin(Star):
             self.game_config,
         )
         
+        # 导入并初始化展示柜服务
+        self.showcase_service = ShowcaseService(
+            self.inventory_repo, self.user_repo, self.item_template_repo
+        )
+
         # 导入并初始化水族箱服务
         from .core.services.aquarium_service import AquariumService
         self.aquarium_service = AquariumService(
@@ -2004,6 +2011,31 @@ class FishingPlugin(Star):
     async def system_loan(self, event: AstrMessageEvent):
         """向系统借款。用法：系统借款 [金额]"""
         async for r in self.loan_handlers.handle_system_loan(event, []):
+            yield r
+
+    # ==================== 展示柜指令 ====================
+    @filter.command("展示柜", alias={"我的展示柜", "查看展示柜"})
+    async def showcase_view(self, event: AstrMessageEvent):
+        """查看展示柜。用法：/展示柜 或 /查看展示柜 @用户"""
+        async for r in showcase_handlers.showcase(self, event):
+            yield r
+
+    @filter.command("放入展示柜", alias={"展示柜放入"})
+    async def put_in_showcase(self, event: AstrMessageEvent):
+        """将装备放入展示柜。用法：/放入展示柜 <装备短码>"""
+        async for r in showcase_handlers.put_in_showcase(self, event):
+            yield r
+
+    @filter.command("取出展示柜", alias={"展示柜取出"})
+    async def take_out_showcase(self, event: AstrMessageEvent):
+        """将装备从展示柜移回背包。用法：/取出展示柜 <装备短码>"""
+        async for r in showcase_handlers.take_out_showcase(self, event):
+            yield r
+
+    @filter.command("展示柜签名", alias={"展示柜宣言"})
+    async def set_showcase_signature(self, event: AstrMessageEvent):
+        """修改展示柜个性宣言。用法：/展示柜签名 <宣言内容>"""
+        async for r in showcase_handlers.set_showcase_signature(self, event):
             yield r
 
     async def _check_port_active(self):

@@ -73,7 +73,7 @@ FONT_PATH_BOLD = os.path.join(os.path.dirname(__file__), "resource", "DouyinSans
 # --- 字体加载（带缓存，避免每次调用都读取磁盘） ---
 _font_cache = {}
 
-def load_font(size):
+def load_font(size, is_bold=False, *args, **kwargs):
     if size not in _font_cache:
         try:
             _font_cache[size] = ImageFont.truetype(FONT_PATH_BOLD, size)

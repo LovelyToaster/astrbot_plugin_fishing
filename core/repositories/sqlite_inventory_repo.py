@@ -7,7 +7,7 @@ import json
 from astrbot.api import logger
 # 导入抽象基类和领域模型
 from .abstract_repository import AbstractInventoryRepository
-from ..domain.models import UserFishInventoryItem, UserAquariumItem, UserRodInstance, UserAccessoryInstance, FishingZone, AquariumUpgrade
+from ..domain.models import UserFishInventoryItem, UserAquariumItem, UserRodInstance, UserAccessoryInstance, FishingZone, AquariumUpgrade, UserShowcaseItem
 from ..database.connection_manager import DatabaseConnectionManager
 
 
@@ -52,6 +52,18 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
     def _row_to_aquarium_upgrade(self, row: sqlite3.Row) -> Optional[AquariumUpgrade]:
         return None if not row else AquariumUpgrade(**row)
 
+    def _row_to_showcase_item(self, row: sqlite3.Row) -> Optional[UserShowcaseItem]:
+        if not row:
+            return None
+        return UserShowcaseItem(
+            id=row['id'],
+            user_id=row['user_id'],
+            item_type=row['item_type'],
+            instance_id=row['instance_id'],
+            slot_index=row['slot_index'],
+            added_at=row['added_at']
+        )
+
     def _row_to_rod_instance(self, row: sqlite3.Row) -> Optional[UserRodInstance]:
         if not row:
             return None
@@ -64,7 +76,8 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
             obtained_at=row['obtained_at'],
             refine_level=row['refine_level'] if 'refine_level' in row.keys() else 1,
             current_durability=row['current_durability'] if 'current_durability' in row.keys() else None,
-            is_locked=bool(row['is_locked']) if 'is_locked' in row.keys() else False
+            is_locked=bool(row['is_locked']) if 'is_locked' in row.keys() else False,
+            is_in_showcase=bool(row['is_in_showcase']) if 'is_in_showcase' in row.keys() else False
         )
 
     def _row_to_accessory_instance(self, row: sqlite3.Row) -> Optional[UserAccessoryInstance]:
@@ -78,7 +91,8 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
             is_equipped=bool(row['is_equipped']),
             obtained_at=row['obtained_at'],
             refine_level=row['refine_level'] if 'refine_level' in row.keys() else 1,
-            is_locked=bool(row['is_locked']) if 'is_locked' in row.keys() else False
+            is_locked=bool(row['is_locked']) if 'is_locked' in row.keys() else False,
+            is_in_showcase=bool(row['is_in_showcase']) if 'is_in_showcase' in row.keys() else False
         )
 
     # --- Fish Inventory Methods ---
@@ -197,28 +211,63 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
             return self._row_to_rod_instance(row) if row else None
 
     def clear_user_rod_instances(self, user_id: str) -> None:
-        """清空用户的所有未装备且小于5星的钓竿实例"""
+        """清空用户的所有未装备、未在展示柜且小于5星的钓竿实例"""
         with self._connection_manager.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 DELETE FROM user_rods
-                WHERE user_id = ? AND is_equipped = 0 AND rod_id IN (
+                WHERE user_id = ? AND is_equipped = 0 AND is_in_showcase = 0 AND rod_id IN (
                     SELECT rod_id FROM rods WHERE rarity < 5
                 )
             """, (user_id,))
             conn.commit()
 
     def clear_user_accessory_instances(self, user_id: str) -> None:
-        """清空用户的所有未装备且小于5星的配件实例"""
+        """清空用户的所有未装备、未在展示柜且小于5星的配件实例"""
         with self._connection_manager.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 DELETE FROM user_accessories
-                WHERE user_id = ? AND is_equipped = 0 AND accessory_id IN (
+                WHERE user_id = ? AND is_equipped = 0 AND is_in_showcase = 0 AND accessory_id IN (
                     SELECT accessory_id FROM accessories WHERE rarity < 5
                 )
             """, (user_id,))
             conn.commit()
+
+    # --- Showcase Inventory Methods ---
+    def get_user_showcase(self, user_id: str) -> List[UserShowcaseItem]:
+        """获取用户的展示柜列表"""
+        with self._connection_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM user_showcase WHERE user_id = ? ORDER BY slot_index ASC", (user_id,))
+            return [self._row_to_showcase_item(row) for row in cursor.fetchall()]
+
+    def add_to_showcase(self, user_id: str, item_type: str, instance_id: int, slot_index: int) -> bool:
+        """将物品放入展示柜并自动加锁状态"""
+        with self._connection_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO user_showcase (user_id, item_type, instance_id, slot_index)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, item_type, instance_id, slot_index))
+            if item_type == 'rod':
+                cursor.execute("UPDATE user_rods SET is_in_showcase = 1, is_locked = 1 WHERE rod_instance_id = ? AND user_id = ?", (instance_id, user_id))
+            elif item_type == 'accessory':
+                cursor.execute("UPDATE user_accessories SET is_in_showcase = 1, is_locked = 1 WHERE accessory_instance_id = ? AND user_id = ?", (instance_id, user_id))
+            conn.commit()
+            return True
+
+    def remove_from_showcase(self, user_id: str, item_type: str, instance_id: int) -> bool:
+        """从展示柜中取出物品"""
+        with self._connection_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM user_showcase WHERE user_id = ? AND item_type = ? AND instance_id = ?", (user_id, item_type, instance_id))
+            if item_type == 'rod':
+                cursor.execute("UPDATE user_rods SET is_in_showcase = 0 WHERE rod_instance_id = ? AND user_id = ?", (instance_id, user_id))
+            elif item_type == 'accessory':
+                cursor.execute("UPDATE user_accessories SET is_in_showcase = 0 WHERE accessory_instance_id = ? AND user_id = ?", (instance_id, user_id))
+            conn.commit()
+            return True
 
     def get_user_accessory_instance_by_id(self, user_id: str, accessory_instance_id: int) -> Optional[UserAccessoryInstance]:
         """根据用户ID和配件实例ID获取特定的配件实例"""

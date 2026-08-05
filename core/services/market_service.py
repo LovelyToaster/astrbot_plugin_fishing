@@ -123,6 +123,8 @@ class MarketService:
             return {"success": False, "message": "鱼竿不存在或不属于你"}
         if item_to_list.is_equipped:
             return {"success": False, "message": "不能上架正在装备的鱼竿"}
+        if getattr(item_to_list, 'is_in_showcase', False):
+            return {"success": False, "message": "该鱼竿正处于展示柜中，请先将其从展示柜取出后再上架"}
         if item_to_list.is_locked:
             return {"success": False, "message": "该鱼竿已锁定，无法上架"}
         
@@ -145,6 +147,8 @@ class MarketService:
             return {"success": False, "message": "饰品不存在或不属于你"}
         if item_to_list.is_equipped:
             return {"success": False, "message": "不能上架正在装备的饰品"}
+        if getattr(item_to_list, 'is_in_showcase', False):
+            return {"success": False, "message": "该饰品正处于展示柜中，请先将其从展示柜取出后再上架"}
         if item_to_list.is_locked:
             return {"success": False, "message": "该饰品已锁定，无法上架"}
         

@@ -116,6 +116,10 @@ class SqliteUserRepository(AbstractUserRepository):
 
             # --- [新功能] 添加系统账户标志字段的读取 ---
             is_system=bool(row["is_system"]) if "is_system" in row_keys else False,
+
+            # --- [展示柜系统] 添加展示柜字段的读取 ---
+            showcase_capacity=row["showcase_capacity"] if "showcase_capacity" in row_keys else 6,
+            showcase_signature=row["showcase_signature"] if "showcase_signature" in row_keys else "快来参观我的展示柜吧！",
         )
 
     def get_by_id(self, user_id: str) -> Optional[User]:

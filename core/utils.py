@@ -109,3 +109,25 @@ def calculate_after_refine(before_value: float, refine_level: int, rarity: int =
     if before_value < 1:
         return before_value * (1 + total_bonus)
     return (before_value - 1) * (1 + total_bonus) + 1
+
+
+def to_base36(n: int) -> str:
+    """将整数转换为 36 进制大写字符串"""
+    if n < 0:
+        raise ValueError("n must be non-negative")
+    if n == 0:
+        return "0"
+    digits = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    out = []
+    while n:
+        n, rem = divmod(n, 36)
+        out.append(digits[rem])
+    return "".join(reversed(out))
+
+
+def from_base36(s: str) -> int:
+    """将 36 进制字符串解析为整数"""
+    s = (s or "").strip().upper()
+    if not s:
+        raise ValueError("empty")
+    return int(s, 36)
