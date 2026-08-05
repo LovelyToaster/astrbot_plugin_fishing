@@ -35,8 +35,19 @@ document.addEventListener('DOMContentLoaded', function() {
     //
     function renderForm(zone = null) {
         const isEdit = zone !== null;
-        const rarityDistribution = zone?.configs?.rarity_distribution || [0.5, 0.3, 0.15, 0.04, 0.01, 0];
-        while (rarityDistribution.length < 6) {
+        const maxRarity = Math.max(8, ...allFishData.map(f => f.rarity));
+        const rawDist = zone?.configs?.rarity_distribution || [0.3, 0.2, 0.2, 0.2, 0.08, 0.014, 0.005, 0.001];
+        let rarityDistribution = [...rawDist];
+
+        // 兼容旧版 6 维分布 [1, 2, 3, 4, 5, 6+]
+        if (rarityDistribution.length === 6 && maxRarity > 6) {
+            const p6plus = rarityDistribution[5];
+            rarityDistribution[5] = Number((p6plus * 0.70).toFixed(4));
+            if (maxRarity >= 7) rarityDistribution[6] = Number((p6plus * 0.25).toFixed(4));
+            if (maxRarity >= 8) rarityDistribution[7] = Number((p6plus * 0.05).toFixed(4));
+        }
+
+        while (rarityDistribution.length < maxRarity) {
             rarityDistribution.push(0);
         }
         const specificFishIds = zone?.specific_fish_ids || [];
@@ -139,19 +150,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 <div class="mb-3">
                     <label>稀有度分布 (概率总和应为 1)</label>
                     <div class="row">
-                        ${[...Array(5).keys()].map(i => `
-                            <div class="col-md-2 col-4 mb-2">
+                        ${[...Array(maxRarity).keys()].map(i => `
+                            <div class="col-md-3 col-6 col-lg-2 mb-2">
                                 <label>${i+1} 星</label>
-                                <input type="number" step="0.001" min="0" max="1" class="form-control rarity-input" name="rarity_${i+1}" value="${rarityDistribution[i]}" placeholder="0.000">
+                                <input type="number" step="0.0001" min="0" max="1" class="form-control rarity-input" name="rarity_${i+1}" value="${rarityDistribution[i] ?? 0}" placeholder="0.0000">
                             </div>
                         `).join('')}
-                        <div class="col-md-2 col-4 mb-2">
-                            <label>6+ 星</label>
-                            <input type="number" step="0.001" min="0" max="1" class="form-control rarity-input" name="rarity_6plus" value="${rarityDistribution[5]}" placeholder="0.000">
-                        </div>
                     </div>
                     <div id="rarity-sum-feedback" class="form-text mt-1"></div>
-                    <small class="text-muted">提示：6+星包含所有6星及以上稀有度，中奖后随机从高星鱼池选择。</small>
+                    <small class="text-muted">提示：为 1~${maxRarity} 星独立配置抽取概率，所有星级概率相加必须为 1。</small>
                 </div>
 
                 <!-- Fish Selection Component -->
@@ -590,10 +597,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.available_until = '';
             }
             
-            const rarityDistribution = [
-                ...[...Array(5).keys()].map(i => parseFloat(payload[`rarity_${i+1}`]) || 0),
-                parseFloat(payload['rarity_6plus']) || 0
-            ];
+            const maxRarity = Math.max(8, ...allFishData.map(f => f.rarity));
+            const rarityDistribution = [...Array(maxRarity).keys()].map(i => parseFloat(payload[`rarity_${i+1}`]) || 0);
+
             if (Math.abs(rarityDistribution.reduce((a, b) => a + b, 0) - 1.0) > 1e-4) {
                 showFormError(form, '稀有度分布总和必须为 1');
                 return;

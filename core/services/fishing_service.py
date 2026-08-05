@@ -339,14 +339,10 @@ class FishingService:
         is_rare_fish_available = caught < quota
         
         if not is_rare_fish_available:
-            # 稀有鱼定义：4星及以上（包括5星和6+星组合）
-            # 若达到配额，屏蔽4星、5星和6+星概率，其它星级不受影响
-            if len(rarity_distribution) >= 4:
-                rarity_distribution[3] = 0.0  # 4星
-            if len(rarity_distribution) >= 5:
-                rarity_distribution[4] = 0.0  # 5星
-            if len(rarity_distribution) >= 6:
-                rarity_distribution[5] = 0.0  # 6+星
+            # 稀有鱼定义：4星及以上（4, 5, 6, 7, 8...）
+            # 若达到配额，屏蔽4星及以上的所有星级概率，其它星级不受影响
+            for idx in range(3, len(rarity_distribution)):
+                rarity_distribution[idx] = 0.0
             # 重新归一化概率分布
             total = sum(rarity_distribution)
             if total > 0:
@@ -354,7 +350,7 @@ class FishingService:
         
         # 应用稀有度加成（rare_chance）调整分布权重
         # 如果玩家有装备/Buff/鱼饵提供的稀有度加成，会提升 4-5 星鱼的概率
-        # 6+ 星鱼的概率不受影响，保持其作为"运气时刻"的设计
+        # 6星及以上的超稀有鱼概率不受影响
         if rare_chance > 0:
             adjusted_distribution = self._apply_rare_chance_to_distribution(
                 rarity_distribution, rare_chance
@@ -362,15 +358,9 @@ class FishingService:
         else:
             adjusted_distribution = rarity_distribution
         
-        # 根据调整后的分布加权随机抽取稀有度
+        # 根据调整后的分布加权随机抽取稀有度，直接映射到对应星级 (1-indexed)
         rarity_index = random.choices(range(len(adjusted_distribution)), weights=adjusted_distribution, k=1)[0]
-        
-        if rarity_index == 5:  # 抽中6+星组合
-            # 从6星及以上的鱼中随机选择，兼容区域限定鱼
-            rarity = self._get_random_high_rarity(zone)
-        else:
-            # 1-5星直接对应
-            rarity = rarity_index + 1
+        rarity = rarity_index + 1
             
         fish_template = self._get_fish_template(rarity, zone, coins_chance)
 

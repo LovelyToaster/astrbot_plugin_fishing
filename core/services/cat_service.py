@@ -924,24 +924,20 @@ class CatService:
         if not zone:
             return None
 
-        zone_config = zone.configs or {}
-        rarity_dist = list(zone_config.get("rarity_distribution", [0.3, 0.3, 0.2, 0.15, 0.04, 0.01]))
-
-        while len(rarity_dist) < 6:
-            rarity_dist.append(0.0)
-        rarity_dist = rarity_dist[:6]
+        if self._fishing_service and hasattr(self._fishing_service, 'fishing_zone_service'):
+            strategy = self._fishing_service.fishing_zone_service.get_strategy(user.fishing_zone_id)
+            rarity_dist = strategy.get_fish_rarity_distribution(user)
+        else:
+            zone_config = zone.configs or {}
+            rarity_dist = list(zone_config.get("rarity_distribution", [0.3, 0.3, 0.2, 0.15, 0.04, 0.01]))
 
         quota = zone.rare_fish_quota_per_cycle if zone.rare_fish_quota_per_cycle is not None else zone.daily_rare_fish_quota
         caught = zone.rare_fish_caught_this_cycle if zone.rare_fish_caught_this_cycle is not None else zone.rare_fish_caught_today
         is_rare_fish_available = caught < quota
 
         if not is_rare_fish_available:
-            if len(rarity_dist) >= 4:
-                rarity_dist[3] = 0.0
-            if len(rarity_dist) >= 5:
-                rarity_dist[4] = 0.0
-            if len(rarity_dist) >= 6:
-                rarity_dist[5] = 0.0
+            for idx in range(3, len(rarity_dist)):
+                rarity_dist[idx] = 0.0
             total = sum(rarity_dist)
             if total > 0:
                 rarity_dist = [x / total for x in rarity_dist]
