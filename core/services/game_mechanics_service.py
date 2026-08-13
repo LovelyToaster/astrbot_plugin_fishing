@@ -1104,6 +1104,51 @@ class GameMechanicsService:
     # ============================================================
     # ==================== 新增功能：电鱼 开始 ====================
     # ============================================================
+    def _consume_electric_fish_success_boost(self, user_id: str) -> Dict[str, Any]:
+        """原子消耗一次电鱼成功率 Buff，返回本次实际生效的加成。"""
+        result = {
+            "bonus_rate": 0.0,
+            "max_rate": 1.0,
+            "fish_count_multiplier": 1.0,
+            "consumed": False,
+        }
+        buff = self.buff_repo.get_active_by_user_and_type(
+            user_id, "ELECTRIC_FISH_SUCCESS_BOOST"
+        )
+        if not buff:
+            return result
+
+        try:
+            payload = json.loads(buff.payload or "{}")
+            bonus_rate = float(payload.get("bonus_rate", 0.0))
+            max_rate = float(payload.get("max_rate", 1.0))
+            fish_count_multiplier = float(
+                payload.get("fish_count_multiplier", 1.0)
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return result
+
+        if bonus_rate <= 0 or fish_count_multiplier < 1.0:
+            return result
+
+        bonus_rate = min(1.0, bonus_rate)
+        max_rate = min(1.0, max(0.0, max_rate))
+        fish_count_multiplier = max(1.0, fish_count_multiplier)
+
+        consumed = self.buff_repo.consume_charge_if_match(
+            buff.id, buff.payload, None
+        )
+        if consumed:
+            result.update(
+                {
+                    "bonus_rate": bonus_rate,
+                    "max_rate": max_rate,
+                    "fish_count_multiplier": fish_count_multiplier,
+                    "consumed": True,
+                }
+            )
+        return result
+
     def electric_fish(self, thief_id: str, victim_id: str) -> Dict[str, Any]:
         """
         处理"电鱼"的逻辑。
@@ -1338,14 +1383,33 @@ class GameMechanicsService:
             return {"success": False, "message": f"目标用户【{victim.nickname}】的鱼塘里鱼太少了（{total_fish_count}/100），电不到什么好东西，还是放过他吧。"}
 
         # 3. 计算成功率并进行判定
-        # 所有目标用户的成功率相同，只使用基础成功率
-        final_success_rate = self.config.get("electric_fish", {}).get("base_success_rate", 0.6)
+        # 道具只在通过所有前置检查、即将进行有效随机判定时消耗。
+        try:
+            base_success_rate = float(
+                self.config.get("electric_fish", {}).get(
+                    "base_success_rate", 0.6
+                )
+            )
+        except (TypeError, ValueError):
+            base_success_rate = 0.6
+        base_success_rate = min(1.0, max(0.0, base_success_rate))
+        boost = self._consume_electric_fish_success_boost(thief_id)
+        final_success_rate = min(
+            boost["max_rate"],
+            max(0.0, base_success_rate + boost["bonus_rate"]),
+        )
+        boost_message = (
+            f"（电鱼道具：成功率 +{boost['bonus_rate'] * 100:.1f}%"
+            f"，鱼量 ×{boost['fish_count_multiplier']:.2f}）"
+            if boost["consumed"]
+            else ""
+        )
         
         # 进行随机判定
         roll = random.random()
         
         # 失败处理
-        if roll > final_success_rate:
+        if final_success_rate <= 0.0 or roll > final_success_rate:
             # 使用正态分布计算天罚百分比（0-max_rate之间）
             max_penalty_rate = self.config.get("electric_fish", {}).get("failure_penalty_max_rate", 0.5)
             
@@ -1387,13 +1451,17 @@ class GameMechanicsService:
                     "reason": "random_failed",
                     "penalty_rate": penalty_rate,
                     "penalty_coins": penalty_coins,
+                    "base_success_rate": base_success_rate,
+                    "bonus_success_rate": boost["bonus_rate"],
+                    "fish_count_multiplier": boost["fish_count_multiplier"],
+                    "boost_consumed": boost["consumed"],
                     "success_rate": final_success_rate,
                 },
             )
 
             return {
                 "success": False,
-                "message": f"❌ 电鱼失败！{severity}降临，雷电击中了你，损失了 {penalty_coins} 金币（{penalty_rate*100:.1f}%）！\n💡 本次成功率为 {final_success_rate*100:.1f}%"
+                "message": f"❌ 电鱼失败！{severity}降临，雷电击中了你，损失了 {penalty_coins} 金币（{penalty_rate*100:.1f}%）！\n💡 本次成功率为 {final_success_rate*100:.1f}%{boost_message}"
             }
 
         # 4. 成功了！根据成功度（roll值）决定收益档次
@@ -1441,6 +1509,11 @@ class GameMechanicsService:
                 num_to_steal = random.randint(10, 20)  # 普通成功
             else:
                 num_to_steal = random.randint(5, 10)   # 小成功
+
+        if boost["consumed"]:
+            num_to_steal = max(
+                1, int(num_to_steal * boost["fish_count_multiplier"])
+            )
 
         actual_num_to_steal = min(num_to_steal, len(all_fish_in_pond))
         initial_catch = random.sample(all_fish_in_pond, actual_num_to_steal)
@@ -1551,13 +1624,17 @@ class GameMechanicsService:
                 "success_type": success_type,
                 "stolen_summary": stolen_summary,
                 "total_value": total_value_stolen,
+                "base_success_rate": base_success_rate,
+                "bonus_success_rate": boost["bonus_rate"],
+                "fish_count_multiplier": boost["fish_count_multiplier"],
+                "boost_consumed": boost["consumed"],
                 "success_rate": final_success_rate,
             },
         )
 
         return {
             "success": True,
-            "message": f"{success_type}！成功对【{victim.nickname}】的鱼塘进行了电击，捕获了{actual_stolen_count}条鱼（占其总数的{steal_percentage:.1f}%），总价值 {total_value_stolen} 金币！\n分别是：{stolen_details}。\n💡 本次成功率为 {final_success_rate*100:.1f}%{shield_recovery_msg}",
+            "message": f"{success_type}！成功对【{victim.nickname}】的鱼塘进行了电击，捕获了{actual_stolen_count}条鱼（占其总数的{steal_percentage:.1f}%），总价值 {total_value_stolen} 金币！\n分别是：{stolen_details}。\n💡 本次成功率为 {final_success_rate*100:.1f}%{boost_message}{shield_recovery_msg}",
             "thief_nickname": thief.nickname or thief.user_id,
             "victim_notification": {
                 "stolen_count": actual_stolen_count,

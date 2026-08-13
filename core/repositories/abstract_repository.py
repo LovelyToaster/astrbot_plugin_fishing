@@ -205,9 +205,13 @@ class AbstractInventoryRepository(ABC):
     @abstractmethod
     def get_user_showcase(self, user_id: str) -> List[UserShowcaseItem]: pass
     @abstractmethod
+    def get_showcase_slot_themes(self, user_id: str) -> Dict[int, str]: pass
+    @abstractmethod
     def add_to_showcase(self, user_id: str, item_type: str, instance_id: int, slot_index: int) -> bool: pass
     @abstractmethod
     def remove_from_showcase(self, user_id: str, item_type: str, instance_id: int) -> bool: pass
+    @abstractmethod
+    def set_showcase_theme(self, user_id: str, slot_index: int, theme: str) -> bool: pass
 
     # --- 水族箱相关方法 ---
     # 获取用户水族箱中的鱼
@@ -686,6 +690,16 @@ class AbstractUserBuffRepository(ABC):
 
     @abstractmethod
     def update(self, buff: UserBuff):
+        pass
+
+    @abstractmethod
+    def consume_charge_if_match(
+        self,
+        buff_id: int,
+        old_payload: Optional[str],
+        new_payload: Optional[str],
+    ) -> bool:
+        """按 payload 乐观锁消耗一次 Buff charge；最后一次消耗时删除记录。"""
         pass
 
     @abstractmethod

@@ -100,6 +100,46 @@ class SqliteUserBuffRepository(AbstractUserBuffRepository):
             )
             conn.commit()
 
+    def consume_charge_if_match(
+        self,
+        buff_id: int,
+        old_payload: Optional[str],
+        new_payload: Optional[str],
+    ) -> bool:
+        """
+        按旧 payload 原子消耗一次 Buff charge。
+
+        new_payload 为 None 表示最后一次 charge，直接删除 Buff；否则更新为剩余
+        charge 的 payload。返回 False 表示并发请求已经先修改了该 Buff。
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            if new_payload is None:
+                if old_payload is None:
+                    cursor.execute(
+                        "DELETE FROM user_buffs WHERE id = ? AND payload IS NULL",
+                        (buff_id,),
+                    )
+                else:
+                    cursor.execute(
+                        "DELETE FROM user_buffs WHERE id = ? AND payload = ?",
+                        (buff_id, old_payload),
+                    )
+            elif old_payload is None:
+                cursor.execute(
+                    "UPDATE user_buffs SET payload = ? WHERE id = ? AND payload IS NULL",
+                    (new_payload, buff_id),
+                )
+            else:
+                cursor.execute(
+                    "UPDATE user_buffs SET payload = ? WHERE id = ? AND payload = ?",
+                    (new_payload, buff_id, old_payload),
+                )
+
+            conn.commit()
+            return cursor.rowcount > 0
+
     def get_all_active_by_user(self, user_id: str) -> List[UserBuff]:
         with self._get_connection() as conn:
             cursor = conn.cursor()

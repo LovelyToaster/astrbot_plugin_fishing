@@ -475,6 +475,18 @@ ITEM_DATA = [
         "WOF_PROBABILITY_BOOST",
         '{"probability_multiplier": 1.2, "max_probability": 0.95, "duration_days": 7}',
     ),
+    (
+        0,
+        "雷鸣护符",
+        "积蓄雷电之力，帮助你完成下一次电鱼。",
+        6,
+        "使用：下一次有效电鱼成功率提高20个百分点，成功时抽取鱼量提高10%。不可叠加。",
+        0,
+        True,
+        None,
+        "ELECTRIC_FISH_SUCCESS_BOOST",
+        '{"bonus_rate": 0.2, "max_rate": 1.0, "fish_count_multiplier": 1.1}',
+    ),
 ]
 
 SHOP_DATA = [
