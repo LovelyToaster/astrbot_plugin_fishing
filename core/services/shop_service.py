@@ -476,7 +476,7 @@ class ShopService:
             available_rods = {}
             
             for rod in user_rods:
-                if not rod.is_locked and not rod.is_equipped:  # 排除上锁和装备中的鱼竿
+                if not rod.is_in_showcase and not rod.is_locked and not rod.is_equipped:  # 排除展示柜、上锁和装备中的鱼竿
                     rod_id = rod.rod_id
                     available_rods[rod_id] = available_rods.get(rod_id, 0) + 1
             
@@ -492,7 +492,7 @@ class ShopService:
             available_accessories = {}
             
             for accessory in user_accessories:
-                if not accessory.is_locked and not accessory.is_equipped:  # 排除上锁和装备中的饰品
+                if not accessory.is_in_showcase and not accessory.is_locked and not accessory.is_equipped:  # 排除展示柜、上锁和装备中的饰品
                     accessory_id = accessory.accessory_id
                     available_accessories[accessory_id] = available_accessories.get(accessory_id, 0) + 1
             
@@ -553,6 +553,7 @@ class ShopService:
                     if remaining_qty <= 0:
                         break
                     if (rod.rod_id == rod_id and 
+                        not rod.is_in_showcase and
                         not rod.is_locked and 
                         not rod.is_equipped):
                         # 删除这个鱼竿实例
@@ -569,6 +570,7 @@ class ShopService:
                     if remaining_qty <= 0:
                         break
                     if (accessory.accessory_id == accessory_id and 
+                        not accessory.is_in_showcase and
                         not accessory.is_locked and 
                         not accessory.is_equipped):
                         # 删除这个饰品实例

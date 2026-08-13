@@ -2038,6 +2038,12 @@ class FishingPlugin(Star):
         async for r in showcase_handlers.set_showcase_signature(self, event):
             yield r
 
+    @filter.command("展示柜颜色", alias={"展示柜主题", "设置展示柜颜色"})
+    async def set_showcase_theme(self, event: AstrMessageEvent):
+        """设置单个展示位置颜色。用法：/展示柜颜色 <位置编号或装备短码> <颜色>"""
+        async for r in showcase_handlers.set_showcase_theme(self, event):
+            yield r
+
     async def _check_port_active(self):
         """验证端口是否实际已激活"""
         try:

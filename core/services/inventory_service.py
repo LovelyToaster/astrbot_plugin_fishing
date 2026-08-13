@@ -123,6 +123,9 @@ class InventoryService:
         enriched_rods = []
 
         for rod_instance in rod_instances:
+            # 展示柜属于独立的展示空间，不应继续占用“背包”展示列表。
+            if rod_instance.is_in_showcase:
+                continue
             rod_template = self.item_template_repo.get_rod_by_id(rod_instance.rod_id)
             if rod_template:
                 # 计算精炼后的最大耐久度
@@ -193,6 +196,8 @@ class InventoryService:
         enriched_accessories = []
 
         for accessory_instance in accessory_instances:
+            if accessory_instance.is_in_showcase:
+                continue
             accessory_template = self.item_template_repo.get_accessory_by_id(accessory_instance.accessory_id)
             if accessory_template:
                 enriched_accessories.append({
@@ -538,7 +543,11 @@ class InventoryService:
         rod_instances = self.inventory_repo.get_user_rod_instances(user_id)
         for rod_instance in rod_instances:
             # 只卖出未锁定且未装备的鱼竿
-            if not rod_instance.is_locked and not rod_instance.is_equipped:
+            if (
+                not rod_instance.is_in_showcase
+                and not rod_instance.is_locked
+                and not rod_instance.is_equipped
+            ):
                 rod_template = self.item_template_repo.get_rod_by_id(rod_instance.rod_id)
                 if rod_template:
                     # 计算售价（基础价格 × 精炼倍数）
@@ -557,7 +566,11 @@ class InventoryService:
         accessory_instances = self.inventory_repo.get_user_accessory_instances(user_id)
         for accessory_instance in accessory_instances:
             # 只卖出未锁定且未装备的饰品
-            if not accessory_instance.is_locked and not accessory_instance.is_equipped:
+            if (
+                not accessory_instance.is_in_showcase
+                and not accessory_instance.is_locked
+                and not accessory_instance.is_equipped
+            ):
                 accessory_template = self.item_template_repo.get_accessory_by_id(accessory_instance.accessory_id)
                 if accessory_template:
                     # 计算售价（基础价格 × 精炼倍数）
@@ -696,6 +709,9 @@ class InventoryService:
         if not rod_to_sell:
             return {"success": False, "message": "鱼竿不存在或不属于你"}
 
+        if rod_to_sell.is_in_showcase:
+            return {"success": False, "message": "该鱼竿正处于展示柜中，请先取出后再出售"}
+
         # 检查是否锁定
         if rod_to_sell.is_locked:
             return {"success": False, "message": "该鱼竿已锁定，无法出售"}
@@ -741,7 +757,7 @@ class InventoryService:
         
         # 只计算可以卖出的鱼竿（未锁定、未装备且小于5星）
         for rod_instance in user_rods:
-            if rod_instance.is_equipped or rod_instance.is_locked:
+            if rod_instance.is_in_showcase or rod_instance.is_equipped or rod_instance.is_locked:
                 continue
             rod_template = self.item_template_repo.get_rod_by_id(rod_instance.rod_id)
             # if rod_template and rod_template.rarity < 5:  # 只计算小于5星的鱼竿
@@ -779,6 +795,9 @@ class InventoryService:
 
         if not accessory_to_sell:
             return {"success": False, "message": "饰品不存在或不属于你"}
+
+        if accessory_to_sell.is_in_showcase:
+            return {"success": False, "message": "该饰品正处于展示柜中，请先取出后再出售"}
 
         # 检查是否锁定
         if accessory_to_sell.is_locked:
@@ -823,7 +842,7 @@ class InventoryService:
         
         # 只计算可以卖出的饰品（未锁定、未装备且小于5星）
         for accessory_instance in user_accessories:
-            if accessory_instance.is_equipped or accessory_instance.is_locked:
+            if accessory_instance.is_in_showcase or accessory_instance.is_equipped or accessory_instance.is_locked:
                 continue
             accessory_template = self.item_template_repo.get_accessory_by_id(accessory_instance.accessory_id)
             # if accessory_template and accessory_template.rarity < 5:  # 只计算小于5星的饰品
@@ -879,6 +898,8 @@ class InventoryService:
             target_instance = self.inventory_repo.get_user_rod_instance_by_id(user_id, instance_id)
             if not target_instance:
                 return {"success": False, "message": "❌ 鱼竿不存在或不属于你"}
+            if target_instance.is_in_showcase:
+                return {"success": False, "message": "❌ 展示柜中的鱼竿不能装备，请先取出"}
             equip_item_id = target_instance.rod_id
 
             # 阻止装备 0 耐久（非无限）鱼竿
@@ -899,6 +920,9 @@ class InventoryService:
                     break
             if instance_id not in [i.accessory_instance_id for i in instances]:
                 return {"success": False, "message": "❌ 饰品不存在或不属于你"}
+            target_instance = next(i for i in instances if i.accessory_instance_id == instance_id)
+            if target_instance.is_in_showcase:
+                return {"success": False, "message": "❌ 展示柜中的饰品不能装备，请先取出"}
             user.equipped_accessory_instance_id = instance_id
             equip_item_name = self.item_template_repo.get_accessory_by_id(equip_item_id).name
         else:
@@ -1023,6 +1047,9 @@ class InventoryService:
         template = config["template"]
         item_name = config["item_name"]
         id_field = config["id_field"]
+
+        if instance.is_in_showcase:
+            return {"success": False, "message": "展示柜中的装备不能精炼，请先取出"}
 
         # 检查精炼等级
         if instance.refine_level >= 10:
@@ -1280,6 +1307,9 @@ class InventoryService:
                 continue
             # 跳过正在装备的材料
             if getattr(candidate, 'is_equipped', False):
+                continue
+            # 展示柜中的装备不是可消耗的背包材料
+            if getattr(candidate, 'is_in_showcase', False):
                 continue
             # 跳过锁定的材料（锁定的装备不能作为精炼材料）
             if getattr(candidate, 'is_locked', False):
@@ -1885,6 +1915,9 @@ class InventoryService:
         if not rod_to_unlock.is_locked:
             return {"success": False, "message": "该鱼竿未锁定"}
 
+        if rod_to_unlock.is_in_showcase:
+            return {"success": False, "message": "展示柜中的鱼竿由展示柜自动保护，请先取出"}
+
         # 解锁鱼竿
         rod_to_unlock.is_locked = False
         self.inventory_repo.update_rod_instance(rod_to_unlock)
@@ -1948,6 +1981,9 @@ class InventoryService:
         if not accessory_to_unlock.is_locked:
             return {"success": False, "message": "该饰品未锁定"}
 
+        if accessory_to_unlock.is_in_showcase:
+            return {"success": False, "message": "展示柜中的饰品由展示柜自动保护，请先取出"}
+
         # 解锁饰品
         accessory_to_unlock.is_locked = False
         self.inventory_repo.update_accessory_instance(accessory_to_unlock)
@@ -1977,6 +2013,9 @@ class InventoryService:
         rod_instance = self.inventory_repo.get_user_rod_instance_by_id(user_id, rod_instance_id)
         if not rod_instance:
             return {"success": False, "message": "鱼竿不存在或不属于你"}
+
+        if rod_instance.is_in_showcase:
+            return {"success": False, "message": "展示柜中的鱼竿不能修复，请先取出"}
 
         # 获取鱼竿模板
         rod_template = self.item_template_repo.get_rod_by_id(rod_instance.rod_id)

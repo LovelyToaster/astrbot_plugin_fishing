@@ -867,7 +867,8 @@ class UserService:
                         "refine_level": instance.refine_level,
                         "durability": instance.current_durability,
                         "is_equipped": instance.rod_instance_id == user.equipped_rod_instance_id,
-                        "is_locked": instance.is_locked
+                        "is_locked": instance.is_locked,
+                        "is_in_showcase": instance.is_in_showcase,
                     })
             
             # 获取饰品库存
@@ -884,7 +885,8 @@ class UserService:
                         "rarity": accessory_template.rarity,
                         "refine_level": instance.refine_level,
                         "is_equipped": instance.accessory_instance_id == user.equipped_accessory_instance_id,
-                        "is_locked": instance.is_locked
+                        "is_locked": instance.is_locked,
+                        "is_in_showcase": instance.is_in_showcase,
                     })
             
             # 获取鱼饵库存
@@ -1052,7 +1054,10 @@ class UserService:
                     return {"success": False, "message": "鱼竿不存在"}
                 
                 rod_instances = self.inventory_repo.get_user_rod_instances(user_id)
-                target_instances = [inst for inst in rod_instances if inst.rod_id == item_id]
+                target_instances = [
+                    inst for inst in rod_instances
+                    if inst.rod_id == item_id and not inst.is_in_showcase
+                ]
                 
                 if len(target_instances) < quantity:
                     return {"success": False, "message": f"库存不足，当前只有 {len(target_instances)} 个"}
@@ -1074,7 +1079,10 @@ class UserService:
                     return {"success": False, "message": "饰品不存在"}
                 
                 accessory_instances = self.inventory_repo.get_user_accessory_instances(user_id)
-                target_instances = [inst for inst in accessory_instances if inst.accessory_id == item_id]
+                target_instances = [
+                    inst for inst in accessory_instances
+                    if inst.accessory_id == item_id and not inst.is_in_showcase
+                ]
                 
                 if len(target_instances) < quantity:
                     return {"success": False, "message": f"库存不足，当前只有 {len(target_instances)} 个"}

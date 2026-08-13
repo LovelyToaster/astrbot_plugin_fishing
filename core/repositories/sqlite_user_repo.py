@@ -280,6 +280,13 @@ class SqliteUserRepository(AbstractUserRepository):
         with self._get_connection() as conn:
             cursor = conn.cursor()
             try:
+                # 展示柜关系和位置主题没有依赖数据库外键，删除用户时主动清理，
+                # 避免留下无法归属的槽位记录。
+                cursor.execute("DELETE FROM user_showcase WHERE user_id = ?", (user_id,))
+                cursor.execute(
+                    "DELETE FROM user_showcase_slot_settings WHERE user_id = ?",
+                    (user_id,),
+                )
                 cursor.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
                 conn.commit()
                 return cursor.rowcount > 0

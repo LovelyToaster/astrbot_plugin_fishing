@@ -120,3 +120,26 @@ async def set_showcase_signature(plugin: "FishingPlugin", event: AstrMessageEven
         yield event.plain_result(f"✅ {result['message']}")
     else:
         yield event.plain_result(f"❌ {result['message']}")
+
+
+async def set_showcase_theme(plugin: "FishingPlugin", event: AstrMessageEvent):
+    """设置指定展示位置的颜色。用法：/展示柜颜色 <位置编号或装备短码> <颜色>"""
+    user_id = plugin._get_effective_user_id(event)
+    args = event.message_str.strip().split(maxsplit=2)
+
+    if len(args) < 2:
+        yield event.plain_result(plugin.showcase_service.get_theme_options())
+        return
+    if len(args) < 3:
+        yield event.plain_result(
+            "❌ 用法：/展示柜颜色 <位置编号或装备短码> <颜色>\n"
+            "💡 示例：/展示柜颜色 1 樱粉 或 /展示柜颜色 R1 樱粉\n\n"
+            + plugin.showcase_service.get_theme_options()
+        )
+        return
+
+    result = plugin.showcase_service.set_theme(user_id, args[1].strip(), args[2].strip())
+    if result.get("success"):
+        yield event.plain_result(f"✅ {result['message']}")
+    else:
+        yield event.plain_result(f"❌ {result['message']}")

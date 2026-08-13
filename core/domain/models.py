@@ -214,6 +214,8 @@ class UserShowcaseItem:
     slot_index: int
     added_at: Optional[datetime] = None
     detail: Optional[Any] = None  # 关联填充 UserRodInstance 或 UserAccessoryInstance
+    locked_before: bool = False  # 放入展示柜前的手动锁定状态
+    theme: str = "ocean"  # 当前展示槽位的预设主题
 
 @dataclass
 class User:

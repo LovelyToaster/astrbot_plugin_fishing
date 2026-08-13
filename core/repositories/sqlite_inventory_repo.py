@@ -61,7 +61,13 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
             item_type=row['item_type'],
             instance_id=row['instance_id'],
             slot_index=row['slot_index'],
-            added_at=row['added_at']
+            added_at=row['added_at'],
+            locked_before=bool(row['locked_before']) if 'locked_before' in row.keys() else False,
+            theme=(
+                row['slot_theme']
+                if 'slot_theme' in row.keys()
+                else row['theme'] if 'theme' in row.keys() else 'ocean'
+            ),
         )
 
     def _row_to_rod_instance(self, row: sqlite3.Row) -> Optional[UserRodInstance]:
@@ -239,33 +245,147 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
         """获取用户的展示柜列表"""
         with self._connection_manager.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM user_showcase WHERE user_id = ? ORDER BY slot_index ASC", (user_id,))
+            cursor.execute(
+                """
+                SELECT showcase.*, COALESCE(settings.theme, 'ocean') AS slot_theme
+                FROM user_showcase AS showcase
+                LEFT JOIN user_showcase_slot_settings AS settings
+                  ON settings.user_id = showcase.user_id
+                 AND settings.slot_index = showcase.slot_index
+                WHERE showcase.user_id = ?
+                ORDER BY showcase.slot_index ASC
+                """,
+                (user_id,),
+            )
             return [self._row_to_showcase_item(row) for row in cursor.fetchall()]
 
-    def add_to_showcase(self, user_id: str, item_type: str, instance_id: int, slot_index: int) -> bool:
-        """将物品放入展示柜并自动加锁状态"""
+    def get_showcase_slot_themes(self, user_id: str) -> Dict[int, str]:
+        """获取用户已保存的展示位置主题；未保存的位置由服务层使用默认主题。"""
         with self._connection_manager.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO user_showcase (user_id, item_type, instance_id, slot_index)
-                VALUES (?, ?, ?, ?)
-            """, (user_id, item_type, instance_id, slot_index))
+            cursor.execute(
+                """
+                SELECT slot_index, theme
+                FROM user_showcase_slot_settings
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            )
+            return {int(row["slot_index"]): row["theme"] for row in cursor.fetchall()}
+
+    def add_to_showcase(self, user_id: str, item_type: str, instance_id: int, slot_index: int) -> bool:
+        """原子地将物品放入展示柜，并记录放入前的锁定状态。"""
+        with self._connection_manager.get_connection() as conn:
+            cursor = conn.cursor()
             if item_type == 'rod':
-                cursor.execute("UPDATE user_rods SET is_in_showcase = 1, is_locked = 1 WHERE rod_instance_id = ? AND user_id = ?", (instance_id, user_id))
+                cursor.execute(
+                    "SELECT is_locked FROM user_rods WHERE rod_instance_id = ? AND user_id = ?",
+                    (instance_id, user_id),
+                )
             elif item_type == 'accessory':
-                cursor.execute("UPDATE user_accessories SET is_in_showcase = 1, is_locked = 1 WHERE accessory_instance_id = ? AND user_id = ?", (instance_id, user_id))
+                cursor.execute(
+                    "SELECT is_locked FROM user_accessories WHERE accessory_instance_id = ? AND user_id = ?",
+                    (instance_id, user_id),
+                )
+            else:
+                return False
+
+            instance_row = cursor.fetchone()
+            if not instance_row:
+                return False
+
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO user_showcase
+                        (user_id, item_type, instance_id, slot_index, locked_before)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (user_id, item_type, instance_id, slot_index, int(bool(instance_row['is_locked']))),
+                )
+                if item_type == 'rod':
+                    cursor.execute(
+                        """
+                        UPDATE user_rods
+                        SET is_in_showcase = 1, is_equipped = 0, is_locked = 1
+                        WHERE rod_instance_id = ? AND user_id = ?
+                        """,
+                        (instance_id, user_id),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE user_accessories
+                        SET is_in_showcase = 1, is_equipped = 0, is_locked = 1
+                        WHERE accessory_instance_id = ? AND user_id = ?
+                        """,
+                        (instance_id, user_id),
+                    )
+                conn.commit()
+                return True
+            except sqlite3.IntegrityError:
+                conn.rollback()
+                return False
+
+    def remove_from_showcase(self, user_id: str, item_type: str, instance_id: int) -> bool:
+        """原子地从展示柜取出物品，并恢复放入前的锁定状态。"""
+        with self._connection_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT locked_before FROM user_showcase
+                WHERE user_id = ? AND item_type = ? AND instance_id = ?
+                """,
+                (user_id, item_type, instance_id),
+            )
+            showcase_row = cursor.fetchone()
+            if not showcase_row:
+                return False
+
+            cursor.execute(
+                """
+                DELETE FROM user_showcase
+                WHERE user_id = ? AND item_type = ? AND instance_id = ?
+                """,
+                (user_id, item_type, instance_id),
+            )
+            locked_before = int(bool(showcase_row['locked_before']))
+            if item_type == 'rod':
+                cursor.execute(
+                    """
+                    UPDATE user_rods
+                    SET is_in_showcase = 0, is_locked = ?
+                    WHERE rod_instance_id = ? AND user_id = ?
+                    """,
+                    (locked_before, instance_id, user_id),
+                )
+            elif item_type == 'accessory':
+                cursor.execute(
+                    """
+                    UPDATE user_accessories
+                    SET is_in_showcase = 0, is_locked = ?
+                    WHERE accessory_instance_id = ? AND user_id = ?
+                    """,
+                    (locked_before, instance_id, user_id),
+                )
+            else:
+                conn.rollback()
+                return False
             conn.commit()
             return True
 
-    def remove_from_showcase(self, user_id: str, item_type: str, instance_id: int) -> bool:
-        """从展示柜中取出物品"""
+    def set_showcase_theme(self, user_id: str, slot_index: int, theme: str) -> bool:
+        """更新指定展示位置的主题，位置为空时也允许保存。"""
         with self._connection_manager.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM user_showcase WHERE user_id = ? AND item_type = ? AND instance_id = ?", (user_id, item_type, instance_id))
-            if item_type == 'rod':
-                cursor.execute("UPDATE user_rods SET is_in_showcase = 0 WHERE rod_instance_id = ? AND user_id = ?", (instance_id, user_id))
-            elif item_type == 'accessory':
-                cursor.execute("UPDATE user_accessories SET is_in_showcase = 0 WHERE accessory_instance_id = ? AND user_id = ?", (instance_id, user_id))
+            cursor.execute(
+                """
+                INSERT INTO user_showcase_slot_settings (user_id, slot_index, theme)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, slot_index) DO UPDATE SET theme = excluded.theme
+                """,
+                (user_id, slot_index, theme),
+            )
             conn.commit()
             return True
 
@@ -308,11 +428,13 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
             # 设置新的装备状态
             if rod_instance_id is not None:
                 cursor.execute("""
-                    UPDATE user_rods SET is_equipped = 1 WHERE rod_instance_id = ? AND user_id = ?
+                    UPDATE user_rods SET is_equipped = 1
+                    WHERE rod_instance_id = ? AND user_id = ? AND is_in_showcase = 0
                 """, (rod_instance_id, user_id))
             if accessory_instance_id is not None:
                 cursor.execute("""
-                    UPDATE user_accessories SET is_equipped = 1 WHERE accessory_instance_id = ? AND user_id = ?
+                    UPDATE user_accessories SET is_equipped = 1
+                    WHERE accessory_instance_id = ? AND user_id = ? AND is_in_showcase = 0
                 """, (accessory_instance_id, user_id))
 
             conn.commit()
@@ -435,6 +557,10 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
     def delete_rod_instance(self, rod_instance_id: int) -> None:
         with self._connection_manager.get_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM user_showcase WHERE item_type = 'rod' AND instance_id = ?",
+                (rod_instance_id,),
+            )
             cursor.execute("DELETE FROM user_rods WHERE rod_instance_id = ?", (rod_instance_id,))
             conn.commit()
 
@@ -463,6 +589,10 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
     def delete_accessory_instance(self, accessory_instance_id: int) -> None:
         with self._connection_manager.get_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM user_showcase WHERE item_type = 'accessory' AND instance_id = ?",
+                (accessory_instance_id,),
+            )
             cursor.execute("DELETE FROM user_accessories WHERE accessory_instance_id = ?", (accessory_instance_id,))
             conn.commit()
             
@@ -701,9 +831,13 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
                 else:
                     raise ValueError(f"目标用户 {new_user_id} 不存在")
             
+            cursor.execute(
+                "DELETE FROM user_showcase WHERE item_type = 'rod' AND instance_id = ?",
+                (rod_instance_id,),
+            )
             cursor.execute("""
                 UPDATE user_rods
-                SET user_id = ?, is_equipped = 0
+                SET user_id = ?, is_equipped = 0, is_in_showcase = 0, is_locked = 0
                 WHERE rod_instance_id = ?
             """, (new_user_id, rod_instance_id))
             conn.commit()
@@ -737,9 +871,13 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
                 else:
                     raise ValueError(f"目标用户 {new_user_id} 不存在")
             
+            cursor.execute(
+                "DELETE FROM user_showcase WHERE item_type = 'accessory' AND instance_id = ?",
+                (accessory_instance_id,),
+            )
             cursor.execute("""
                 UPDATE user_accessories
-                SET user_id = ?, is_equipped = 0
+                SET user_id = ?, is_equipped = 0, is_in_showcase = 0, is_locked = 0
                 WHERE accessory_instance_id = ?
             """, (new_user_id, accessory_instance_id))
             conn.commit()
