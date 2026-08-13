@@ -7,7 +7,7 @@ from astrbot.api import logger
 from ....domain.models import FishingZone
 from ....utils import get_now
 from ..ai_context import AIContext
-from .base import AIAction
+from .base import AIAction, record_ai_decision
 
 
 class SwitchZoneAction(AIAction):
@@ -26,6 +26,7 @@ class SwitchZoneAction(AIAction):
         zones: List[FishingZone] = ctx.inventory_repo.get_all_zones()
 
         if len(zones) <= 1:
+            record_ai_decision(ctx, self.name, "single_zone")
             return
 
         # 过滤可进入的激活区域
@@ -44,6 +45,7 @@ class SwitchZoneAction(AIAction):
             eligible.append(zone)
 
         if len(eligible) <= 1:
+            record_ai_decision(ctx, self.name, "no_alternative_zone")
             return
 
         coins = ctx.ai_user.coins
@@ -59,6 +61,7 @@ class SwitchZoneAction(AIAction):
                 target = self._pick_best_affordable(eligible, coins)
                 if target and target.id != current_zone_id:
                     self._do_switch(ctx, current_zone_id, target)
+                    return
         else:
             # 当前区域不在可选列表中（已过期/失去资格），自动切换到最佳可负担区域
             fallback = self._pick_best_affordable(eligible, coins)
@@ -74,6 +77,8 @@ class SwitchZoneAction(AIAction):
             return
         if coins >= best.fishing_cost * self.upgrade_threshold:
             self._do_switch(ctx, current_zone_id, best)
+        else:
+            record_ai_decision(ctx, self.name, "zone_upgrade_threshold_not_met")
 
     def _pick_best_affordable(self, zones: List[FishingZone], coins: int):
         """按 ID 降序选择第一个可负担钓鱼消耗的区域。"""
@@ -87,3 +92,20 @@ class SwitchZoneAction(AIAction):
         if result.get("success"):
             logger.info(f"[AI] {self.name}: {from_zone_id} -> {to_zone.id} ({to_zone.name})")
             ctx.refresh_ai_user()
+            record_ai_decision(
+                ctx,
+                self.name,
+                "zone_cost_and_balance_policy",
+                features={"from_zone_id": from_zone_id, "to_zone_id": to_zone.id},
+                executed=1,
+                success=1,
+            )
+        else:
+            record_ai_decision(
+                ctx,
+                self.name,
+                "zone_switch_failed",
+                features={"from_zone_id": from_zone_id, "to_zone_id": to_zone.id},
+                executed=1,
+                success=0,
+            )

@@ -316,6 +316,7 @@ class InventoryService:
                     fish_count=fish_count_sold,
                     details={
                         "keep_one": keep_one,
+                        "sold_value": sold_value,
                         "normal_count": sold_details["普通"],
                         "high_quality_count": sold_details["✨高品质"],
                     },
@@ -328,7 +329,7 @@ class InventoryService:
         if sold_details["✨高品质"] > 0:
             message += f"\n📊 出售详情：普通鱼 {sold_details['普通']} 条，✨高品质鱼 {sold_details['✨高品质']} 条"
 
-        return {"success": True, "message": message}
+        return {"success": True, "message": message, "sold_value": sold_value}
 
     def sell_fish_by_rarity(self, user_id: str, rarity: int) -> Dict[str, Any]:
         """
@@ -383,6 +384,7 @@ class InventoryService:
                     fish_count=total_fish_count,
                     details={
                         "rarity": rarity,
+                        "sold_value": total_value,
                         "normal_count": sold_details["普通"],
                         "high_quality_count": sold_details["✨高品质"],
                     },
@@ -585,6 +587,7 @@ class InventoryService:
                     details={
                         "source": "sell_everything",
                         "fish_count": sold_items["fish_count"],
+                        "sold_value": total_value,
                     },
                 )
             except Exception as e:

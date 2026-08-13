@@ -12,12 +12,14 @@ AIAction 基类 + 决策工具函数。
 """
 
 import math
+from datetime import datetime
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from astrbot.api import logger
 
 from ..ai_context import AIContext
+from ....utils import get_now
 
 
 class AIAction(ABC):
@@ -52,6 +54,60 @@ def parse_int_safe(value) -> int:
         return 0
 
 
+def seconds_since(value: Optional[datetime]) -> float:
+    """兼容 SQLite 返回的 naive 时间与应用层 aware 时间。"""
+    if value is None:
+        return float("inf")
+    now = get_now()
+    if value.tzinfo is None and now.tzinfo is not None:
+        now = now.replace(tzinfo=None)
+    elif value.tzinfo is not None and now.tzinfo is None:
+        now = now.replace(tzinfo=value.tzinfo)
+    return max(0.0, (now - value).total_seconds())
+def record_ai_decision(
+    ctx: AIContext,
+    action_type: str,
+    reason: str,
+    *,
+    features: Optional[Dict[str, Any]] = None,
+    executed: int = 0,
+    success: Optional[int] = None,
+    reward_value: int = 0,
+    target_id: Optional[str] = None,
+    estimated_value: float = 0.0,
+    coins_before: Optional[int] = None,
+    coins_after: Optional[int] = None,
+) -> None:
+    """统一记录动作执行、跳过和失败，避免各 Action 自己拼快照字段。"""
+    before = (
+        int(getattr(ctx.ai_user, "coins", 0) or 0)
+        if coins_before is None
+        else int(coins_before)
+    )
+    after = (
+        int(getattr(ctx.ai_user, "coins", before) or before)
+        if coins_after is None
+        else int(coins_after)
+    )
+    snapshot_id = ctx.snapshot.create(
+        action_type=action_type,
+        target_id=target_id,
+        features=features or {"action": action_type},
+        predicted_prob=(
+            float(success) if success is not None and executed else None
+        ),
+        decision_reason=reason,
+        estimated_value=estimated_value,
+        coins_before=before,
+    )
+    ctx.snapshot.complete(
+        snapshot_id,
+        executed=executed,
+        success=success,
+        fail_reason=None if success in (None, 1) else reason,
+        reward_value=reward_value,
+        coins_after=after,
+    )
 # 权重常量，需与设计文档一致
 WEIGHT_TOP_ATTACKER = 0.5  # 传统模式头名 A 权重
 WEIGHT_TOP_ACTOR = 0.3     # 传统模式头名 B 权重

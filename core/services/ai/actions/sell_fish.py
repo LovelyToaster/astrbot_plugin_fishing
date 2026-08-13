@@ -5,7 +5,7 @@ import time
 from astrbot.api import logger
 
 from ..ai_context import AIContext
-from .base import AIAction
+from .base import AIAction, parse_int_safe, record_ai_decision
 
 
 class SellFishAction(AIAction):
@@ -34,6 +34,7 @@ class SellFishAction(AIAction):
 
         sell_result = ctx.inventory_service.sell_all_fish(ctx.ai_user_id, keep_one=False)
         if not sell_result.get("success"):
+            record_ai_decision(ctx, self.name, "sell_service_failed")
             return
 
         ctx.state.set("last_sell_fish_ts", now)
@@ -48,6 +49,19 @@ class SellFishAction(AIAction):
                 value_str = (
                     after.split("金币")[0].strip().replace(",", "").replace("，", "")
                 )
+        sold_value = parse_int_safe(sell_result.get("sold_value", value_str))
+        record_ai_decision(
+            ctx,
+            self.name,
+            "pond_threshold_reached",
+            features={"current_fish_count": current_count, "capacity": capacity},
+            executed=1,
+            success=1,
+            reward_value=sold_value,
+            coins_after=int(
+                getattr(ctx.user_repo.get_by_id(ctx.ai_user_id), "coins", 0) or 0
+            ),
+        )
         ctx.broadcast.sold_fish(value_str)
 
         # 卖鱼后金币变化，刷新用户对象供后续动作使用

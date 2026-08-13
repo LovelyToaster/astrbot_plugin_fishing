@@ -24,6 +24,11 @@ class SqliteAIPlayerStateRepository(AbstractAIPlayerStateRepository):
         "last_sell_equipment_ts",
         "last_paid_gacha_ts",
         "last_free_gacha_date",
+        "last_steal_failure_ts",
+        "last_electric_failure_ts",
+        "last_item_use_ts",
+        "last_social_item_ts",
+        "last_fishing_item_ts",
     }
 
     def __init__(self, db_path: str):
@@ -64,6 +69,11 @@ class SqliteAIPlayerStateRepository(AbstractAIPlayerStateRepository):
                     last_sell_equipment_ts=row["last_sell_equipment_ts"],
                     last_paid_gacha_ts=row["last_paid_gacha_ts"],
                     last_free_gacha_date=row["last_free_gacha_date"],
+                    last_steal_failure_ts=row["last_steal_failure_ts"] if "last_steal_failure_ts" in row.keys() else 0.0,
+                    last_electric_failure_ts=row["last_electric_failure_ts"] if "last_electric_failure_ts" in row.keys() else 0.0,
+                    last_item_use_ts=row["last_item_use_ts"] if "last_item_use_ts" in row.keys() else 0.0,
+                    last_social_item_ts=row["last_social_item_ts"] if "last_social_item_ts" in row.keys() else 0.0,
+                    last_fishing_item_ts=row["last_fishing_item_ts"] if "last_fishing_item_ts" in row.keys() else 0.0,
                 )
 
             # 不存在则插入默认行
@@ -85,6 +95,11 @@ class SqliteAIPlayerStateRepository(AbstractAIPlayerStateRepository):
                 last_sell_equipment_ts=row["last_sell_equipment_ts"],
                 last_paid_gacha_ts=row["last_paid_gacha_ts"],
                 last_free_gacha_date=row["last_free_gacha_date"],
+                last_steal_failure_ts=row["last_steal_failure_ts"] if "last_steal_failure_ts" in row.keys() else 0.0,
+                last_electric_failure_ts=row["last_electric_failure_ts"] if "last_electric_failure_ts" in row.keys() else 0.0,
+                last_item_use_ts=row["last_item_use_ts"] if "last_item_use_ts" in row.keys() else 0.0,
+                last_social_item_ts=row["last_social_item_ts"] if "last_social_item_ts" in row.keys() else 0.0,
+                last_fishing_item_ts=row["last_fishing_item_ts"] if "last_fishing_item_ts" in row.keys() else 0.0,
             )
 
     def update_field(self, user_id: str, field: str, value) -> None:

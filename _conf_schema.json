@@ -771,6 +771,12 @@
         "hint": "是否允许 AI 玩家自动抽卡",
         "default": true
       },
+      "item_strategy_enabled": {
+        "description": "启用 AI 道具策略",
+        "type": "bool",
+        "hint": "按金币、鱼塘价值、护盾和钓鱼收益自动使用社交与钓鱼道具",
+        "default": true
+      },
       "gacha_paid_interval_seconds": {
         "description": "金币池抽卡最小间隔（秒）",
         "type": "int",
@@ -780,7 +786,7 @@
       "gacha_spending_ratio": {
         "description": "单次抽卡消耗占当前金币的最大比例（0-1）",
         "type": "float",
-        "hint": "单次抽卡最多消耗当前金币的此比例",
+        "hint": "单次抽卡最多消耗扣除 AI 运营储备后可用金币的此比例",
         "default": 0.05,
         "min": 0.0,
         "max": 1.0
@@ -812,7 +818,7 @@
       "gacha_ten_pull_multiplier": {
         "description": "十连预算倍率",
         "type": "float",
-        "hint": "十连最多花 当前金币×单次花费比例×此倍率",
+        "hint": "十连最多花可用金币×单次花费比例×此倍率，且不超过可用金币25%",
         "default": 5,
         "min": 1
       },

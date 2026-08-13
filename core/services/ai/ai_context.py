@@ -32,7 +32,10 @@ from ..user_service import UserService
 from .ai_state_holder import AIStateHolder
 from .broadcast_helper import BroadcastHelper
 from .feature_extractor import FeatureExtractor
+from .gacha_strategy import GachaStrategy
+from .item_strategy import AIItemStrategy
 from .snapshot_writer import SnapshotWriter
+from .target_strategy import SocialTargetScorer
 
 
 class AIContext:
@@ -92,6 +95,11 @@ class AIContext:
         # 懒缓存：候选特征
         self._candidates_cache: Optional[List[Tuple[str, Dict[str, float]]]] = None
 
+        # 策略对象只持有当前 context，便于动作单测时替换/注入依赖。
+        self.item_strategy = AIItemStrategy(self)
+        self.target_strategy = SocialTargetScorer(self)
+        self.gacha_strategy = GachaStrategy(self)
+
     # ---------- 用户对象刷新 ----------
 
     def refresh_ai_user(self) -> User:
@@ -113,11 +121,13 @@ class AIContext:
 
     # ---------- 候选特征懒加载 ----------
 
-    def get_candidates(self) -> List[Tuple[str, Dict[str, float]]]:
+    def get_candidates(self, force: bool = False) -> List[Tuple[str, Dict[str, float]]]:
         """
         懒加载所有候选真人目标的特征。tick 内多次调用只查一次。
         失败返回空列表并记 debug。
         """
+        if force:
+            self._candidates_cache = None
         if self._candidates_cache is not None:
             return self._candidates_cache
 
@@ -131,6 +141,10 @@ class AIContext:
             self._candidates_cache = []
 
         return self._candidates_cache
+
+    def refresh_candidates(self, force: bool = True) -> List[Tuple[str, Dict[str, float]]]:
+        """显式刷新真人候选；force=False 时保留当前 tick 缓存。"""
+        return self.get_candidates(force=force)
 
     # ---------- 目标信息 ----------
 

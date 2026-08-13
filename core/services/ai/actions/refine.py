@@ -12,7 +12,7 @@
 """
 
 from ..ai_context import AIContext
-from .base import AIAction
+from .base import AIAction, record_ai_decision
 
 
 class RefineAction(AIAction):
@@ -25,6 +25,7 @@ class RefineAction(AIAction):
         # 预算闸门：金币不足储备金则整轮放弃（无时间节流）
         ctx.refresh_ai_user()
         if ctx.ai_user.coins < self.reserve_coins:
+            record_ai_decision(ctx, self.name, "below_refine_reserve")
             return
 
         rod_res = ctx.inventory_service.get_user_rod_inventory(ctx.ai_user_id)
@@ -52,6 +53,7 @@ class RefineAction(AIAction):
                 targets.append(target)
 
         if not targets:
+            record_ai_decision(ctx, self.name, "no_refine_candidate")
             return
 
         # 排序：优先精炼未装备、高稀有度、低精炼等级
@@ -80,6 +82,19 @@ class RefineAction(AIAction):
                     ctx.ai_user_id, target["instance_id"], item_type
                 )
                 ctx.refresh_ai_user()
+                record_ai_decision(
+                    ctx,
+                    self.name,
+                    "refine_candidate_available",
+                    features={
+                        "instance_id": target.get("instance_id"),
+                        "item_type": item_type,
+                        "old_level": target.get("refine_level", 1),
+                    },
+                    executed=1,
+                    success=1,
+                    coins_before=ctx.ai_user.coins,
+                )
                 break
 
             # 金币不足 → 整体放弃本轮
@@ -92,6 +107,14 @@ class RefineAction(AIAction):
 
             # 随机失败（已扣费）→ 跳出
             if result.get("failed"):
+                record_ai_decision(
+                    ctx,
+                    self.name,
+                    "refine_random_failed",
+                    features={"instance_id": target.get("instance_id")},
+                    executed=1,
+                    success=0,
+                )
                 break
 
     @staticmethod

@@ -1,7 +1,7 @@
 """动作：耐久降到 ≤1/2 时修复鱼竿（无节流，装备中优先）。"""
 
 from ..ai_context import AIContext
-from .base import AIAction
+from .base import AIAction, record_ai_decision
 
 
 class RepairRodAction(AIAction):
@@ -14,6 +14,7 @@ class RepairRodAction(AIAction):
         result = ctx.inventory_service.get_user_rod_inventory(ctx.ai_user_id)
         rods = result.get("rods", [])
         if not rods:
+            record_ai_decision(ctx, self.name, "no_rods")
             return
 
         # 候选：耐久 ≤ 1/2 且未锁定（无限耐久 current_durability=None 会被跳过）
@@ -26,6 +27,7 @@ class RepairRodAction(AIAction):
             and not r.get("is_locked", False)
         ]
         if not candidates:
+            record_ai_decision(ctx, self.name, "no_rod_below_half_durability")
             return
 
         # 装备中的优先（is_equipped=True 排在前）
@@ -43,3 +45,13 @@ class RepairRodAction(AIAction):
                 )
                 # 修复扣金币，刷新用户对象
                 ctx.refresh_ai_user()
+                record_ai_decision(
+                    ctx,
+                    self.name,
+                    "durability_below_half",
+                    features={"instance_id": r.get("instance_id")},
+                    executed=1,
+                    success=1,
+                    reward_value=0,
+                )
+                break

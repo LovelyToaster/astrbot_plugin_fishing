@@ -867,6 +867,12 @@ class AbstractAIDecisionSnapshotRepository(ABC):
         target_user_id: Optional[str],
         features_json: str,
         predicted_prob: Optional[float],
+        decision_reason: Optional[str] = None,
+        estimated_value: Optional[float] = None,
+        coins_before: Optional[int] = None,
+        item_id: Optional[int] = None,
+        gacha_pool_id: Optional[int] = None,
+        strategy_version: str = "v2",
     ) -> int:
         """
         创建决策快照，返回自增 id。
@@ -882,6 +888,9 @@ class AbstractAIDecisionSnapshotRepository(ABC):
         success: Optional[int],
         fail_reason: Optional[str],
         reward_value: Optional[int],
+        coins_after: Optional[int] = None,
+        item_delta_json: Optional[str] = None,
+        result_json: Optional[str] = None,
     ) -> None:
         """
         回填决策执行结果。动作后调用。

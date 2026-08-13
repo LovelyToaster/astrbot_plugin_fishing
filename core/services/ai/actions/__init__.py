@@ -20,6 +20,7 @@ from .sell_fish import SellFishAction
 from .steal_fish import StealFishAction
 from .switch_zone import SwitchZoneAction
 from .use_best_bait import UseBestBaitAction
+from .use_items import UseItemsAction
 
 __all__ = [
     "AIAction",
@@ -36,6 +37,7 @@ __all__ = [
     "ElectricFishAction",
     "FreeGachaAction",
     "PaidGachaAction",
+    "UseItemsAction",
 ]
 
 
@@ -61,6 +63,9 @@ def build_actions(ai_config: Dict[str, Any]) -> List[AIAction]:
             pond_full_threshold=pond_threshold,
         ),
     ]
+
+    if ai_config.get("item_strategy_enabled", True):
+        actions.append(UseItemsAction())
 
     if ai_config.get("zone_switch_enabled", True):
         actions.append(

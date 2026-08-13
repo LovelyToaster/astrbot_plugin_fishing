@@ -9,6 +9,8 @@ AI 状态持有器 (AIStateHolder)
 - last_sell_equipment_ts: float
 - last_paid_gacha_ts: float
 - last_free_gacha_date: Optional[date]  # 内存中以 date 存，落库时序列化
+- last_steal_failure_ts / last_electric_failure_ts: float
+- last_item_use_ts / last_social_item_ts / last_fishing_item_ts: float
 """
 
 from datetime import date
@@ -25,6 +27,11 @@ _VALID_FIELDS = {
     "last_sell_equipment_ts",
     "last_paid_gacha_ts",
     "last_free_gacha_date",
+    "last_steal_failure_ts",
+    "last_electric_failure_ts",
+    "last_item_use_ts",
+    "last_social_item_ts",
+    "last_fishing_item_ts",
 }
 
 
@@ -40,6 +47,11 @@ class AIStateHolder:
         self.last_sell_equipment_ts: float = 0.0
         self.last_paid_gacha_ts: float = 0.0
         self.last_free_gacha_date: Optional[date] = None
+        self.last_steal_failure_ts: float = 0.0
+        self.last_electric_failure_ts: float = 0.0
+        self.last_item_use_ts: float = 0.0
+        self.last_social_item_ts: float = 0.0
+        self.last_fishing_item_ts: float = 0.0
 
     # ---------- 加载 ----------
 
@@ -55,6 +67,11 @@ class AIStateHolder:
                 if state.last_free_gacha_date
                 else None
             )
+            self.last_steal_failure_ts = getattr(state, "last_steal_failure_ts", 0.0) or 0.0
+            self.last_electric_failure_ts = getattr(state, "last_electric_failure_ts", 0.0) or 0.0
+            self.last_item_use_ts = getattr(state, "last_item_use_ts", 0.0) or 0.0
+            self.last_social_item_ts = getattr(state, "last_social_item_ts", 0.0) or 0.0
+            self.last_fishing_item_ts = getattr(state, "last_fishing_item_ts", 0.0) or 0.0
             logger.info(f"[AI] 从数据库加载状态成功: user_id={self.ai_user_id}")
         except Exception as e:
             logger.warning(f"[AI] 从数据库加载状态失败，使用默认值: {e}")

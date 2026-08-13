@@ -205,7 +205,7 @@ class SqliteStatisticsRepository:
                 FROM statistics_logs
                 WHERE target_id = ?
                   AND action_type = ?
-                  AND created_at >= datetime('now', ?)
+                  AND created_at >= datetime('now', '+8 hours', ?)
                 GROUP BY user_id
                 ORDER BY COUNT(*) DESC
                 LIMIT 1
@@ -217,6 +217,31 @@ class SqliteStatisticsRepository:
         except Exception as e:
             logger.debug(f"[统计] get_top_attacker_of 查询失败: {e}")
             return None
+
+    def get_incoming_attacker_counts(
+        self,
+        victim_id: str,
+        action_type: str,
+        hours: int = 24,
+    ) -> Dict[str, int]:
+        """按攻击者返回某用户在时间窗口内受到的攻击次数。"""
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT user_id, COUNT(*) AS cnt
+                    FROM statistics_logs
+                    WHERE target_id = ? AND action_type = ?
+                      AND user_id <> 'SYSTEM'
+                      AND created_at >= datetime('now', '+8 hours', ?)
+                    GROUP BY user_id
+                    """,
+                    (victim_id, action_type, f"-{int(hours)} hours"),
+                ).fetchall()
+            return {row["user_id"]: int(row["cnt"] or 0) for row in rows}
+        except Exception as e:
+            logger.debug(f"[统计] get_incoming_attacker_counts 查询失败: {e}")
+            return {}
 
     def get_top_actor(
         self,
@@ -239,7 +264,7 @@ class SqliteStatisticsRepository:
                 SELECT user_id
                 FROM statistics_logs
                 WHERE action_type = ?
-                  AND created_at >= datetime('now', ?)
+                  AND created_at >= datetime('now', '+8 hours', ?)
                   AND user_id <> 'SYSTEM'
             """
             if exclude_user_id is not None:
@@ -276,7 +301,7 @@ class SqliteStatisticsRepository:
                 SELECT user_id, COUNT(*) AS cnt
                 FROM statistics_logs
                 WHERE action_type = ?
-                  AND created_at >= datetime('now', ?)
+                  AND created_at >= datetime('now', '+8 hours', ?)
                   AND user_id <> 'SYSTEM'
                 GROUP BY user_id
                 """,
@@ -308,7 +333,7 @@ class SqliteStatisticsRepository:
                 WHERE action_type = ?
                   AND target_id IS NOT NULL
                   AND target_id <> 'SYSTEM'
-                  AND created_at >= datetime('now', ?)
+                  AND created_at >= datetime('now', '+8 hours', ?)
                 GROUP BY target_id
                 """,
                 (action_type, f"-{int(hours)} hours"),
@@ -316,5 +341,86 @@ class SqliteStatisticsRepository:
             return {row["target_id"]: row["cnt"] for row in cursor.fetchall()}
         except Exception as e:
             logger.debug(f"[统计] get_victim_counts_in_window 查询失败: {e}")
+            return {}
+
+    def get_successful_victim_counts_in_window(
+        self,
+        action_type: str,
+        hours: int = 24,
+    ) -> Dict[str, int]:
+        """查询成功施加到各目标的次数，用于防御策略。"""
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT target_id, COUNT(*) AS cnt
+                    FROM statistics_logs
+                    WHERE action_type = ? AND success = 1
+                      AND target_id IS NOT NULL
+                      AND target_id <> 'SYSTEM'
+                      AND created_at >= datetime('now', '+8 hours', ?)
+                    GROUP BY target_id
+                    """,
+                    (action_type, f"-{int(hours)} hours"),
+                ).fetchall()
+            return {row["target_id"]: int(row["cnt"] or 0) for row in rows}
+        except Exception as e:
+            logger.debug(f"[统计] get_successful_victim_counts 查询失败: {e}")
+            return {}
+
+    def get_actor_target_counts_in_window(
+        self,
+        actor_id: str,
+        action_type: str,
+        hours: int = 24,
+    ) -> Dict[str, int]:
+        """查询 AI 在时间窗口内分别攻击过哪些目标。"""
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT target_id, COUNT(*) AS cnt
+                    FROM statistics_logs
+                    WHERE user_id = ? AND action_type = ?
+                      AND target_id IS NOT NULL
+                      AND created_at >= datetime('now', '+8 hours', ?)
+                    GROUP BY target_id
+                    """,
+                    (actor_id, action_type, f"-{int(hours)} hours"),
+                ).fetchall()
+            return {row["target_id"]: int(row["cnt"] or 0) for row in rows}
+        except Exception as e:
+            logger.debug(f"[统计] get_actor_target_counts_in_window 查询失败: {e}")
+            return {}
+
+    def get_target_success_rates(
+        self,
+        action_type: str,
+        hours: int = 168,
+    ) -> Dict[str, tuple]:
+        """返回目标维度的 (attempts, successes)，用于 Beta 平滑。"""
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT target_id,
+                           COUNT(*) AS attempts,
+                           SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) AS successes
+                    FROM statistics_logs
+                    WHERE action_type = ? AND target_id IS NOT NULL
+                      AND created_at >= datetime('now', '+8 hours', ?)
+                    GROUP BY target_id
+                    """,
+                    (action_type, f"-{int(hours)} hours"),
+                ).fetchall()
+            return {
+                row["target_id"]: (
+                    int(row["attempts"] or 0),
+                    int(row["successes"] or 0),
+                )
+                for row in rows
+            }
+        except Exception as e:
+            logger.debug(f"[统计] get_target_success_rates 查询失败: {e}")
             return {}
 

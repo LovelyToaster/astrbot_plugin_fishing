@@ -4,7 +4,7 @@ AI 决策特征提取器 (FeatureExtractor)
 一次 SQL 查询批量拉取所有候选真人目标的特征，供模型推理使用。
 候选筛选：is_ai=0 AND is_system=0，可通过 exclude_ids 排除额外 ID。
 
-特征列表（8 维）：
+特征列表（扩展维度）：
 - target_fish_count       目标鱼塘鱼数
 - target_coins            目标金币
 - target_has_shield       目标是否有护盾类 buff
@@ -17,6 +17,7 @@ AI 决策特征提取器 (FeatureExtractor)
 设计约束：训练脚本必须使用相同的特征名和 SQL 逻辑，保证训练/推理特征对齐。
 """
 
+import json
 import sqlite3
 import threading
 from typing import Dict, List, Optional, Tuple
@@ -32,9 +33,13 @@ class FeatureExtractor:
     # 特征名列表（固定顺序，训练脚本必须一致）
     FEATURE_NAMES = [
         "target_fish_count",
+        "target_fish_value",
         "target_coins",
         "target_has_shield",
         "target_has_protection",
+        "target_protection_layers",
+        "target_ai_action_count",
+        "target_actor_count",
         "target_rod_rarity",
         "target_accessory_rarity",
         "attacker_rod_rarity",
@@ -138,6 +143,10 @@ class FeatureExtractor:
                 COALESCE(u.coins, 0) AS target_coins,
                 (SELECT COALESCE(SUM(quantity), 0) FROM user_fish_inventory ufi
                  WHERE ufi.user_id = u.user_id) AS target_fish_count,
+                (SELECT COALESCE(SUM(ufi.quantity * f.base_value * (1 + COALESCE(ufi.quality_level, 0))), 0)
+                 FROM user_fish_inventory ufi
+                 JOIN fish f ON f.fish_id = ufi.fish_id
+                 WHERE ufi.user_id = u.user_id) AS target_fish_value,
                 (SELECT MAX(r.rarity) FROM user_rods ur
                  JOIN rods r ON ur.rod_id = r.rod_id
                  WHERE ur.user_id = u.user_id AND ur.is_equipped = 1) AS target_rod_rarity,
@@ -148,14 +157,27 @@ class FeatureExtractor:
                     SELECT 1 FROM user_buffs ub
                     WHERE ub.user_id = u.user_id
                       AND (ub.buff_type LIKE '%STEAL%SHIELD%' OR ub.buff_type LIKE '%STEAL%PROTECTION%')
-                      AND (ub.expires_at IS NULL OR ub.expires_at > datetime('now'))
+                      AND (ub.expires_at IS NULL OR ub.expires_at > datetime('now', '+8 hours'))
                 ) AS target_has_shield,
                 EXISTS(
                     SELECT 1 FROM user_buffs ub
                     WHERE ub.user_id = u.user_id
-                      AND ub.buff_type LIKE '%STEAL%PROTECTION%'
-                      AND (ub.expires_at IS NULL OR ub.expires_at > datetime('now'))
+                      AND ub.buff_type = 'STEAL_PROTECTION_BUFF'
+                      AND (ub.expires_at IS NULL OR ub.expires_at > datetime('now', '+8 hours'))
                 ) AS target_has_protection
+                ,(SELECT ub.payload FROM user_buffs ub
+                  WHERE ub.user_id = u.user_id
+                    AND ub.buff_type = 'STEAL_PROTECTION_BUFF'
+                    AND (ub.expires_at IS NULL OR ub.expires_at > datetime('now', '+8 hours'))
+                  ORDER BY ub.id DESC LIMIT 1) AS protection_payload
+                ,(SELECT COUNT(*) FROM statistics_logs sl
+                  WHERE sl.user_id = ? AND sl.target_id = u.user_id
+                    AND sl.action_type IN ('steal', 'electric_fish')
+                    AND sl.created_at >= datetime('now', '+8 hours', '-24 hours')) AS target_ai_action_count
+                ,(SELECT COUNT(*) FROM statistics_logs sl
+                  WHERE sl.user_id = u.user_id
+                    AND sl.action_type IN ('steal', 'electric_fish')
+                    AND sl.created_at >= datetime('now', '+8 hours', '-24 hours')) AS target_actor_count
             FROM users u
             WHERE u.is_ai = 0
               AND u.is_system = 0
@@ -166,16 +188,26 @@ class FeatureExtractor:
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
-            cursor.execute(sql, exclude_ids)
+            cursor.execute(sql, [attacker_user.user_id, *exclude_ids])
             rows = cursor.fetchall()
 
             for row in rows:
                 try:
+                    protection_layers = 0
+                    try:
+                        payload = json.loads(row["protection_payload"] or "{}")
+                        protection_layers = max(0, int(payload.get("layers", 0) or 0))
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        protection_layers = 0
                     features = {
                         "target_fish_count": float(row["target_fish_count"] or 0),
+                        "target_fish_value": float(row["target_fish_value"] or 0),
                         "target_coins": float(row["target_coins"] or 0),
-                        "target_has_shield": float(row["target_has_shield"] or 0),
-                        "target_has_protection": float(row["target_has_protection"] or 0),
+                        "target_has_shield": float(protection_layers > 0),
+                        "target_has_protection": float(protection_layers > 0),
+                        "target_protection_layers": protection_layers,
+                        "target_ai_action_count": int(row["target_ai_action_count"] or 0),
+                        "target_actor_count": int(row["target_actor_count"] or 0),
                         "target_rod_rarity": float(row["target_rod_rarity"] or 0),
                         "target_accessory_rarity": float(row["target_accessory_rarity"] or 0),
                         "attacker_rod_rarity": float(attacker_rod_r),

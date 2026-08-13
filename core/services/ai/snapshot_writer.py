@@ -8,7 +8,7 @@
 """
 
 import json
-from typing import Optional, Dict
+from typing import Any, Optional, Dict
 
 from astrbot.api import logger
 
@@ -28,6 +28,12 @@ class SnapshotWriter:
         target_id: Optional[str],
         features: Dict[str, float],
         predicted_prob: Optional[float] = None,
+        decision_reason: Optional[str] = None,
+        estimated_value: Optional[float] = None,
+        coins_before: Optional[int] = None,
+        item_id: Optional[int] = None,
+        gacha_pool_id: Optional[int] = None,
+        strategy_version: str = "v2",
     ) -> Optional[int]:
         """
         写决策快照，返回 snapshot_id；失败仅记 debug 并返回 None。
@@ -40,6 +46,12 @@ class SnapshotWriter:
                 target_user_id=target_id,
                 features_json=features_json,
                 predicted_prob=predicted_prob,
+                decision_reason=decision_reason,
+                estimated_value=estimated_value,
+                coins_before=coins_before,
+                item_id=item_id,
+                gacha_pool_id=gacha_pool_id,
+                strategy_version=strategy_version,
             )
         except Exception as e:
             logger.debug(f"[AI] 写决策快照失败: {e}")
@@ -52,6 +64,9 @@ class SnapshotWriter:
         success: Optional[int],
         fail_reason: Optional[str],
         reward_value: Optional[int],
+        coins_after: Optional[int] = None,
+        item_delta: Optional[Dict[str, Any]] = None,
+        result: Optional[Dict[str, Any]] = None,
     ) -> None:
         """回填快照执行结果，失败仅记 debug。
 
@@ -69,6 +84,9 @@ class SnapshotWriter:
                 success=success,
                 fail_reason=truncated_reason,
                 reward_value=reward_value,
+                coins_after=coins_after,
+                item_delta_json=(json.dumps(item_delta, ensure_ascii=False) if item_delta is not None else None),
+                result_json=(json.dumps(result, ensure_ascii=False) if result is not None else None),
             )
         except Exception as e:
             logger.debug(f"[AI] 回填决策快照失败: {e}")

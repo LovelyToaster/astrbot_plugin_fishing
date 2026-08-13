@@ -74,7 +74,7 @@ class AIPlayerService:
 
         self.ai_user_id = self.ai_config.get("user_id", "AI_FISHER_001")
         self.ai_nickname = self.ai_config.get("nickname", "钓鱼机器人小蓝")
-        self.tick_seconds = int(self.ai_config.get("tick_seconds", 300))
+        self.tick_seconds = int(self.ai_config.get("tick_seconds", 600))
         self.initial_coins = int(self.ai_config.get("initial_coins", 10000))
 
         # ---------- 广播 ----------

@@ -39,6 +39,12 @@ class SqliteAIDecisionSnapshotRepository(AbstractAIDecisionSnapshotRepository):
         target_user_id: Optional[str],
         features_json: str,
         predicted_prob: Optional[float],
+        decision_reason: Optional[str] = None,
+        estimated_value: Optional[float] = None,
+        coins_before: Optional[int] = None,
+        item_id: Optional[int] = None,
+        gacha_pool_id: Optional[int] = None,
+        strategy_version: str = "v2",
     ) -> int:
         """
         创建决策快照，返回自增 id。
@@ -58,10 +64,24 @@ class SqliteAIDecisionSnapshotRepository(AbstractAIDecisionSnapshotRepository):
             cursor.execute(
                 """
                 INSERT INTO ai_decision_snapshots
-                    (ai_user_id, action_type, target_user_id, features_json, predicted_prob, executed)
-                VALUES (?, ?, ?, ?, ?, 0)
+                    (ai_user_id, action_type, target_user_id, features_json, predicted_prob,
+                     decision_reason, estimated_value, coins_before, item_id, gacha_pool_id,
+                     strategy_version, executed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 """,
-                (ai_user_id, action_type, target_user_id, features_json, predicted_prob),
+                (
+                    ai_user_id,
+                    action_type,
+                    target_user_id,
+                    features_json,
+                    predicted_prob,
+                    decision_reason,
+                    estimated_value,
+                    coins_before,
+                    item_id,
+                    gacha_pool_id,
+                    strategy_version,
+                ),
             )
             conn.commit()
             return int(cursor.lastrowid)
@@ -73,6 +93,9 @@ class SqliteAIDecisionSnapshotRepository(AbstractAIDecisionSnapshotRepository):
         success: Optional[int],
         fail_reason: Optional[str],
         reward_value: Optional[int],
+        coins_after: Optional[int] = None,
+        item_delta_json: Optional[str] = None,
+        result_json: Optional[str] = None,
     ) -> None:
         """
         回填决策执行结果。
@@ -93,9 +116,21 @@ class SqliteAIDecisionSnapshotRepository(AbstractAIDecisionSnapshotRepository):
                     success = ?,
                     fail_reason = ?,
                     reward_value = ?,
+                    coins_after = ?,
+                    item_delta_json = ?,
+                    result_json = ?,
                     completed_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
-                (executed, success, fail_reason, reward_value, snapshot_id),
+                (
+                    executed,
+                    success,
+                    fail_reason,
+                    reward_value,
+                    coins_after,
+                    item_delta_json,
+                    result_json,
+                    snapshot_id,
+                ),
             )
             conn.commit()

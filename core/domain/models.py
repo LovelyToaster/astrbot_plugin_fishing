@@ -752,6 +752,11 @@ class AIPlayerState:
     last_sell_equipment_ts: float = 0.0
     last_paid_gacha_ts: float = 0.0
     last_free_gacha_date: str = ""
+    last_steal_failure_ts: float = 0.0
+    last_electric_failure_ts: float = 0.0
+    last_item_use_ts: float = 0.0
+    last_social_item_ts: float = 0.0
+    last_fishing_item_ts: float = 0.0
 
 
 @dataclass
@@ -769,3 +774,12 @@ class AIDecisionSnapshot:
     reward_value: Optional[int] = None
     created_at: Optional[str] = None
     completed_at: Optional[str] = None
+    decision_reason: Optional[str] = None
+    estimated_value: Optional[float] = None
+    coins_before: Optional[int] = None
+    coins_after: Optional[int] = None
+    item_id: Optional[int] = None
+    gacha_pool_id: Optional[int] = None
+    item_delta_json: Optional[str] = None
+    result_json: Optional[str] = None
+    strategy_version: str = "v2"

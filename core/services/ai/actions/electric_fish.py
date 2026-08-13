@@ -1,22 +1,11 @@
-"""
-动作：电鱼（加权决策版）。
+"""动作：按反击压力、鱼塘价值和成功率选择电鱼目标。"""
 
-筛选条件：
-- target_fish_count >= min_target_fish_count（默认 100）
-- target_has_shield == 0 AND target_has_protection == 0
-
-抽样：对合格候选做加权抽样，头名 A（24h 对 AI 电鱼最多）+ 头名 B（24h 电鱼
-总次数最多）分别 50%/30%，其余候选均分剩余 20%。详见 base.build_weighted_pool。
-"""
-
-import random
-from typing import Dict, List, Tuple
+import time
 
 from astrbot.api import logger
 
-from ....utils import get_now
 from ..ai_context import AIContext
-from .base import AIAction, build_weighted_pool, parse_int_safe
+from .base import AIAction, parse_int_safe, seconds_since
 
 
 class ElectricFishAction(AIAction):
@@ -25,89 +14,78 @@ class ElectricFishAction(AIAction):
     def __init__(self, min_target_fish_count: int):
         self.min_target_fish_count = int(min_target_fish_count)
 
+    def _skip(self, ctx: AIContext, reason: str, features=None) -> None:
+        snapshot_id = ctx.snapshot.create(
+            action_type=self.name,
+            target_id=None,
+            features=features or {"operation": self.name},
+            decision_reason=reason,
+            estimated_value=0,
+            coins_before=int(getattr(ctx.ai_user, "coins", 0) or 0),
+        )
+        ctx.snapshot.complete(
+            snapshot_id,
+            executed=0,
+            success=None,
+            fail_reason=reason,
+            reward_value=0,
+            coins_after=int(getattr(ctx.ai_user, "coins", 0) or 0),
+        )
+
     def _execute(self, ctx: AIContext) -> None:
-        # 服务层冷却预检
         cooldown = ctx.global_config.get("electric_fish", {}).get(
-            "cooldown_seconds", 10800
+            "cooldown_seconds", 7200
         )
         if ctx.ai_user.last_electric_fish_time is not None:
-            if (
-                get_now() - ctx.ai_user.last_electric_fish_time
-            ).total_seconds() < cooldown:
+            if seconds_since(ctx.ai_user.last_electric_fish_time) < cooldown:
                 return
-
-        # 3. 硬规则过滤
-        candidates = ctx.get_candidates()
-        if not candidates:
+        if time.time() - ctx.state.last_electric_failure_ts < min(cooldown, 900):
             return
 
-        eligible: List[Tuple[str, Dict[str, float]]] = [
-            (tid, feats)
-            for tid, feats in candidates
-            if feats.get("target_fish_count", 0) >= self.min_target_fish_count
-            and feats.get("target_has_shield", 0) == 0
-            and feats.get("target_has_protection", 0) == 0
-        ]
-
-        if not eligible:
-            logger.debug(
-                f"[AI] 电鱼：无符合硬规则的候选 "
-                f"(需鱼数>={self.min_target_fish_count})"
-            )
-            return
-
-        # 4. 加权抽样：查 24h 反击头名、全员发起与受害统计 → 构造多因子权重池 → random.choices
-        top_attacker_id = None
-        top_actor_id = None
-        actor_counts = {}
-        victim_counts = {}
-        try:
-            top_attacker_id = ctx.statistics_repo.get_top_attacker_of(
-                ctx.ai_user_id, "electric_fish", 24
-            )
-            top_actor_id = ctx.statistics_repo.get_top_actor(
-                "electric_fish", 24, exclude_user_id=ctx.ai_user_id
-            )
-            actor_counts = ctx.statistics_repo.get_user_action_counts_in_window("electric_fish", 24)
-            victim_counts = ctx.statistics_repo.get_victim_counts_in_window("electric_fish", 24)
-        except Exception as e:
-            logger.debug(f"[AI] 电鱼：查询 24h 统计特征失败，回退默认参数: {e}")
-
-        ids, weights = build_weighted_pool(
-            eligible,
-            top_attacker_id=top_attacker_id,
-            top_actor_id=top_actor_id,
-            actor_counts=actor_counts,
-            victim_counts=victim_counts,
+        scores = ctx.target_strategy.score(
+            "electric_fish", self.min_target_fish_count
         )
-        target_id = random.choices(ids, weights=weights, k=1)[0]
-        features_map = {tid: feats for tid, feats in eligible}
-        weight_map = dict(zip(ids, weights))
-        features = dict(features_map[target_id])
-        features["weight_chosen"] = round(weight_map[target_id], 4)
-        features["top_attacker_id"] = top_attacker_id or ""
-        features["top_actor_id"] = top_actor_id or ""
-        features["target_actor_count"] = actor_counts.get(target_id, 0)
-        features["target_victim_count"] = victim_counts.get(target_id, 0)
+        target = ctx.target_strategy.choose(scores)
+        if target is None:
+            self._skip(ctx, "no_profitable_target", {"candidate_count": len(scores)})
+            return
 
-        # 5. 写快照 → 执行 → 回填
+        prepare = ctx.item_strategy.prepare_social_target(
+            target.target_id, target.features, "electric_fish"
+        )
+        if not prepare.get("ready"):
+            if prepare.get("prepared"):
+                ctx.get_candidates(force=True)
+            self._skip(
+                ctx,
+                prepare.get("reason") or "shield_prepared_next_tick",
+                target.as_features(),
+            )
+            return
+
+        before_coins = int(getattr(ctx.ai_user, "coins", 0) or 0)
         snapshot_id = ctx.snapshot.create(
-            action_type="electric_fish",
-            target_id=target_id,
-            features=features,
-            predicted_prob=None,
+            action_type=self.name,
+            target_id=target.target_id,
+            features=target.as_features(),
+            predicted_prob=target.success_probability,
+            decision_reason="revenge_value_success",
+            estimated_value=target.expected_net_value,
+            coins_before=before_coins,
         )
-        result = ctx.game_mechanics_service.electric_fish(ctx.ai_user_id, target_id)
-        target_nickname = ctx.resolve_target_nickname(target_id)
-
+        result = ctx.game_mechanics_service.electric_fish(
+            ctx.ai_user_id, target.target_id
+        )
+        target_nickname = ctx.resolve_target_nickname(target.target_id)
+        after_user = ctx.user_repo.get_by_id(ctx.ai_user_id)
+        after_coins = int(getattr(after_user, "coins", before_coins) or before_coins)
         if result.get("success"):
-            logger.info(f"[AI] 电鱼成功: 目标={target_nickname or target_id}")
-            fish_count = result.get("victim_notification", {}).get(
-                "stolen_count", "?"
-            )
-            value = result.get("victim_notification", {}).get("total_value", "?")
+            notification = result.get("victim_notification", {})
+            fish_count = notification.get("stolen_count", 0)
+            value = notification.get("total_value", 0)
+            logger.info(f"[AI] 电鱼成功: 目标={target_nickname or target.target_id}")
             ctx.broadcast.electric_success(
-                target_id=target_id,
+                target_id=target.target_id,
                 target_nickname=target_nickname,
                 fish_count=fish_count,
                 value=value,
@@ -118,33 +96,30 @@ class ElectricFishAction(AIAction):
                 success=1,
                 fail_reason=None,
                 reward_value=parse_int_safe(value),
+                coins_after=after_coins,
+                result=result,
             )
+            ctx.refresh_ai_user()
+            ctx.get_candidates(force=True)
             return
 
-        err_msg = result.get("message", "")
-
-        # 冷却错误：服务层实际未执行动作
-        if "冷却" in err_msg:
-            ctx.snapshot.complete(
-                snapshot_id,
-                executed=0,
-                success=None,
-                fail_reason=err_msg,
-                reward_value=None,
-            )
-            return
-
-        # 实际失败：广播 + 回填
+        err_msg = result.get("message", "电鱼失败")
+        if "冷却" not in err_msg:
+            ctx.state.set("last_electric_failure_ts", time.time())
         ctx.broadcast.electric_failure(
-            target_id=target_id,
+            target_id=target.target_id,
             target_nickname=target_nickname,
             err_msg=err_msg,
         )
-
+        executed = 0 if "冷却" in err_msg else 1
         ctx.snapshot.complete(
             snapshot_id,
-            executed=1,
-            success=0,
+            executed=executed,
+            success=None if executed == 0 else 0,
             fail_reason=err_msg,
             reward_value=0,
+            coins_after=after_coins,
+            result=result,
         )
+        if any(token in err_msg for token in ("空的", "鱼太少", "守护海灵")):
+            ctx.get_candidates(force=True)

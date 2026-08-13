@@ -1085,6 +1085,7 @@ class GameMechanicsService:
                 "fish_name": stolen_fish_template.name,
                 "rarity": stolen_fish_template.rarity,
                 "quality_level": stolen_fish_item.quality_level,
+                "value": actual_value,
             },
         )
 
@@ -1145,7 +1146,7 @@ class GameMechanicsService:
             return {"success": False, "message": "目标用户不存在"}
     
         # 0. 检查电鱼CD
-        cooldown_seconds = self.config.get("electric_fish", {}).get("cooldown_seconds", 10800) # 默认3小时
+        cooldown_seconds = self.config.get("electric_fish", {}).get("cooldown_seconds", 7200) # 默认2小时
         now = get_now()
     
         last_electric_fish_time = thief.last_electric_fish_time
@@ -1385,6 +1386,7 @@ class GameMechanicsService:
                 details={
                     "reason": "random_failed",
                     "penalty_rate": penalty_rate,
+                    "penalty_coins": penalty_coins,
                     "success_rate": final_success_rate,
                 },
             )
@@ -1548,6 +1550,8 @@ class GameMechanicsService:
             details={
                 "success_type": success_type,
                 "stolen_summary": stolen_summary,
+                "total_value": total_value_stolen,
+                "success_rate": final_success_rate,
             },
         )
 
