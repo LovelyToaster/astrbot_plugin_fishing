@@ -116,14 +116,21 @@ class AIItemStrategy:
         after_user = self.ctx.refresh_ai_user()
         self.ctx.state.set("last_item_use_ts", time.time())
         category = result.get("category")
+        affected_target_id = result.get("target_id")
         if category == "social":
             self.ctx.state.set("last_social_item_ts", time.time())
         elif category == "fishing":
             self.ctx.state.set("last_fishing_item_ts", time.time())
+        features = {
+            "item_id": item_id,
+            "category": result.get("category", "utility"),
+        }
+        if result.get("decision_target_id"):
+            features["decision_target_id"] = result["decision_target_id"]
         snapshot_id = self.ctx.snapshot.create(
             action_type="item_use",
-            target_id=result.get("target_id"),
-            features={"item_id": item_id, "category": result.get("category", "utility")},
+            target_id=affected_target_id,
+            features=features,
             predicted_prob=1.0 if result.get("success") else 0.0,
             decision_reason=result.get("reason"),
             estimated_value=result.get("estimated_value"),
@@ -143,6 +150,29 @@ class AIItemStrategy:
             item_delta={str(item_id): -1 if result.get("success") else 0},
             result=result,
         )
+        if result.get("success"):
+            self.ctx.broadcast.item_used(
+                result.get("item_name", f"道具#{item_id}"),
+                result.get("category", "utility"),
+                target_id=affected_target_id,
+            )
+            if self.ctx.notification_service and affected_target_id:
+                self.ctx.notification_service.notify_social_result(
+                    action_type=(
+                        "dispel_protection"
+                        if result.get("reason") == "high_value_target_disperse"
+                        else "item_use"
+                    ),
+                    recipient_id=affected_target_id,
+                    sender_id=self.ctx.ai_user_id,
+                    sender_nickname=self.ctx.ai_nickname,
+                    result=result,
+                )
+        else:
+            self.ctx.broadcast.item_failed(
+                result.get("item_name", f"道具#{item_id}"),
+                result.get("message", "未知错误"),
+            )
 
     def _use_generic(
         self,
@@ -152,15 +182,22 @@ class AIItemStrategy:
         reason: str,
         estimated_value: float = 0.0,
         target_id: Optional[str] = None,
+        decision_target_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         before = int(getattr(self.ctx.ai_user, "coins", 0) or 0)
         result = dict(self.ctx.inventory_service.use_item(self.ctx.ai_user_id, item_id))
+        try:
+            template = self.ctx.item_template_repo.get_item_by_id(item_id)
+            result["item_name"] = getattr(template, "name", f"道具#{item_id}")
+        except Exception:
+            result["item_name"] = f"道具#{item_id}"
         result.update(
             {
                 "category": category,
                 "reason": reason,
                 "estimated_value": estimated_value,
                 "target_id": target_id,
+                "decision_target_id": decision_target_id,
             }
         )
         self._record_item_use(item_id, before, result)
@@ -192,6 +229,7 @@ class AIItemStrategy:
                 )
             result.update(
                 {
+                    "item_name": getattr(template, "name", f"道具#{template.item_id}"),
                     "category": "social",
                     "reason": "high_value_target_disperse",
                     "estimated_value": value,
@@ -222,7 +260,7 @@ class AIItemStrategy:
                 category="social",
                 reason="prepare_shield_target",
                 estimated_value=value,
-                target_id=target_id,
+                decision_target_id=target_id,
             )
             return {"ready": False, "prepared": bool(result.get("success")), "result": result}
         return {"ready": False, "prepared": False, "reason": "protected_without_economical_item"}
@@ -243,7 +281,7 @@ class AIItemStrategy:
             category="social",
             reason="high_value_revenge_target_cooldown_reset",
             estimated_value=expected_value,
-            target_id=target_id,
+            decision_target_id=target_id,
         )
 
     def use_one_utility_item(self) -> Optional[Dict[str, Any]]:

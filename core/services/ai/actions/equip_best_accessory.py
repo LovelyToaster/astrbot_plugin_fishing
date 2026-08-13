@@ -44,3 +44,7 @@ class EquipBestAccessoryAction(AIAction):
             logger.info(f"[AI] 装备最优饰品: {name} (rarity={rarity})")
             ctx.broadcast.equipped_accessory(name, rarity)
             ctx.refresh_ai_user()
+        else:
+            ctx.broadcast.action_failed(
+                "装备饰品", equip_result.get("message", "未知错误")
+            )

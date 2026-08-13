@@ -55,3 +55,4 @@ class RepairRodAction(AIAction):
                     reward_value=0,
                 )
                 break
+            ctx.broadcast.action_failed("维修鱼竿", res.get("message", "未知错误"))

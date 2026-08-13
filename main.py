@@ -4,6 +4,7 @@ import asyncio
 
 from astrbot.api import logger, AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, filter, MessageChain
+import astrbot.api.message_components as Comp
 from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.permission import PermissionType
 
@@ -55,6 +56,8 @@ from .core.services.showcase_service import ShowcaseService
 
 from .core.services.ai_player_service import AIPlayerService
 from .core.services.ai.feature_extractor import FeatureExtractor
+from .core.services.notification_service import NotificationService
+from .core.services.ai.broadcast_helper import BroadcastEvent, MENTION_TOKEN
 
 from .handlers.deep_sea_handlers import (
     deep_sea_start,
@@ -377,6 +380,7 @@ class FishingPlugin(Star):
 
         # 初始化通知仓储
         self.notification_repo = SqliteNotificationRepository(db_path)
+        self.notification_service = NotificationService(self.notification_repo)
 
         # 初始化银行服务
         self.bank_service = BankService(
@@ -510,6 +514,7 @@ class FishingPlugin(Star):
             snapshot_repo=self.ai_snapshot_repo,
             feature_extractor=ai_feature_extractor,
             statistics_repo=self.statistics_repo,
+            notification_service=self.notification_service,
             config=self.game_config,
             broadcast_callback=self._ai_broadcast_sync,
         )
@@ -668,7 +673,7 @@ class FishingPlugin(Star):
             logger.error(f"主动发送图片消息时发生错误: {e}")
             return False
 
-    async def _send_initiative_message(self, session_info: dict, message: str) -> bool:
+    async def _send_initiative_message(self, session_info: dict, message) -> bool:
         """主动发送消息到指定会话"""
         try:
             # 获取保存的 unified_msg_origin
@@ -678,19 +683,31 @@ class FishingPlugin(Star):
                 logger.error("缺少 unified_msg_origin，无法发送主动消息")
                 return False
             
-            # 构造消息链
-            message_chain = MessageChain().message(message)
+            # 构造消息链。AI 广播中的 mention token 必须转换为结构化 At，
+            # 不能把 @用户拼接在普通文本里，否则平台不会触发提醒。
+            if isinstance(message, BroadcastEvent):
+                message_chain = MessageChain()
+                parts = message.text.split(MENTION_TOKEN)
+                for index, part in enumerate(parts):
+                    if index % 2 == 0:
+                        if part:
+                            message_chain.message(part)
+                    else:
+                        message_chain.chain.append(Comp.At(qq=part))
+            else:
+                message_chain = MessageChain().message(str(message))
             
             # 使用 context.send_message 发送消息
             await self.context.send_message(umo, message_chain)
-            logger.info(f"主动发送消息成功: {message[:50]}...")
+            message_text = message.text if isinstance(message, BroadcastEvent) else str(message)
+            logger.info(f"主动发送消息成功: {message_text[:50]}...")
             return True
                 
         except Exception as e:
             logger.error(f"主动发送消息时发生错误: {e}")
             return False
 
-    def _ai_broadcast_sync(self, message: str) -> None:
+    def _ai_broadcast_sync(self, message) -> None:
         """同步桥接方法：将 AI 广播消息通过事件循环发送到指定群。"""
         try:
             ai_cfg = self.game_config.get("ai_player", {})

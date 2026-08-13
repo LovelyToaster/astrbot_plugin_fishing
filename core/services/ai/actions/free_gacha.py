@@ -46,6 +46,9 @@ class FreeGachaAction(AIAction):
             ctx.ai_user_id, free_pool.gacha_pool_id, 1
         )
         if not result.get("success"):
+            ctx.broadcast.action_failed(
+                "免费抽卡", result.get("message", "免费抽卡失败")
+            )
             ctx.snapshot.complete(
                 snapshot_id,
                 executed=1,

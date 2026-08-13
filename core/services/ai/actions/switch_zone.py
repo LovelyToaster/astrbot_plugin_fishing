@@ -91,6 +91,11 @@ class SwitchZoneAction(AIAction):
         result = ctx.fishing_service.set_user_fishing_zone(ctx.ai_user_id, to_zone.id)
         if result.get("success"):
             logger.info(f"[AI] {self.name}: {from_zone_id} -> {to_zone.id} ({to_zone.name})")
+            from_zone = ctx.inventory_repo.get_zone_by_id(from_zone_id)
+            ctx.broadcast.switched_zone(
+                getattr(from_zone, "name", str(from_zone_id)),
+                getattr(to_zone, "name", str(to_zone.id)),
+            )
             ctx.refresh_ai_user()
             record_ai_decision(
                 ctx,
@@ -101,6 +106,9 @@ class SwitchZoneAction(AIAction):
                 success=1,
             )
         else:
+            ctx.broadcast.action_failed(
+                "切换钓鱼区域", result.get("message", "未知错误")
+            )
             record_ai_decision(
                 ctx,
                 self.name,

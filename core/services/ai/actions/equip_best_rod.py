@@ -49,3 +49,7 @@ class EquipBestRodAction(AIAction):
             ctx.broadcast.equipped_rod(name, rarity)
             # 装备变化，刷新用户对象（同时清候选缓存）
             ctx.refresh_ai_user()
+        else:
+            ctx.broadcast.action_failed(
+                "装备鱼竿", equip_result.get("message", "未知错误")
+            )

@@ -837,6 +837,7 @@ class GameMechanicsService:
         )
         
         shield_broken = False  # 标志：本次攻击是否打破了盾
+        notification_events = []
         
         if protection_buff:
             prot_payload = json.loads(protection_buff.payload or "{}")
@@ -883,6 +884,7 @@ class GameMechanicsService:
                     return {"success": False, "message": msg}
                 
                 # 穿透成功：减层但仍挡偷
+                old_layers = current_layers
                 current_layers -= 1
                 
                 if current_layers > 0:
@@ -918,6 +920,16 @@ class GameMechanicsService:
                             self.buff_repo.update(shadow_cloak_buff)
                     
                     counter_msg = "⚡ 破灵符的力量穿透了海灵守护！" if penetration_buff else "🌑 暗影斗篷让你在阴影中行动！"
+                    notification_events.append(
+                        {
+                            "type": "protection_damaged",
+                            "details": {
+                                "old_layers": old_layers,
+                                "new_layers": current_layers,
+                                "layers_lost": old_layers - current_layers,
+                            },
+                        }
+                    )
                     self._add_statistics_log(
                         user_id=thief_id,
                         target_id=victim_id,
@@ -925,7 +937,11 @@ class GameMechanicsService:
                         success=False,
                         details={"reason": "shield_blocked", "remaining_layers": current_layers},
                     )
-                    return {"success": False, "message": f"{counter_msg}\n但守护海灵挡住了你的偷窃！（目标还剩 {current_layers} 层守护）"}
+                    return {
+                        "success": False,
+                        "message": f"{counter_msg}\n但守护海灵挡住了你的偷窃！（目标还剩 {current_layers} 层守护）",
+                        "notification_events": notification_events,
+                    }
                 else:
                     # 盾破了！
                     shield_broken = True
@@ -960,6 +976,16 @@ class GameMechanicsService:
                             self.buff_repo.update(shadow_cloak_buff)
                     
                     counter_msg = "⚡ 破灵符的力量穿透了海灵守护！" if penetration_buff else "🌑 暗影斗篷让你在阴影中行动！"
+                    notification_events.append(
+                        {
+                            "type": "protection_broken",
+                            "details": {
+                                "old_layers": old_layers,
+                                "new_layers": 0,
+                                "layers_lost": old_layers,
+                            },
+                        }
+                    )
                     self._add_statistics_log(
                         user_id=thief_id,
                         target_id=victim_id,
@@ -967,7 +993,11 @@ class GameMechanicsService:
                         success=False,
                         details={"reason": "shield_broken"},
                     )
-                    return {"success": False, "message": f"{counter_msg}\n💥 守护海灵的护盾破碎了！鱼塘现在毫无防备！"}
+                    return {
+                        "success": False,
+                        "message": f"{counter_msg}\n💥 守护海灵的护盾破碎了！鱼塘现在毫无防备！",
+                        "notification_events": notification_events,
+                    }
             else:
                 # Phase 2: 盾已破（layers == 0），可以偷鱼
                 pass  # 继续往下走到偷鱼逻辑
@@ -1042,6 +1072,15 @@ class GameMechanicsService:
                         protection_buff.payload = new_payload
                         self.buff_repo.update(protection_buff)
                     shield_recovery_msg = "\n🛡️ 守护海灵恢复了力量！鱼塘重新被守护。"
+                    notification_events.append(
+                        {
+                            "type": "protection_restored",
+                            "details": {
+                                "layers_restored": max_layers,
+                                "new_layers": max_layers,
+                            },
+                        }
+                    )
                 else:
                     # 更新 broken_steals
                     new_payload = json.dumps({
@@ -1099,6 +1138,7 @@ class GameMechanicsService:
                 "quality_level": stolen_fish_item.quality_level,
                 "value": actual_value,
             },
+            "notification_events": notification_events,
         }
 
     # ============================================================
@@ -1212,6 +1252,7 @@ class GameMechanicsService:
             return {"success": False, "message": f"电鱼冷却中，请等待 {remaining // 60} 分钟后再试"}
     
         # ========== 守护海灵破盾机制（三段式）==========
+        notification_events = []
         protection_buff = self.buff_repo.get_active_by_user_and_type(
             victim_id, "STEAL_PROTECTION_BUFF"
         )
@@ -1268,6 +1309,7 @@ class GameMechanicsService:
                     return {"success": False, "message": msg}
                 
                 # 穿透成功：减层但仍挡电
+                old_layers = current_layers
                 current_layers -= 1
                 
                 if current_layers > 0:
@@ -1303,6 +1345,16 @@ class GameMechanicsService:
                             self.buff_repo.update(shadow_cloak_buff)
                     
                     counter_msg = "⚡ 破灵符的力量穿透了海灵守护！" if penetration_buff else "🌑 暗影斗篷让你在阴影中行动！"
+                    notification_events.append(
+                        {
+                            "type": "protection_damaged",
+                            "details": {
+                                "old_layers": old_layers,
+                                "new_layers": current_layers,
+                                "layers_lost": old_layers - current_layers,
+                            },
+                        }
+                    )
                     self._add_statistics_log(
                         user_id=thief_id,
                         target_id=victim_id,
@@ -1310,7 +1362,11 @@ class GameMechanicsService:
                         success=False,
                         details={"reason": "shield_blocked", "remaining_layers": current_layers},
                     )
-                    return {"success": False, "message": f"{counter_msg}\n但守护海灵挡住了你的电鱼！（目标还剩 {current_layers} 层守护）"}
+                    return {
+                        "success": False,
+                        "message": f"{counter_msg}\n但守护海灵挡住了你的电鱼！（目标还剩 {current_layers} 层守护）",
+                        "notification_events": notification_events,
+                    }
                 else:
                     # 盾破了！
                     shield_broken = True
@@ -1345,6 +1401,16 @@ class GameMechanicsService:
                             self.buff_repo.update(shadow_cloak_buff)
                     
                     counter_msg = "⚡ 破灵符的力量穿透了海灵守护！" if penetration_buff else "🌑 暗影斗篷让你在阴影中行动！"
+                    notification_events.append(
+                        {
+                            "type": "protection_broken",
+                            "details": {
+                                "old_layers": old_layers,
+                                "new_layers": 0,
+                                "layers_lost": old_layers,
+                            },
+                        }
+                    )
                     self._add_statistics_log(
                         user_id=thief_id,
                         target_id=victim_id,
@@ -1352,7 +1418,11 @@ class GameMechanicsService:
                         success=False,
                         details={"reason": "shield_broken"},
                     )
-                    return {"success": False, "message": f"{counter_msg}\n💥 守护海灵的护盾破碎了！鱼塘现在毫无防备！"}
+                    return {
+                        "success": False,
+                        "message": f"{counter_msg}\n💥 守护海灵的护盾破碎了！鱼塘现在毫无防备！",
+                        "notification_events": notification_events,
+                    }
             else:
                 # Phase 2: 盾已破（layers == 0），可以电鱼
                 pass  # 继续往下走到电鱼逻辑
@@ -1604,6 +1674,15 @@ class GameMechanicsService:
                     protection_buff.payload = new_payload
                     self.buff_repo.update(protection_buff)
                 shield_recovery_msg = "\n🛡️ 守护海灵护盾立即恢复！"
+                notification_events.append(
+                    {
+                        "type": "protection_restored",
+                        "details": {
+                            "layers_restored": max_layers,
+                            "new_layers": max_layers,
+                        },
+                    }
+                )
         # ========== 电鱼后守护海灵恢复结束 ==========
     
         # 11. 生成成功消息
@@ -1642,6 +1721,7 @@ class GameMechanicsService:
                 "total_value": total_value_stolen,
                 "steal_percentage": steal_percentage,
             },
+            "notification_events": notification_events,
         }
     # ============================================================
     # ===================== 新增功能：电鱼 结束 =====================
@@ -1694,7 +1774,18 @@ class GameMechanicsService:
             "message": (
                 f"💥 成功击破了【{target.nickname}】的守护海灵！"
                 f"\n盾破后鱼塘可被偷 {break_threshold} 次，之后海灵会自动恢复。"
-            )
+            ),
+            "notification_events": [
+                {
+                    "type": "protection_dispelled",
+                    "details": {
+                        "old_layers": current_layers,
+                        "new_layers": 0,
+                        "layers_lost": current_layers,
+                        "max_layers": max_layers,
+                    },
+                }
+            ],
         }
 
     def check_steal_protection(self, target_id: str) -> Dict[str, Any]:

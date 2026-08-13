@@ -41,4 +41,12 @@ class UseBestBaitAction(AIAction):
             logger.info(
                 f"[AI] 使用鱼饵: {best_bait.get('name')} (rarity={best_bait.get('rarity')})"
             )
+            ctx.broadcast.bait_used(
+                best_bait.get("name", "未知"),
+                int(best_bait.get("rarity", 0) or 0),
+            )
             ctx.refresh_ai_user()
+        elif use_result:
+            ctx.broadcast.action_failed(
+                "使用鱼饵", use_result.get("message", "未知错误")
+            )

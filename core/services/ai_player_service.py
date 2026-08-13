@@ -51,7 +51,8 @@ class AIPlayerService:
         feature_extractor: FeatureExtractor,
         statistics_repo: Any,
         config: dict,
-        broadcast_callback: Optional[Callable[[str], None]] = None,
+        notification_service: Any = None,
+        broadcast_callback: Optional[Callable[[Any], None]] = None,
     ):
         # ---------- 依赖注入 ----------
         self.user_repo = user_repo
@@ -67,6 +68,7 @@ class AIPlayerService:
         self.feature_extractor = feature_extractor
         # statistics_repo：AI 决策权重需要用它查询 24h 行为窗口
         self.statistics_repo = statistics_repo
+        self.notification_service = notification_service
 
         # ---------- 配置 ----------
         self.ai_config = config.get("ai_player", {}) or {}
@@ -180,6 +182,7 @@ class AIPlayerService:
         if self._thread:
             self._thread.join(timeout=1.0)
             logger.info("[AI] AI 决策循环线程已停止")
+        self.broadcast.flush()
 
     # ==================== 主循环 ====================
 
@@ -215,6 +218,7 @@ class AIPlayerService:
             inventory_repo=self.inventory_repo,
             item_template_repo=self.item_template_repo,
             statistics_repo=self.statistics_repo,
+            notification_service=self.notification_service,
             user_service=self.user_service,
             fishing_service=self.fishing_service,
             game_mechanics_service=self.game_mechanics_service,

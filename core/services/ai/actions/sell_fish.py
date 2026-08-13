@@ -34,6 +34,7 @@ class SellFishAction(AIAction):
 
         sell_result = ctx.inventory_service.sell_all_fish(ctx.ai_user_id, keep_one=False)
         if not sell_result.get("success"):
+            ctx.broadcast.action_failed("卖鱼", sell_result.get("message", "卖鱼失败"))
             record_ai_decision(ctx, self.name, "sell_service_failed")
             return
 

@@ -49,6 +49,7 @@ class SellEquipmentAction(AIAction):
         )
 
         if not (rod_result.get("success") or acc_result.get("success")):
+            ctx.broadcast.action_failed("卖装备", "没有成功卖出可处理的装备")
             return
 
         logger.info(

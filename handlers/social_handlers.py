@@ -125,16 +125,16 @@ async def steal_fish(plugin: "FishingPlugin", event: AstrMessageEvent):
 
     result = plugin.game_mechanics_service.steal_fish(user_id, target_id)
     if result:
-        if result.get("success") and result.get("victim_notification"):
-            try:
-                plugin.notification_repo.add_notification(
-                    recipient_id=target_id,
-                    sender_nickname=result["thief_nickname"],
-                    noti_type="steal",
-                    details=result["victim_notification"]
-                )
-            except Exception as e:
-                logger.error(f"写入偷鱼通知失败: {e}")
+        try:
+            plugin.notification_service.notify_social_result(
+                action_type="steal",
+                recipient_id=target_id,
+                sender_id=user_id,
+                sender_nickname=result.get("thief_nickname", user_id),
+                result=result,
+            )
+        except Exception as e:
+            logger.error(f"写入偷鱼通知失败: {e}")
         yield event.plain_result(result["message"])
     else:
         yield event.plain_result("❌ 出错啦！请稍后再试。")
@@ -173,16 +173,16 @@ async def electric_fish(plugin: "FishingPlugin", event: AstrMessageEvent):
 
     result = plugin.game_mechanics_service.electric_fish(user_id, target_id)
     if result:
-        if result.get("success") and result.get("victim_notification"):
-            try:
-                plugin.notification_repo.add_notification(
-                    recipient_id=target_id,
-                    sender_nickname=result["thief_nickname"],
-                    noti_type="electric_fish",
-                    details=result["victim_notification"]
-                )
-            except Exception as e:
-                logger.error(f"写入电鱼通知失败: {e}")
+        try:
+            plugin.notification_service.notify_social_result(
+                action_type="electric_fish",
+                recipient_id=target_id,
+                sender_id=user_id,
+                sender_nickname=result.get("thief_nickname", user_id),
+                result=result,
+            )
+        except Exception as e:
+            logger.error(f"写入电鱼通知失败: {e}")
         yield event.plain_result(result["message"])
     else:
         yield event.plain_result("❌ 出错啦！请稍后再试。")
@@ -228,6 +228,16 @@ async def dispel_protection(plugin: "FishingPlugin", event: AstrMessageEvent):
     if result.get("success"):
         # 成功驱散，消耗道具
         plugin.inventory_repo.decrease_item_quantity(user_id, dispel_item.item_id, 1)
+        try:
+            actor = plugin.user_repo.get_by_id(user_id)
+            plugin.notification_service.notify_defense_result(
+                recipient_id=target_id,
+                sender_id=user_id,
+                sender_nickname=(actor.nickname if actor else user_id),
+                result=result,
+            )
+        except Exception as e:
+            logger.error(f"写入驱灵香通知失败: {e}")
         yield event.plain_result(f"✅ 使用了【{dispel_item.name}】！{result['message']}")
     else:
         yield event.plain_result(result["message"])
@@ -328,7 +338,14 @@ async def view_notifications(plugin: "FishingPlugin", event: AstrMessageEvent):
     header = f"📩 通知 ({unread_count}条未读)" if unread_count > 0 else "📩 通知"
     lines = [header]
 
-    type_labels = {"steal": "🕵️", "electric_fish": "⚡"}
+    type_labels = {
+        "steal": "🕵️",
+        "electric_fish": "⚡",
+        "protection_dispelled": "💥",
+        "protection_damaged": "🛡️",
+        "protection_broken": "💥",
+        "protection_restored": "🔰",
+    }
 
     for i, noti in enumerate(notifications, 1):
         prefix = type_labels.get(noti["type"], "📨")
@@ -339,13 +356,39 @@ async def view_notifications(plugin: "FishingPlugin", event: AstrMessageEvent):
         if noti["type"] == "steal":
             quality = "✨高品质" if details.get("quality_level") == 1 else "常规品质"
             rarity_stars = "★" * details.get("rarity", 0)
-            desc = f"从你的鱼塘偷走了一条{rarity_stars}【{details.get('stolen_fish_name', '未知')}】（{quality}），价值 {details.get('value', 0)} 金币"
+            count = int(details.get("_aggregation_count", 1) or 1)
+            fish_count = int(details.get("stolen_count", count) or count)
+            if count > 1:
+                desc = (
+                    f"从你的鱼塘连续偷取了 {count} 次，共 {fish_count} 条鱼，"
+                    f"累计价值 {details.get('value', 0)} 金币"
+                )
+            else:
+                desc = f"从你的鱼塘偷走了一条{rarity_stars}【{details.get('stolen_fish_name', '未知')}】（{quality}），价值 {details.get('value', 0)} 金币"
         elif noti["type"] == "electric_fish":
             summary = "、".join(details.get("stolen_summary", []))
+            count = int(details.get("_aggregation_count", 1) or 1)
             desc = (
-                f"对你的鱼塘使用了电鱼：捕获 {details.get('stolen_count', 0)} 条鱼"
+                f"对你的鱼塘使用了电鱼"
+                f"{'共 ' + str(count) + ' 次，' if count > 1 else '：'}捕获 {details.get('stolen_count', 0)} 条鱼"
                 f"（占 {details.get('steal_percentage', 0):.1f}%），总价值 {details.get('total_value', 0)} 金币\n"
                 f"   捕获：{summary}"
+            )
+        elif noti["type"] == "protection_dispelled":
+            desc = (
+                f"{sender} 使用驱灵香击破了你的守护海灵，"
+                f"护盾层数 {details.get('old_layers', 0)} → 0"
+            )
+        elif noti["type"] == "protection_damaged":
+            desc = (
+                f"{sender} 的操作削弱了你的守护海灵，"
+                f"护盾层数 {details.get('old_layers', 0)} → {details.get('new_layers', 0)}"
+            )
+        elif noti["type"] == "protection_broken":
+            desc = f"{sender} 的操作击破了你的守护海灵护盾！"
+        elif noti["type"] == "protection_restored":
+            desc = (
+                f"你的守护海灵已恢复，护盾恢复至 {details.get('new_layers', details.get('layers_restored', 0))} 层"
             )
         else:
             desc = str(details)

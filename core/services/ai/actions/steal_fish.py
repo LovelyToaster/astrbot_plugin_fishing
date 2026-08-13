@@ -80,6 +80,14 @@ class StealFishAction(AIAction):
         result = ctx.game_mechanics_service.steal_fish(
             ctx.ai_user_id, target.target_id
         )
+        if ctx.notification_service:
+            ctx.notification_service.notify_social_result(
+                action_type="steal",
+                recipient_id=target.target_id,
+                sender_id=ctx.ai_user_id,
+                sender_nickname=ctx.ai_nickname,
+                result=result,
+            )
         target_nickname = ctx.resolve_target_nickname(target.target_id)
         after_user = ctx.user_repo.get_by_id(ctx.ai_user_id)
         after_coins = int(getattr(after_user, "coins", before_coins) or before_coins)

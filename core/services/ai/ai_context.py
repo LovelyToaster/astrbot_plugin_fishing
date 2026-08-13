@@ -63,6 +63,7 @@ class AIContext:
         snapshot: SnapshotWriter,
         broadcast: BroadcastHelper,
         feature_extractor: FeatureExtractor,
+        notification_service: Any = None,
         # config
         ai_config: Dict[str, Any],
         global_config: Dict[str, Any],
@@ -77,6 +78,7 @@ class AIContext:
         # SqliteStatisticsRepository 没有抽象基类，此处用 Any 避免循环导入。
         # 需要提供 get_top_attacker_of / get_top_actor 两个方法。
         self.statistics_repo = statistics_repo
+        self.notification_service = notification_service
 
         self.user_service = user_service
         self.fishing_service = fishing_service

@@ -107,6 +107,7 @@ class RefineAction(AIAction):
 
             # 随机失败（已扣费）→ 跳出
             if result.get("failed"):
+                ctx.broadcast.action_failed("精炼装备", message or "精炼失败")
                 record_ai_decision(
                     ctx,
                     self.name,

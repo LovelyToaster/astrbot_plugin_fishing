@@ -132,6 +132,7 @@ class PaidGachaAction(AIAction):
         )
         ctx.refresh_ai_user()
         if not result.get("success"):
+            ctx.broadcast.action_failed("金币抽卡", result.get("message", "抽卡失败"))
             ctx.snapshot.complete(
                 snapshot_id,
                 executed=1,
