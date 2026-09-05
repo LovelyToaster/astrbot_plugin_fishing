@@ -59,10 +59,33 @@ class GachaService:
         except Exception as e:
             return {"success": False, "message": f"获取卡池信息失败: {str(e)}"}
 
-    def get_daily_free_pool(self) -> Optional[GachaPool]:
-        """获取每日免费池 (第一个成本为0的池)"""
+    def get_daily_free_pools(self) -> List[GachaPool]:
+        """获取可用于每日补给的卡池，不把高级货币成本带给签到/AI。"""
         free_pools = self.gacha_repo.get_free_pools()
-        return free_pools[0] if free_pools else None
+        if free_pools:
+            return free_pools
+
+        # 旧数据库把签到池保存成 premium_currency=1，但业务语义仍是每日赠送。
+        # 只识别明确带“每日/签到”语义且没有金币成本的池，避免误把普通高级池免单。
+        try:
+            pools = self.gacha_repo.get_all_pools()
+            return [
+                pool
+                for pool in pools
+                if getattr(pool, "cost_coins", 0) == 0
+                and getattr(pool, "cost_premium_currency", 0) <= 1
+                and any(
+                    keyword in str(getattr(pool, "name", ""))
+                    for keyword in ("每日", "签到")
+                )
+            ]
+        except Exception:
+            return []
+
+    def get_daily_free_pool(self) -> Optional[GachaPool]:
+        """获取默认每日补给池。"""
+        pools = self.get_daily_free_pools()
+        return pools[0] if pools else None
 
     def get_pool_details(self, pool_id: int) -> Dict[str, Any]:
         """获取单个卡池的详细信息，包括奖品列表和概率。"""
@@ -110,7 +133,13 @@ class GachaService:
             })
         return {"success": True, "pool": pool, "probabilities": probabilities}
 
-    def perform_draw(self, user_id: str, pool_id: int, num_draws: int = 1) -> Dict[str, Any]:
+    def perform_draw(
+        self,
+        user_id: str,
+        pool_id: int,
+        num_draws: int = 1,
+        is_daily_free: bool = False,
+    ) -> Dict[str, Any]:
         user = self.user_repo.get_by_id(user_id)
         if not user:
             return {"success": False, "message": "用户不存在"}
@@ -119,13 +148,21 @@ class GachaService:
         if not pool or not pool.items:
             return {"success": False, "message": "卡池不存在或卡池为空"}
 
-        # 每日免费池限制检查
-        free_pool = self.get_daily_free_pool()
-        if free_pool and pool_id == free_pool.gacha_pool_id:
+        # 每日补给限制检查。兼容旧库将签到池存成 1 点高级货币的情况，
+        # 只有签到/AI显式传入 is_daily_free 才免除该成本。
+        data_free_pool_ids = {
+            int(pool.gacha_pool_id) for pool in self.gacha_repo.get_free_pools()
+        }
+        daily_free_pool_ids = {
+            int(pool.gacha_pool_id) for pool in self.get_daily_free_pools()
+        }
+        is_data_free_pool = int(pool_id) in data_free_pool_ids
+        is_daily_free_draw = bool(is_daily_free and int(pool_id) in daily_free_pool_ids)
+        if is_data_free_pool or is_daily_free_draw:
             if num_draws > 1:
                 return {"success": False, "message": "每日免费补给一次只能抽一张哦！"}
             draws_today = self.log_repo.get_gacha_records_count_today(
-                user_id, free_pool.gacha_pool_id
+                user_id, pool_id
             )
             if draws_today >= 1:
                 return {"success": False, "message": "今天的免费补给已经领过啦，明天再来吧！"}
@@ -153,9 +190,14 @@ class GachaService:
             pass
 
         # 计算费用
-        use_premium_currency = (getattr(pool, "cost_premium_currency", 0) or 0) > 0
-        total_premium_cost = (pool.cost_premium_currency or 0) * num_draws
-        total_coin_cost = (pool.cost_coins or 0) * num_draws
+        use_premium_currency = (
+            not is_daily_free_draw
+            and (getattr(pool, "cost_premium_currency", 0) or 0) > 0
+        )
+        total_premium_cost = (
+            0 if is_daily_free_draw else (pool.cost_premium_currency or 0) * num_draws
+        )
+        total_coin_cost = 0 if is_daily_free_draw else (pool.cost_coins or 0) * num_draws
 
         if use_premium_currency:
             if user.premium_currency < total_premium_cost:
@@ -173,8 +215,9 @@ class GachaService:
         max_rarity = 0
 
         # 保底初始化
-        use_pity = (self.pity_threshold > 0
-                    and pool_id != (free_pool.gacha_pool_id if free_pool else None))
+        use_pity = self.pity_threshold > 0 and not (
+            is_data_free_pool or is_daily_free_draw
+        )
         if use_pity:
             max_rarity = self._get_pool_max_rarity(pool, template_cache)
             if max_rarity > 0:

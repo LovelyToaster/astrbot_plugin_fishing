@@ -58,11 +58,9 @@ class StealFishAction(AIAction):
             target.target_id, target.features, "steal"
         )
         if not prepare.get("ready"):
-            if prepare.get("prepared"):
-                ctx.get_candidates(force=True)
             self._skip(
                 ctx,
-                prepare.get("reason") or "shield_prepared_next_tick",
+                prepare.get("reason") or "social_item_preparation_failed",
                 target.as_features(),
             )
             return

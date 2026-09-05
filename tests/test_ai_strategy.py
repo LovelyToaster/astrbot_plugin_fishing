@@ -85,6 +85,44 @@ class GachaContextStub:
 
 
 class AIStrategyTests(unittest.TestCase):
+    def test_social_item_preparation_allows_same_tick_action(self):
+        item = SimpleNamespace(
+            item_id=17,
+            name="驱灵香",
+            effect_type="STEAL_PROTECTION_REMOVAL",
+            effect_payload=None,
+        )
+        snapshot = SimpleNamespace(
+            create=lambda **kwargs: 1,
+            complete=lambda *args, **kwargs: None,
+        )
+        ctx = SimpleNamespace(
+            ai_user_id="AI",
+            ai_user=SimpleNamespace(coins=100000),
+            item_template_repo=SimpleNamespace(
+                get_all_items=lambda: [item],
+                get_item_by_id=lambda item_id: item,
+            ),
+            inventory_repo=SimpleNamespace(
+                get_user_item_inventory=lambda user_id: {17: 1},
+                decrease_item_quantity=lambda user_id, item_id, quantity: None,
+            ),
+            game_mechanics_service=SimpleNamespace(
+                dispel_steal_protection=lambda target_id: {"success": True}
+            ),
+            refresh_ai_user=lambda: SimpleNamespace(coins=100000),
+            snapshot=snapshot,
+            broadcast=SimpleNamespace(item_used=lambda *args, **kwargs: None),
+            notification_service=None,
+        )
+
+        result = AIItemStrategy(ctx).prepare_social_target(
+            "victim", {"target_protection_layers": 1, "target_fish_value": 100000}, "steal"
+        )
+
+        self.assertTrue(result["prepared"])
+        self.assertTrue(result["ready"])
+
     def test_revenge_pressure_is_present_and_protected_targets_are_filtered(self):
         ctx = ContextStub(
             [

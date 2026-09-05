@@ -70,30 +70,89 @@ class PaidGachaAction(AIAction):
         ten_budget = min(ten_budget, free_coins * 0.25)
 
         scored = [(pool, ctx.gacha_strategy.score_pool(pool)) for pool in candidates]
-        scored.sort(key=lambda pair: pair[1]["score"], reverse=True)
+        scored.sort(
+            key=lambda pair: (
+                pair[1].get("priority", 0),
+                pair[1].get("highest_upgrade_rarity", 0),
+                pair[1].get("score", 0),
+            ),
+            reverse=True,
+        )
         selected = None
         num_draws = 1
         is_ten = False
+        selected_reason = None
+
+        # 直接提升当前最高装备的卡池优先级最高，即使只能承担单抽也执行。
+        # 这里使用自由金币全额作为一次高阶升级预算，但仍不允许突破运营储备。
+        direct_upgrades = [
+            pair
+            for pair in scored
+            if pair[1].get("direct_upgrade")
+            and int(getattr(pair[0], "cost_coins", 0) or 0) <= free_coins
+        ]
+        direct_upgrades.sort(
+            key=lambda pair: (
+                pair[1].get("highest_upgrade_rarity", 0),
+                pair[1].get("upgrade_probability", 0),
+                -int(pair[1].get("draws_to_pity") or 999),
+                pair[1].get("score", 0),
+            ),
+            reverse=True,
+        )
+        if direct_upgrades:
+            selected, info = direct_upgrades[0]
+            num_draws = 1
+            is_ten = False
+            selected_reason = info.get("decision_reason", "direct_equipment_upgrade")
 
         # 接近保底时只抽到保底所需次数；否则优先十连，但只使用自由金币。
-        for pool, info in scored:
-            cost = int(getattr(pool, "cost_coins", 0) or 0)
-            draws_to_pity = info.get("draws_to_pity")
-            if draws_to_pity is not None and 0 < draws_to_pity <= 10:
-                required = cost * int(draws_to_pity)
-                if required <= ten_budget and (draws_to_pity > 1 or cost <= single_budget):
-                    selected, num_draws = pool, int(draws_to_pity)
-                    is_ten = num_draws == 10
-                    break
-            if self.ten_pull_enabled and cost * 10 <= ten_budget:
+        if selected is None:
+            pity_candidates = []
+            for pool, info in scored:
+                cost = int(getattr(pool, "cost_coins", 0) or 0)
+                draws_to_pity = info.get("draws_to_pity")
+                if (
+                    info.get("score", 0) > 0
+                    and draws_to_pity is not None
+                    and 0 < draws_to_pity <= 10
+                    and cost * int(draws_to_pity) <= ten_budget
+                ):
+                    pity_candidates.append((pool, info))
+            pity_candidates.sort(
+                key=lambda pair: (
+                    pair[1].get("max_rarity", 0),
+                    pair[1].get("priority", 0),
+                    -int(pair[1].get("draws_to_pity") or 999),
+                    pair[1].get("score", 0),
+                ),
+                reverse=True,
+            )
+            if pity_candidates:
+                pool, info = pity_candidates[0]
+                selected = pool
+                num_draws = int(info["draws_to_pity"])
+                is_ten = num_draws == 10
+                selected_reason = "pity_near_threshold"
+
+        if selected is None and self.ten_pull_enabled:
+            ten_candidates = [
+                (pool, info)
+                for pool, info in scored
+                if info.get("score", 0) > 0
+                and int(getattr(pool, "cost_coins", 0) or 0) * 10 <= ten_budget
+            ]
+            if ten_candidates:
+                pool, info = ten_candidates[0]
                 selected, num_draws, is_ten = pool, 10, True
-                break
+                selected_reason = info.get("decision_reason", "ten_pull_positive_value")
 
         if selected is None:
             for pool, info in scored:
                 cost = int(getattr(pool, "cost_coins", 0) or 0)
                 if cost <= single_budget and info["score"] > 0:
                     selected = pool
+                    selected_reason = info.get("decision_reason", "single_positive_value")
                     break
 
         if selected is None:
@@ -122,8 +181,12 @@ class PaidGachaAction(AIAction):
                 **info,
             },
             predicted_prob=1.0,
-            decision_reason="expected_net_value_and_pity",
-            estimated_value=float(info.get("score", 0) or 0) * num_draws,
+            decision_reason=selected_reason or info.get("decision_reason", "gacha_strategy"),
+            estimated_value=max(
+                0.0,
+                float(info.get("net_value", info.get("score", 0)) or 0)
+                * num_draws,
+            ),
             coins_before=int(ai_user.coins),
             gacha_pool_id=int(selected.gacha_pool_id),
         )

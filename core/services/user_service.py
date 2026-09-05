@@ -212,7 +212,12 @@ class UserService:
         free_gacha_reward_msg = ""
         free_pool = self.gacha_service.get_daily_free_pool()
         if free_pool:
-            gacha_result = self.gacha_service.perform_draw(user.user_id, free_pool.gacha_pool_id, 1)
+            gacha_result = self.gacha_service.perform_draw(
+                user.user_id,
+                free_pool.gacha_pool_id,
+                1,
+                is_daily_free=True,
+            )
             if gacha_result.get("success"):
                 reward = gacha_result.get("results", [])[0]
                 reward_name = reward.get("name", "神秘奖励")

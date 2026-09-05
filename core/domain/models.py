@@ -756,9 +756,6 @@ class AIPlayerState:
     last_free_gacha_date: str = ""
     last_steal_failure_ts: float = 0.0
     last_electric_failure_ts: float = 0.0
-    last_item_use_ts: float = 0.0
-    last_social_item_ts: float = 0.0
-    last_fishing_item_ts: float = 0.0
 
 
 @dataclass

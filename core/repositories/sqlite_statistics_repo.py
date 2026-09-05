@@ -424,3 +424,42 @@ class SqliteStatisticsRepository:
             logger.debug(f"[统计] get_target_success_rates 查询失败: {e}")
             return {}
 
+    def get_recent_success_values(
+        self,
+        user_id: str,
+        action_type: str,
+        hours: int = 168,
+        limit: int = 100,
+    ) -> List[float]:
+        """读取近期社交动作实际兑现的鱼价，供道具成本估算使用。"""
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT details
+                    FROM statistics_logs
+                    WHERE user_id = ?
+                      AND action_type = ?
+                      AND success = 1
+                      AND details IS NOT NULL
+                      AND created_at >= datetime('now', '+8 hours', ?)
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (user_id, action_type, f"-{int(hours)} hours", int(limit)),
+                ).fetchall()
+            values = []
+            for row in rows:
+                try:
+                    details = json.loads(row["details"] or "{}")
+                    value = details.get("total_value", details.get("value", 0))
+                    value = float(value or 0)
+                    if value > 0:
+                        values.append(value)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+            return values
+        except Exception as e:
+            logger.debug(f"[统计] get_recent_success_values 查询失败: {e}")
+            return []
+

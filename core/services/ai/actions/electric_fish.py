@@ -54,14 +54,16 @@ class ElectricFishAction(AIAction):
             target.target_id, target.features, "electric_fish"
         )
         if not prepare.get("ready"):
-            if prepare.get("prepared"):
-                ctx.get_candidates(force=True)
             self._skip(
                 ctx,
-                prepare.get("reason") or "shield_prepared_next_tick",
+                prepare.get("reason") or "social_item_preparation_failed",
                 target.as_features(),
             )
             return
+
+        ctx.item_strategy.prepare_electric_fish(
+            target.target_id, target.expected_net_value
+        )
 
         before_coins = int(getattr(ctx.ai_user, "coins", 0) or 0)
         snapshot_id = ctx.snapshot.create(

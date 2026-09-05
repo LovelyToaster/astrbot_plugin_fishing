@@ -751,20 +751,6 @@
         "hint": "AI 玩家创建时获得的金币数量",
         "default": 10000
       },
-      "pond_full_threshold": {
-        "description": "鱼塘满仓卖鱼阈值（0-1）",
-        "type": "float",
-        "hint": "鱼塘容量达到此比例时触发自动卖鱼",
-        "default": 0.5,
-        "min": 0.0,
-        "max": 1.0
-      },
-      "sell_min_interval_seconds": {
-        "description": "两次卖鱼最小间隔（秒）",
-        "type": "int",
-        "hint": "两次自动卖鱼之间的最小时间间隔",
-        "default": 1800
-      },
       "gacha_enabled": {
         "description": "启用自动抽卡",
         "type": "bool",
@@ -777,20 +763,6 @@
         "hint": "按金币、鱼塘价值、护盾和钓鱼收益自动使用社交与钓鱼道具",
         "default": true
       },
-      "gacha_paid_interval_seconds": {
-        "description": "金币池抽卡最小间隔（秒）",
-        "type": "int",
-        "hint": "两次金币抽卡之间的最小时间间隔",
-        "default": 3600
-      },
-      "gacha_spending_ratio": {
-        "description": "单次抽卡消耗占当前金币的最大比例（0-1）",
-        "type": "float",
-        "hint": "单次抽卡最多消耗扣除 AI 运营储备后可用金币的此比例",
-        "default": 0.05,
-        "min": 0.0,
-        "max": 1.0
-      },
       "repair_enabled": {
         "description": "允许 AI 自动修复鱼竿",
         "type": "bool",
@@ -802,25 +774,6 @@
         "type": "bool",
         "hint": "是否允许 AI 自动精炼装备",
         "default": true
-      },
-      "refine_reserve_coins": {
-        "description": "精炼储备金门槛（金币低于此值不精炼）",
-        "type": "int",
-        "hint": "精炼装备的预算闸门，金币低于此值时 AI 不会精炼，避免耗尽资金",
-        "default": 200000
-      },
-      "gacha_ten_pull_enabled": {
-        "description": "允许 AI 进行十连抽卡",
-        "type": "bool",
-        "hint": "是否允许 AI 进行十连抽卡",
-        "default": true
-      },
-      "gacha_ten_pull_multiplier": {
-        "description": "十连预算倍率",
-        "type": "float",
-        "hint": "十连最多花可用金币×单次花费比例×此倍率，且不超过可用金币25%",
-        "default": 5,
-        "min": 1
       },
       "broadcast_enabled": {
         "description": "启用行为广播到指定群",
@@ -841,39 +794,11 @@
         "default": "aiocqhttp"
       },
 
-      "electric_min_target_fish_count": {
-        "description": "电鱼规则：目标鱼塘至少需要多少条鱼",
-        "type": "int",
-        "hint": "候选目标的 target_fish_count 低于此值将被过滤。默认 100（避免电空鱼塘）",
-        "default": 100,
-        "min": 0
-      },
-      "steal_min_target_fish_count": {
-        "description": "偷鱼规则：目标鱼塘至少需要多少条鱼",
-        "type": "int",
-        "hint": "偷鱼每次仅偷 1 条，默认 1 表示有鱼就偷",
-        "default": 1,
-        "min": 0
-      },
       "zone_switch_enabled": {
         "description": "允许 AI 自动切换钓鱼区域",
         "type": "bool",
         "hint": "AI 根据金币余额自动从低收益区域切换到高收益区域",
         "default": true
-      },
-      "zone_upgrade_threshold_multiplier": {
-        "description": "升级阈值：金币 ≥ 目标区域消耗 × 此值",
-        "type": "int",
-        "hint": "AI 金币达到目标区域钓鱼消耗的此倍数时，切换过去。默认 200 表示在目标区域可钓 200 次",
-        "default": 200,
-        "min": 1
-      },
-      "zone_downgrade_threshold_multiplier": {
-        "description": "降级阈值：金币 < 当前区域消耗 × 此值 时降级",
-        "type": "int",
-        "hint": "AI 金币低于当前区域消耗的此倍数时，退回到便宜区域。默认 20 表示剩余不足 20 次钓鱼时退回",
-        "default": 20,
-        "min": 1
       }
     }
   }

@@ -45,14 +45,18 @@ def build_actions(ai_config: Dict[str, Any]) -> List[AIAction]:
     """
     根据 ai_config 构造有序动作列表。
 
-     执行顺序：装备鱼竿 → 装备饰品 → 使用鱼饵 → 卖鱼 → 切换区域 → 卖装备
-     → 修复鱼竿 → 精炼装备 → 偷鱼 → 电鱼 → 免费抽卡 → 金币抽卡
+    执行顺序：装备鱼竿 → 装备饰品 → 使用鱼饵 → 卖鱼 → 切换区域 → 修复鱼竿
+     → 精炼装备 → 卖装备 → 普通道具 → 偷鱼 → 电鱼 → 免费抽卡 → 金币抽卡
+
+    偷鱼/电鱼动作内部会在真正执行前为目标准备驱灵香、破灵符或暗影斗篷；
+    准备成功后当前 tick 立即继续执行对应的社交动作。
 
     （修复鱼竿、精炼装备为无节流的条件触发动作；卖装备已去节流改为条件触发。）
     抽卡动作仅在 `gacha_enabled=true` 时启用。
     """
-    sell_min_interval = int(ai_config.get("sell_min_interval_seconds", 1800))
-    pond_threshold = float(ai_config.get("pond_full_threshold", 0.5))
+    # 策略参数固定在代码中，配置面只保留行为开关。
+    sell_min_interval = 1800
+    pond_threshold = 0.5
 
     actions: List[AIAction] = [
         EquipBestRodAction(),
@@ -64,37 +68,36 @@ def build_actions(ai_config: Dict[str, Any]) -> List[AIAction]:
         ),
     ]
 
-    if ai_config.get("item_strategy_enabled", True):
-        actions.append(UseItemsAction())
-
     if ai_config.get("zone_switch_enabled", True):
         actions.append(
             SwitchZoneAction(
-                upgrade_threshold=int(ai_config.get("zone_upgrade_threshold_multiplier", 200)),
-                downgrade_threshold=int(ai_config.get("zone_downgrade_threshold_multiplier", 20)),
+                upgrade_threshold=200,
+                downgrade_threshold=20,
             )
         )
-
-    actions.append(SellEquipmentAction())
 
     if ai_config.get("repair_enabled", True):
         actions.append(RepairRodAction())
     if ai_config.get("refine_enabled", True):
         actions.append(
-            RefineAction(reserve_coins=int(ai_config.get("refine_reserve_coins", 200000)))
+            RefineAction(reserve_coins=200000)
         )
+
+    # 精炼需要未锁定的重复装备；卖装备必须放在精炼之后，避免提前卖掉材料。
+    actions.append(SellEquipmentAction())
+
+    # 先处理通用道具，确保金币补充、防护和钓鱼增益在本 tick 的社交动作前生效。
+    # 驱灵香属于目标专用道具，仍由下方偷/电鱼动作在选定目标后即时处理。
+    if ai_config.get("item_strategy_enabled", True):
+        actions.append(UseItemsAction())
 
     actions.extend(
         [
             StealFishAction(
-                min_target_fish_count=int(
-                    ai_config.get("steal_min_target_fish_count", 1)
-                ),
+                min_target_fish_count=1,
             ),
             ElectricFishAction(
-                min_target_fish_count=int(
-                    ai_config.get("electric_min_target_fish_count", 100)
-                ),
+                min_target_fish_count=100,
             ),
         ]
     )
@@ -103,14 +106,10 @@ def build_actions(ai_config: Dict[str, Any]) -> List[AIAction]:
         actions.append(FreeGachaAction())
         actions.append(
             PaidGachaAction(
-                paid_interval_seconds=int(
-                    ai_config.get("gacha_paid_interval_seconds", 3600)
-                ),
-                spending_ratio=float(ai_config.get("gacha_spending_ratio", 0.05)),
-                ten_pull_enabled=ai_config.get("gacha_ten_pull_enabled", True),
-                ten_pull_multiplier=float(
-                    ai_config.get("gacha_ten_pull_multiplier", 5)
-                ),
+                paid_interval_seconds=3600,
+                spending_ratio=0.05,
+                ten_pull_enabled=True,
+                ten_pull_multiplier=5,
             )
         )
 
