@@ -46,7 +46,7 @@ async def showcase(plugin: "FishingPlugin", event: AstrMessageEvent):
 
     try:
         from ..draw.showcase import draw_showcase_image
-        from ..draw.utils import get_user_avatar
+        from ..draw.utils import get_user_avatar, run_in_thread, async_save_image
 
         # 异步获取头像
         avatar_img = None
@@ -56,10 +56,10 @@ async def showcase(plugin: "FishingPlugin", event: AstrMessageEvent):
         except Exception as e:
             logger.warning(f"获取展示柜用户头像失败: {e}")
 
-        # 绘制图片
-        image = draw_showcase_image(data, avatar_img=avatar_img)
+        # 绘制图片（后台线程执行绘制与保存，避免阻塞主循环）
+        image = await run_in_thread(draw_showcase_image, data, avatar_img=avatar_img)
         image_path = os.path.join(plugin.tmp_dir, f"showcase_{target_user_id}.png")
-        image.save(image_path)
+        await async_save_image(image, image_path, compress_level=1)
 
         yield event.image_result(image_path)
 

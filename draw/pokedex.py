@@ -33,34 +33,11 @@ FISH_PER_PAGE = 20      # 每页显示20个
 # 导入优化的渐变生成函数
 from .gradient_utils import create_vertical_gradient
 
+import asyncio
+
 def draw_rounded_rectangle(draw, bbox, radius, fill=None, outline=None, width=1):
-    """优化的圆角矩形绘制 - 避免边框重叠问题"""
-    x1, y1, x2, y2 = bbox
-    
-    # 首先绘制填充区域（无边框）
-    if fill is not None:
-        # 主体矩形
-        draw.rectangle([x1 + radius, y1, x2 - radius, y2], fill=fill)
-        draw.rectangle([x1, y1 + radius, x2, y2 - radius], fill=fill)
-        # 四个圆角
-        draw.ellipse([x1, y1, x1 + 2*radius, y1 + 2*radius], fill=fill)
-        draw.ellipse([x2 - 2*radius, y1, x2, y1 + 2*radius], fill=fill)
-        draw.ellipse([x1, y2 - 2*radius, x1 + 2*radius, y2], fill=fill)
-        draw.ellipse([x2 - 2*radius, y2 - 2*radius, x2, y2], fill=fill)
-    
-    # 然后绘制边框（仅在外围）
-    if outline is not None and width > 0:
-        # 四条直线边框
-        draw.line([x1 + radius, y1, x2 - radius, y1], fill=outline, width=width)  # 上边
-        draw.line([x1 + radius, y2, x2 - radius, y2], fill=outline, width=width)  # 下边
-        draw.line([x1, y1 + radius, x1, y2 - radius], fill=outline, width=width)  # 左边
-        draw.line([x2, y1 + radius, x2, y2 - radius], fill=outline, width=width)  # 右边
-        
-        # 四个圆角边框
-        draw.arc([x1, y1, x1 + 2*radius, y1 + 2*radius], 180, 270, fill=outline, width=width)  # 左上角
-        draw.arc([x2 - 2*radius, y1, x2, y1 + 2*radius], 270, 360, fill=outline, width=width)  # 右上角
-        draw.arc([x1, y2 - 2*radius, x1 + 2*radius, y2], 90, 180, fill=outline, width=width)   # 左下角
-        draw.arc([x2 - 2*radius, y2 - 2*radius, x2, y2], 0, 90, fill=outline, width=width)     # 右下角
+    """使用 Pillow 原生 C 实现绘制圆角矩形"""
+    draw.rounded_rectangle(bbox, radius=radius, fill=fill, outline=outline, width=width)
 
 
 async def draw_pokedex(pokedex_data: Dict[str, Any], user_info: Dict[str, Any], output_path: str, page: int = 1, data_dir: str = None, avatar_config: dict = None):
@@ -115,6 +92,19 @@ async def draw_pokedex(pokedex_data: Dict[str, Any], user_info: Dict[str, Any], 
     progress_text = f"◇ 收集进度: {pokedex_data.get('unlocked_fish_count', 0)} / {pokedex_data.get('total_fish_count', 0)} ◇"
     draw.text((IMG_WIDTH - PADDING - 300, PADDING + 45), progress_text, font=FONT_SUBHEADER, fill=primary_medium)
 
+    # 预先并发加载当前页所有鱼类图标
+    icon_size = 50
+    async def _fetch_icon(url):
+        if url and data_dir:
+            try:
+                return await get_fish_icon(url, data_dir, icon_size)
+            except Exception:
+                return None
+        return None
+
+    icon_tasks = [_fetch_icon(f.get("icon_url")) for f in page_fishes]
+    page_icons = await asyncio.gather(*icon_tasks, return_exceptions=True)
+
     # 绘制鱼卡片
     current_y = PADDING + HEADER_HEIGHT + FISH_CARD_MARGIN
     for i, fish in enumerate(page_fishes):
@@ -125,23 +115,13 @@ async def draw_pokedex(pokedex_data: Dict[str, Any], user_info: Dict[str, Any], 
         # 左侧内容区域
         left_pane_x = PADDING + 30
         
-        # 尝试加载并显示鱼类图标
-        icon_size = 50
-        icon_x = left_pane_x
-        icon_y = card_y1 + (FISH_CARD_HEIGHT - icon_size) // 2
-        icon_url = fish.get("icon_url")
-        if icon_url and data_dir:
-            try:
-                fish_icon = await get_fish_icon(icon_url, data_dir, icon_size)
-                if fish_icon:
-                    # 计算图标居中位置
-                    icon_x_offset = icon_x
-                    icon_y_offset = icon_y
-                    img.paste(fish_icon, (icon_x_offset, icon_y_offset), fish_icon)
-                    # 调整文本位置，为图标留出空间
-                    left_pane_x += icon_size + 15
-            except Exception as e:
-                logger.warning(f"加载鱼类图标失败: {e}, URL: {icon_url}")
+        # 显示鱼类图标（从并发预加载结果中获取）
+        fish_icon = page_icons[i] if i < len(page_icons) and not isinstance(page_icons[i], Exception) else None
+        if fish_icon:
+            icon_x = left_pane_x
+            icon_y = card_y1 + (FISH_CARD_HEIGHT - icon_size) // 2
+            img.paste(fish_icon, (icon_x, icon_y), fish_icon)
+            left_pane_x += icon_size + 15
         
         # 鱼名和稀有度 - 调整位置适应更小的卡片
         name_y = card_y1 + 10
@@ -206,7 +186,7 @@ async def draw_pokedex(pokedex_data: Dict[str, Any], user_info: Dict[str, Any], 
         logger.info(f"准备将图鉴图片保存至: {output_path}")
         # 应用圆角遮罩
         rounded_img = apply_rounded_corners(img, 20)
-        rounded_img.save(output_path)
+        rounded_img.save(output_path, compress_level=1)
         logger.info(f"图鉴图片已成功保存至 {output_path}")
     except Exception as e:
         logger.error(f"保存图鉴图片失败: {e}", exc_info=True)

@@ -245,14 +245,14 @@ class UserService:
 
     def _recalculate_consecutive_days(self, user_id: str) -> int:
         """从今天往前遍历签到记录，计算当月连续签到天数（跨月重置）"""
-        days = 0
         today = get_today()
-        current = today if self.log_repo.has_checked_in(user_id, today) else today - timedelta(days=1)
-        while (self.log_repo.has_checked_in(user_id, current)
-               and current.year == today.year
-               and current.month == today.month):
+        # 一次性获取当月所有签到日期集合，消除逐日循环查库
+        monthly_days = set(self.log_repo.get_monthly_checkin_dates(user_id, today.year, today.month))
+        days = 0
+        current_day = today.day if today.day in monthly_days else today.day - 1
+        while current_day in monthly_days and current_day > 0:
             days += 1
-            current -= timedelta(days=1)
+            current_day -= 1
         return days
 
     def makeup_sign_in(self, user_id: str) -> Dict[str, Any]:

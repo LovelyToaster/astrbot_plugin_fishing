@@ -12,25 +12,11 @@ from .styles import (
     COLOR_FISH_COUNT, COLOR_COINS, load_font
 )
 
-def draw_rounded_rectangle(draw, xy, radius=10, fill=None, outline=None, width=1):
-    """绘制圆角矩形"""
-    x1, y1, x2, y2 = xy
-    draw.rectangle((x1+radius, y1, x2-radius, y2), fill=fill, outline=fill)
-    draw.rectangle((x1, y1+radius, x2, y2-radius), fill=fill, outline=fill)
-    draw.ellipse((x1, y1, x1+2*radius, y1+2*radius), fill=fill, outline=fill)
-    draw.ellipse((x2-2*radius, y1, x2, y1+2*radius), fill=fill, outline=fill)
-    draw.ellipse((x1, y2-2*radius, x1+2*radius, y2), fill=fill, outline=fill)
-    draw.ellipse((x2-2*radius, y2-2*radius, x2, y2), fill=fill, outline=fill)
+from .utils import get_static_resource
 
-    if outline:
-        draw.arc((x1, y1, x1+2*radius, y1+2*radius), 180, 270, fill=outline, width=width)
-        draw.arc((x2-2*radius, y1, x2, y1+2*radius), 270, 360, fill=outline, width=width)
-        draw.arc((x1, y2-2*radius, x1+2*radius, y2), 90, 180, fill=outline, width=width)
-        draw.arc((x2-2*radius, y2-2*radius, x2, y2), 0, 90, fill=outline, width=width)
-        draw.line((x1+radius, y1, x2-radius, y1), fill=outline, width=width)
-        draw.line((x1+radius, y2, x2-radius, y2), fill=outline, width=width)
-        draw.line((x1, y1+radius, x1, y2-radius), fill=outline, width=width)
-        draw.line((x2, y1+radius, x2, y2-radius), fill=outline, width=width)
+def draw_rounded_rectangle(draw, xy, radius=10, fill=None, outline=None, width=1):
+    """绘制圆角矩形（使用 Pillow 原生 C 实现）"""
+    draw.rounded_rectangle(xy, radius=radius, fill=fill, outline=outline, width=width)
 
 def get_text_metrics(text, font, draw):
     """获取文本指标，返回边界框和大小"""
@@ -126,15 +112,13 @@ def draw_fishing_ranking(user_data: List[Dict], output_path: str, ranking_type: 
     # 绘制用户卡片
     current_y = PADDING + HEADER_HEIGHT + USER_CARD_MARGIN
 
-    # 奖杯符号
-    trophy_symbols = []
-    try:
-        gold_trophy = Image.open(os.path.join(os.path.dirname(__file__),"resource", "gold.png") ).resize((40, 40))
-        silver_trophy = Image.open(os.path.join(os.path.dirname(__file__),"resource", "silver.png")).resize((35, 35))
-        bronze_trophy = Image.open(os.path.join(os.path.dirname(__file__),"resource", "bronze.png")).resize((35, 35))
+    # 奖杯符号（复用常驻内存缓存）
+    gold_trophy = get_static_resource("gold.png", (40, 40))
+    silver_trophy = get_static_resource("silver.png", (35, 35))
+    bronze_trophy = get_static_resource("bronze.png", (35, 35))
+    if gold_trophy and silver_trophy and bronze_trophy:
         trophy_symbols = [gold_trophy, silver_trophy, bronze_trophy]
-    except Exception as e:
-        logger.warning(f"加载奖杯图片失败: {e}")
+    else:
         trophy_symbols = ["1", "2", "3"]
 
     for idx, user in enumerate(top_users):
@@ -253,7 +237,7 @@ def draw_fishing_ranking(user_data: List[Dict], output_path: str, ranking_type: 
 
     # 保存图片
     try:
-        img.save(output_path)
+        img.save(output_path, compress_level=1)
         logger.info(f"排行榜图片已保存到 {output_path}")
     except Exception as e:
         logger.error(f"保存排行榜图片失败: {e}")

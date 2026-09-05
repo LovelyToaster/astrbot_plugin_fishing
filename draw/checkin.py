@@ -43,18 +43,23 @@ FUTURE_TEXT = (175, 185, 198)
 DEFAULT_BORDER = (225, 232, 240)
 
 
+_fonts_cache = None
+
 def _get_fonts():
-    return {
-        "title": load_font_with_cjk_fallback(FONT_BOLD_PATH, 24),
-        "subtitle": load_font(15),
-        "day": load_font(17),
-        "tag": load_font_with_cjk_fallback(FONT_BOLD_PATH, 11),
-        "weekday": load_font_with_cjk_fallback(FONT_BOLD_PATH, 13),
-        "body_cjk": load_font_with_cjk_fallback(FONT_BOLD_PATH, 14),
-        "body_bold": load_font_with_cjk_fallback(FONT_BOLD_PATH, 15),
-        "label_cjk": load_font_with_cjk_fallback(FONT_BOLD_PATH, 18),
-        "badge_cjk": load_font_with_cjk_fallback(FONT_BOLD_PATH, 12),
-    }
+    global _fonts_cache
+    if _fonts_cache is None:
+        _fonts_cache = {
+            "title": load_font_with_cjk_fallback(FONT_BOLD_PATH, 24),
+            "subtitle": load_font(15),
+            "day": load_font(17),
+            "tag": load_font_with_cjk_fallback(FONT_BOLD_PATH, 11),
+            "weekday": load_font_with_cjk_fallback(FONT_BOLD_PATH, 13),
+            "body_cjk": load_font_with_cjk_fallback(FONT_BOLD_PATH, 14),
+            "body_bold": load_font_with_cjk_fallback(FONT_BOLD_PATH, 15),
+            "label_cjk": load_font_with_cjk_fallback(FONT_BOLD_PATH, 18),
+            "badge_cjk": load_font_with_cjk_fallback(FONT_BOLD_PATH, 12),
+        }
+    return _fonts_cache
 
 
 def draw_sign_in_image(data: Dict[str, Any], data_dir: str) -> Image.Image:

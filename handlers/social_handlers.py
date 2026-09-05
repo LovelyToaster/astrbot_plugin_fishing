@@ -5,6 +5,7 @@ from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.core.message.components import At
 from astrbot.api import logger
 from ..draw.rank import draw_fishing_ranking
+from ..draw.utils import run_in_thread
 from ..utils import parse_target_user_id
 
 from typing import TYPE_CHECKING
@@ -93,7 +94,7 @@ async def ranking(plugin: "FishingPlugin", event: AstrMessageEvent):
     safe_unique_id = sanitize_filename(str(unique_id))
     output_path = os.path.join(plugin.tmp_dir, f"fishing_ranking_{safe_unique_id}.png")
 
-    draw_fishing_ranking(user_data, output_path=output_path, ranking_type=ranking_type)
+    await run_in_thread(draw_fishing_ranking, user_data, output_path=output_path, ranking_type=ranking_type)
     yield event.image_result(output_path)
 
 

@@ -1,12 +1,50 @@
 import os
 import hashlib
-from typing import Optional
+import time
+import re
+from typing import Optional, Dict, Tuple
+from io import BytesIO
 from PIL import Image, ImageDraw
 from astrbot.api import logger
 
+# 内存级处理后头像缓存: (user_id, avatar_size) -> (timestamp, Image)
+_AVATAR_MEM_CACHE: Dict[Tuple[str, int], Tuple[float, Image.Image]] = {}
+_MAX_AVATAR_MEM_CACHE = 256
+_AVATAR_MEM_TTL = 3600  # 内存缓存1小时
+
+# 内存级处理后鱼类图标缓存: (url_hash, icon_size) -> Image
+_FISH_ICON_MEM_CACHE: Dict[Tuple[str, int], Image.Image] = {}
+_MAX_ICON_MEM_CACHE = 256
+
+# 静态资源缓存
+_STATIC_RESOURCE_CACHE: Dict[str, Image.Image] = {}
+
+
+def get_static_resource(filename: str, resize_to: Optional[Tuple[int, int]] = None) -> Optional[Image.Image]:
+    """获取项目内置的静态图片资源（常驻内存缓存，0磁盘IO）"""
+    cache_key = f"{filename}_{resize_to}"
+    if cache_key in _STATIC_RESOURCE_CACHE:
+        return _STATIC_RESOURCE_CACHE[cache_key].copy()
+    
+    resource_path = os.path.join(os.path.dirname(__file__), "resource", filename)
+    if not os.path.exists(resource_path):
+        return None
+    try:
+        img = Image.open(resource_path)
+        if resize_to:
+            img = img.resize(resize_to, Image.Resampling.LANCZOS)
+        else:
+            img = img.copy()
+        _STATIC_RESOURCE_CACHE[cache_key] = img
+        return img.copy()
+    except Exception as e:
+        logger.warning(f"加载静态资源失败 {filename}: {e}")
+        return None
+
+
 async def get_user_avatar(user_id: str, data_dir: str, avatar_size: int = 50, avatar_config: dict = None) -> Optional[Image.Image]:
     """
-    获取用户头像并处理为圆形
+    获取用户头像并处理为圆角（具备内存LRU与磁盘二级缓存）
     
     Args:
         user_id: 用户ID
@@ -17,17 +55,21 @@ async def get_user_avatar(user_id: str, data_dir: str, avatar_size: int = 50, av
     Returns:
         处理后的头像图像，如果失败返回None
     """
+    mem_key = (user_id, avatar_size)
+    now_ts = time.time()
+    if mem_key in _AVATAR_MEM_CACHE:
+        cache_time, cached_img = _AVATAR_MEM_CACHE[mem_key]
+        if now_ts - cache_time < _AVATAR_MEM_TTL:
+            return cached_img.copy()
+
     try:
         import aiohttp
-        from io import BytesIO
-        import time
         
         # 创建头像缓存目录
         cache_dir = os.path.join(data_dir, "avatar_cache")
         os.makedirs(cache_dir, exist_ok=True)
         
         # 安全化user_id用于文件名
-        import re
         safe_user_id = re.sub(r'[^a-zA-Z0-9._-]', '_', user_id)
         safe_user_id = re.sub(r'_+', '_', safe_user_id).strip('_') or 'unknown'
         avatar_cache_path = os.path.join(cache_dir, f"{safe_user_id}_avatar.png")
@@ -36,10 +78,10 @@ async def get_user_avatar(user_id: str, data_dir: str, avatar_size: int = 50, av
         avatar_image = None
         if os.path.exists(avatar_cache_path):
             try:
-                file_age = time.time() - os.path.getmtime(avatar_cache_path)
+                file_age = now_ts - os.path.getmtime(avatar_cache_path)
                 if file_age < 86400:  # 24小时
                     avatar_image = Image.open(avatar_cache_path).convert('RGBA')
-            except:
+            except Exception:
                 pass
 
         if avatar_image is None:
@@ -51,7 +93,7 @@ async def get_user_avatar(user_id: str, data_dir: str, avatar_size: int = 50, av
 
                 if server_url and access_token:
                     try:
-                        timeout = aiohttp.ClientTimeout(total=10, connect=5)
+                        timeout = aiohttp.ClientTimeout(total=5, connect=3)
                         async with aiohttp.ClientSession(timeout=timeout) as session:
                             profile_url = f"{server_url}/_matrix/client/v3/profile/{user_id}"
 
@@ -80,36 +122,13 @@ async def get_user_avatar(user_id: str, data_dir: str, avatar_size: int = 50, av
                                                 content = await avatar_response.read()
                                                 avatar_image = Image.open(BytesIO(content)).convert('RGBA')
                                                 avatar_image.save(avatar_cache_path, 'PNG')
-                                            elif avatar_response.status == 404:
-                                                logger.warning(f"[Matrix Avatar] 媒体文件不存在: {media_url}")
-                                                return None
-                                            elif avatar_response.status == 403:
-                                                logger.warning(f"[Matrix Avatar] 无权限访问媒体文件")
-                                                return None
-                                            else:
-                                                logger.warning(f"[Matrix Avatar] 媒体下载失败，状态码: {avatar_response.status}")
-                                                return None
-                                    elif avatar_url:
-                                        logger.warning(f"[Matrix Avatar] 未知的avatar_url格式: {avatar_url}")
-                                        return None
-                                elif response.status == 404:
-                                    logger.warning(f"[Matrix Avatar] 用户不存在: {user_id}")
-                                    return None
-                                elif response.status == 401:
-                                    logger.warning(f"[Matrix Avatar] Token无效或已过期")
-                                    return None
-                                elif response.status == 429:
-                                    logger.warning(f"[Matrix Avatar] 请求过于频繁，被限流")
-                                    return None
-                                else:
-                                    logger.warning(f"[Matrix Avatar] Profile API返回错误状态码: {response.status}")
-                                    return None
                     except Exception as e:
                         logger.warning(f"[Matrix Avatar] Matrix头像下载失败: {e}")
             else:
-                avatar_url = f"https://q4.qlogo.cn/headimg_dl?dst_uin={user_id}&spec=640"
+                # 使用 spec=100 规格（约 5KB），远比 640 规格轻量迅速
+                avatar_url = f"https://q4.qlogo.cn/headimg_dl?dst_uin={user_id}&spec=100"
                 try:
-                    timeout = aiohttp.ClientTimeout(total=10, connect=5)
+                    timeout = aiohttp.ClientTimeout(total=5, connect=3)
                     async with aiohttp.ClientSession(timeout=timeout) as session:
                         async with session.get(avatar_url) as response:
                             if response.status == 200:
@@ -121,10 +140,14 @@ async def get_user_avatar(user_id: str, data_dir: str, avatar_size: int = 50, av
                     return None
 
         if avatar_image:
-            return avatar_postprocess(avatar_image, avatar_size)
+            processed = avatar_postprocess(avatar_image, avatar_size)
+            if len(_AVATAR_MEM_CACHE) >= _MAX_AVATAR_MEM_CACHE:
+                _AVATAR_MEM_CACHE.pop(next(iter(_AVATAR_MEM_CACHE)))
+            _AVATAR_MEM_CACHE[mem_key] = (now_ts, processed.copy())
+            return processed
         
     except Exception as e:
-        logger.warning(f"[Matrix Avatar] 获取用户头像失败: {e}, user_id={user_id}")
+        logger.warning(f"获取用户头像失败: {e}, user_id={user_id}")
     
     return None
 
@@ -162,7 +185,7 @@ def avatar_postprocess(avatar_image: Image.Image, size: int) -> Image.Image:
 
 async def get_fish_icon(icon_url: str, data_dir: str, icon_size: int = 60) -> Optional[Image.Image]:
     """
-    下载并处理鱼类图标
+    下载并处理鱼类图标（带内存与磁盘二级缓存）
     
     Args:
         icon_url: 图标URL
@@ -175,17 +198,18 @@ async def get_fish_icon(icon_url: str, data_dir: str, icon_size: int = 60) -> Op
     if not icon_url or not icon_url.strip():
         return None
     
+    url_hash = hashlib.md5(icon_url.strip().encode()).hexdigest()
+    mem_key = (url_hash, icon_size)
+    if mem_key in _FISH_ICON_MEM_CACHE:
+        return _FISH_ICON_MEM_CACHE[mem_key].copy()
+    
     try:
         import aiohttp
-        from io import BytesIO
-        import time
         
         # 创建图标缓存目录
         cache_dir = os.path.join(data_dir, "fish_icon_cache")
         os.makedirs(cache_dir, exist_ok=True)
         
-        # 使用URL的hash作为缓存文件名
-        url_hash = hashlib.md5(icon_url.encode()).hexdigest()
         icon_cache_path = os.path.join(cache_dir, f"{url_hash}.png")
         
         # 检查是否有缓存的图标（7天刷新）
@@ -195,38 +219,57 @@ async def get_fish_icon(icon_url: str, data_dir: str, icon_size: int = 60) -> Op
                 file_age = time.time() - os.path.getmtime(icon_cache_path)
                 if file_age < 604800:  # 7天
                     icon_image = Image.open(icon_cache_path).convert('RGBA')
-            except:
+            except Exception:
                 pass
         
         # 如果没有缓存或缓存过期，重新下载
         if icon_image is None:
             try:
-                timeout = aiohttp.ClientTimeout(total=10, connect=5)
+                timeout = aiohttp.ClientTimeout(total=5, connect=3)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.get(icon_url.strip()) as response:
                         if response.status == 200:
                             content = await response.read()
-                            # 限制文件大小（最大5MB）
                             if len(content) > 5 * 1024 * 1024:
                                 logger.warning(f"图标文件过大，跳过: {icon_url}")
                                 return None
                             icon_image = Image.open(BytesIO(content)).convert('RGBA')
-                            # 保存到缓存
                             icon_image.save(icon_cache_path, 'PNG')
                         else:
-                            logger.warning(f"下载图标失败，HTTP状态码: {response.status}, URL: {icon_url}")
                             return None
             except Exception as e:
-                # 如果下载失败，记录日志但不抛出异常
                 logger.warning(f"图标下载失败: {e}, URL: {icon_url}")
                 return None
         
         if icon_image:
-            # 调整图标大小并保持宽高比
             icon_image.thumbnail((icon_size, icon_size), Image.Resampling.LANCZOS)
+            if len(_FISH_ICON_MEM_CACHE) >= _MAX_ICON_MEM_CACHE:
+                _FISH_ICON_MEM_CACHE.pop(next(iter(_FISH_ICON_MEM_CACHE)))
+            _FISH_ICON_MEM_CACHE[mem_key] = icon_image.copy()
             return icon_image
         
     except Exception as e:
         logger.warning(f"处理图标时发生错误: {e}, URL: {icon_url}")
     
     return None
+
+
+async def run_in_thread(func, *args, **kwargs):
+    """在后台工作线程中执行CPU密集型或同步阻塞操作，支持 Python 3.8+"""
+    import asyncio
+    import functools
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+    if kwargs:
+        return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
+    return await loop.run_in_executor(None, func, *args)
+
+
+async def async_save_image(image: Image.Image, output_path: str, compress_level: int = 1) -> str:
+    """在后台线程异步保存图片并控制压缩级别，避免阻塞主事件循环"""
+    def _save():
+        image.save(output_path, compress_level=compress_level)
+        return output_path
+    return await run_in_thread(_save)

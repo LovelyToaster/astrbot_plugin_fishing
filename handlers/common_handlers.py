@@ -3,6 +3,7 @@ from astrbot.api.event import filter, AstrMessageEvent
 from ..draw.help import draw_help_image
 from ..draw.state import draw_state_image, get_user_state_data
 from ..draw.checkin import draw_sign_in_image
+from ..draw.utils import run_in_thread, async_save_image
 from ..core.utils import get_now
 from ..utils import safe_datetime_handler, parse_target_user_id, parse_amount
 from typing import TYPE_CHECKING
@@ -28,9 +29,9 @@ async def sign_in(self: "FishingPlugin", event: AstrMessageEvent):
         calendar_data = self.user_service.get_sign_in_calendar_data(user_id)
         if result["success"]:
             calendar_data["reward"] = result
-        image = draw_sign_in_image(calendar_data, self.data_dir)
+        image = await run_in_thread(draw_sign_in_image, calendar_data, self.data_dir)
         image_path = os.path.join(self.tmp_dir, "sign_in.png")
-        image.save(image_path)
+        await async_save_image(image, image_path, compress_level=1)
         yield event.image_result(image_path)
     except Exception:
         yield event.plain_result(result.get("message", "出错了"))
@@ -45,8 +46,9 @@ async def state(self: "FishingPlugin", event: AstrMessageEvent):
     """查看用户状态"""
     user_id = self._get_effective_user_id(event)
     avatar_config = self.game_config.get("avatar_config", {})
-    # 调用新的数据获取函数
-    user_data = get_user_state_data(
+    # 调用新的数据获取函数（在后台线程查询数据，避免阻塞事件循环）
+    user_data = await run_in_thread(
+        get_user_state_data,
         self.user_repo,
         self.inventory_repo,
         self.item_template_repo,
@@ -63,9 +65,9 @@ async def state(self: "FishingPlugin", event: AstrMessageEvent):
         return
     # 生成状态图像
     image = await draw_state_image(user_data, self.data_dir, avatar_config)
-    # 保存图像到临时文件
+    # 保存图像到临时文件（后台线程压缩保存）
     image_path = os.path.join(self.tmp_dir, "user_status.png")
-    image.save(image_path)
+    await async_save_image(image, image_path, compress_level=1)
     yield event.image_result(image_path)
 
 async def fishing_log(self: "FishingPlugin", event: AstrMessageEvent):
@@ -91,9 +93,9 @@ async def fishing_log(self: "FishingPlugin", event: AstrMessageEvent):
 
 async def fishing_help(self: "FishingPlugin", event: AstrMessageEvent):
     """显示钓鱼插件帮助信息"""
-    image = draw_help_image()
+    image = await run_in_thread(draw_help_image)
     output_path = os.path.join(self.tmp_dir, "fishing_help.png")
-    image.save(output_path)
+    await async_save_image(image, output_path, compress_level=1)
     yield event.image_result(output_path)
 
 async def transfer_coins(self: "FishingPlugin", event: AstrMessageEvent):

@@ -81,8 +81,22 @@ def load_font(size, is_bold=False, *args, **kwargs):
             _font_cache[size] = ImageFont.load_default()
     return _font_cache[size]
 
-FONT_HEADER = load_font(36)    # 标题字体
-FONT_SUBHEADER = load_font(24) # 收集进度字体
-FONT_FISH_NAME = load_font(24) # 鱼名字体
-FONT_REGULAR = load_font(14)   # 常规字体
-FONT_SMALL = load_font(12)     # 小字体
+class LazyFont:
+    """惰性字体代理类，避免模块导入期立即加载大字体文件"""
+    def __init__(self, size: int):
+        self.size = size
+        self._font = None
+
+    def _get_font(self):
+        if self._font is None:
+            self._font = load_font(self.size)
+        return self._font
+
+    def __getattr__(self, name):
+        return getattr(self._get_font(), name)
+
+FONT_HEADER = LazyFont(36)    # 标题字体
+FONT_SUBHEADER = LazyFont(24) # 收集进度字体
+FONT_FISH_NAME = LazyFont(24) # 鱼名字体
+FONT_REGULAR = LazyFont(14)   # 常规字体
+FONT_SMALL = LazyFont(12)     # 小字体

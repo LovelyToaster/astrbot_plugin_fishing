@@ -32,14 +32,22 @@ def get_text_size_cached(text: str, font: ImageFont.FreeTypeFont, cache: dict = 
     return cache[cache_key]
 
 
+# 共享的微型测量图像，仅作为特殊回退兜底
+_DUMMY_IMG = Image.new('RGB', (1, 1), (255, 255, 255))
+_DUMMY_DRAW = ImageDraw.Draw(_DUMMY_IMG)
+
 def _measure_text_size(text: str, font: ImageFont.FreeTypeFont) -> Tuple[int, int]:
     """
-    测量文本尺寸的内部函数
+    测量文本尺寸的内部函数，优先使用底层的 getbbox，免去构造图像的开销
     """
-    # 创建临时图像进行测量
-    temp_img = Image.new('RGB', (1, 1), (255, 255, 255))
-    temp_draw = ImageDraw.Draw(temp_img)
-    bbox = temp_draw.textbbox((0, 0), text, font=font)
+    if hasattr(font, 'getbbox'):
+        try:
+            bbox = font.getbbox(text)
+            if bbox:
+                return bbox[2] - bbox[0], bbox[3] - bbox[1]
+        except Exception:
+            pass
+    bbox = _DUMMY_DRAW.textbbox((0, 0), text, font=font)
     return bbox[2] - bbox[0], bbox[3] - bbox[1]
 
 
@@ -293,9 +301,11 @@ class FontWithFallback:
         return getattr(self.primary_font, name)
 
 
+_fallback_font_cache = {}
+
 def load_font_with_cjk_fallback(font_path: str, size: int) -> FontWithFallback:
     """
-    加载字体，自动添加CJK回退支持
+    加载字体，自动添加CJK回退支持（带全局内存缓存，避免重复读盘与 FreeType 解析）
     
     Args:
         font_path: 主字体文件路径
@@ -304,6 +314,10 @@ def load_font_with_cjk_fallback(font_path: str, size: int) -> FontWithFallback:
     Returns:
         FontWithFallback: 带回退的字体对象
     """
+    cache_key = (font_path, size)
+    if cache_key in _fallback_font_cache:
+        return _fallback_font_cache[cache_key]
+
     # 加载主字体
     try:
         primary_font = ImageFont.truetype(font_path, size)
@@ -316,11 +330,12 @@ def load_font_with_cjk_fallback(font_path: str, size: int) -> FontWithFallback:
     if cjk_font_path:
         try:
             fallback_font = ImageFont.truetype(cjk_font_path, size)
-        except Exception as e:
-            # 如果加载失败，记录错误但不抛出异常
+        except Exception:
             pass
     
-    return FontWithFallback(primary_font, fallback_font)
+    font_obj = FontWithFallback(primary_font, fallback_font)
+    _fallback_font_cache[cache_key] = font_obj
+    return font_obj
 
 
 def draw_text_smart(
@@ -343,10 +358,8 @@ def draw_text_smart(
         font: 字体对象（可以是FontWithFallback或普通字体）
         fill: 文本颜色
     """
-    # 如果是FontWithFallback类型，需要特殊处理
     if isinstance(font, FontWithFallback):
         if not font.fallback_font:
-            # 没有回退字体，直接绘制
             draw.text(position, text, font=font.primary_font, fill=fill)
             return
         
@@ -358,7 +371,6 @@ def draw_text_smart(
                 need_fallback = True
                 break
         
-        # 如果所有字符都能用主字体，直接一次性绘制（保持原始间距）
         if not need_fallback:
             draw.text(position, text, font=font.primary_font, fill=fill)
             return
@@ -367,55 +379,38 @@ def draw_text_smart(
         x, y = position
         current_x = x
         
-        # 创建临时图像用于测量（复用以提高效率）
-        temp_img = Image.new('RGB', (200, 100), (255, 255, 255))
-        temp_draw = ImageDraw.Draw(temp_img)
+        # 计算中线对齐参考
+        try:
+            ref_bbox = font.primary_font.getbbox("A")
+            reference_center_y = (ref_bbox[1] + ref_bbox[3]) / 2
+        except Exception:
+            ref_bbox = _DUMMY_DRAW.textbbox((0, 0), "A", font=font.primary_font)
+            reference_center_y = (ref_bbox[1] + ref_bbox[3]) / 2
         
-        # 计算中线对齐：使用主字体的标准字符的垂直中心作为参考
-        # 这确保无论使用哪个字体渲染，字符都在同一水平视觉中心线上
-        # 使用"A"作为参考字符（标准拉丁字母大写，所有字体都支持）
-        reference_bbox = temp_draw.textbbox((0, 0), "A", font=font.primary_font)
-        reference_center_y = (reference_bbox[1] + reference_bbox[3]) / 2  # 垂直中心
-        
-        for i, char in enumerate(text):
-            # 获取适合该字符的字体
+        for char in text:
             char_font = font._get_font_for_char(char)
             
-            # 获取当前字符的bbox
-            char_bbox = temp_draw.textbbox((0, 0), char, font=char_font)
-            char_center_y = (char_bbox[1] + char_bbox[3]) / 2  # 当前字符的垂直中心
+            try:
+                char_bbox = char_font.getbbox(char)
+                char_center_y = (char_bbox[1] + char_bbox[3]) / 2
+            except Exception:
+                char_bbox = _DUMMY_DRAW.textbbox((0, 0), char, font=char_font)
+                char_center_y = (char_bbox[1] + char_bbox[3]) / 2
             
-            # 计算y坐标：让所有字符的垂直中心对齐到参考中心
-            # 基本思路：字符中心 = y + reference_center_y
-            # 所以：char_y = y + (reference_center_y - char_center_y)
             char_y = y + (reference_center_y - char_center_y)
             
-            # 测量字符宽度
-            # 为了保持字符间距一致，统一使用主字体来测量宽度
             try:
-                # 使用主字体测量宽度（保持一致的间距）
                 if hasattr(font.primary_font, 'getlength'):
                     char_width = int(font.primary_font.getlength(char))
                 else:
-                    bbox = temp_draw.textbbox((0, 0), char, font=font.primary_font)
-                    char_width = bbox[2] - bbox[0]
-                    
-                    # 如果主字体无法测量（宽度为0），使用实际字符字体测量
+                    bbox = font.primary_font.getbbox(char)
+                    char_width = (bbox[2] - bbox[0]) if bbox else 0
                     if char_width <= 0:
-                        if hasattr(char_font, 'getlength'):
-                            char_width = int(char_font.getlength(char))
-                        else:
-                            bbox = temp_draw.textbbox((0, 0), char, font=char_font)
-                            char_width = bbox[2] - bbox[0]
-                            if char_width <= 0:
-                                char_width = font.primary_font.size
+                        char_width = font.primary_font.size
             except Exception:
-                # 如果测量失败，使用字体大小估算
                 char_width = font.primary_font.size
             
-            # 绘制字符（使用调整后的y坐标，确保基线对齐）
             draw.text((current_x, char_y), char, font=char_font, fill=fill)
             current_x += char_width
     else:
-        # 普通字体，直接绘制
         draw.text(position, text, font=font, fill=fill)

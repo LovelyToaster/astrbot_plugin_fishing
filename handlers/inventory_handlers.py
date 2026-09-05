@@ -1,6 +1,7 @@
 import os
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.core.message.components import At
+from ..draw.utils import run_in_thread, async_save_image
 from ..utils import to_percentage, format_accessory_or_rod, format_rarity_display, parse_amount
 from typing import TYPE_CHECKING
 
@@ -16,8 +17,10 @@ async def user_backpack(plugin: "FishingPlugin", event: AstrMessageEvent):
             # 导入绘制函数
             from ..draw.backpack import draw_backpack_image, get_user_backpack_data
 
-            # 获取用户背包数据（限制每个分类最多显示50个物品）
-            backpack_data = get_user_backpack_data(plugin.inventory_service, user_id, max_items_per_category=50)
+            # 获取用户背包数据（限制每个分类最多显示50个物品，在线程中获取避免卡死事件循环）
+            backpack_data = await run_in_thread(
+                get_user_backpack_data, plugin.inventory_service, user_id, max_items_per_category=50
+            )
 
             # 设置用户昵称
             backpack_data["nickname"] = user.nickname or user_id
@@ -39,9 +42,9 @@ async def user_backpack(plugin: "FishingPlugin", event: AstrMessageEvent):
             # 生成背包图像
             avatar_config = plugin.game_config.get("avatar_config", {})
             image = await draw_backpack_image(backpack_data, plugin.data_dir, avatar_config)
-            # 保存图像到临时文件
+            # 异步保存图像到临时文件
             image_path = os.path.join(plugin.tmp_dir, "user_backpack.png")
-            image.save(image_path)
+            await async_save_image(image, image_path, compress_level=1)
             yield event.image_result(image_path)
             
             # 如果内容被截断或过滤，额外发送提示

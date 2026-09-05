@@ -12,6 +12,22 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._local = threading.local()
+        # 内存模板缓存，彻底消除背包/状态/钓鱼时的 N+1 重复查询
+        self._fish_cache: Dict[int, Fish] = {}
+        self._all_fish_cached: bool = False
+        self._rod_cache: Dict[int, Rod] = {}
+        self._all_rods_cached: bool = False
+        self._accessory_cache: Dict[int, Accessory] = {}
+        self._all_accessories_cached: bool = False
+        self._bait_cache: Dict[int, Bait] = {}
+        self._all_baits_cached: bool = False
+        self._item_cache: Dict[int, Item] = {}
+        self._all_items_cached: bool = False
+        self._title_cache: Dict[int, Title] = {}
+        self._all_titles_cached: bool = False
+        self._title_by_name_cache: Dict[str, Title] = {}
+        self._item_by_name_cache: Dict[str, Item] = {}
+        self._cache_lock = threading.Lock()
 
     def _get_connection(self) -> sqlite3.Connection:
         """获取一个线程安全的数据库连接。"""
@@ -19,6 +35,9 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
         if conn is None:
             conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode = WAL;")
+            conn.execute("PRAGMA synchronous = NORMAL;")
+            conn.execute("PRAGMA cache_size = -64000;")
             self._local.connection = conn
         return conn
 
@@ -89,8 +108,15 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                 ),
             )
             conn.commit()
+        with self._cache_lock:
+            self._item_cache.clear()
+            self._item_by_name_cache.clear()
+            self._all_items_cached = False
 
     def get_by_id(self, item_id: int) -> Optional[Item]:
+        with self._cache_lock:
+            if item_id in self._item_cache:
+                return self._item_cache[item_id]
         with self._get_connection() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
@@ -99,9 +125,16 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                 (item_id,),
             )
             row = cursor.fetchone()
-            return self._to_domain(row) if row else None
+            item = self._to_domain(row) if row else None
+            if item:
+                with self._cache_lock:
+                    self._item_cache[item_id] = item
+            return item
 
     def get_all(self) -> List[Item]:
+        with self._cache_lock:
+            if self._all_items_cached:
+                return list(self._item_cache.values())
         with self._get_connection() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
@@ -109,9 +142,17 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                 "SELECT item_id, name, description, rarity, effect_description, cost, is_consumable, icon_url, effect_type, effect_payload FROM items"
             )
             rows = cursor.fetchall()
-            return [self._to_domain(row) for row in rows] if rows else []
+            items = [self._to_domain(row) for row in rows] if rows else []
+            with self._cache_lock:
+                for item in items:
+                    self._item_cache[item.item_id] = item
+                self._all_items_cached = True
+            return items
 
     def get_by_name(self, name: str) -> Optional[Item]:
+        with self._cache_lock:
+            if name in self._item_by_name_cache:
+                return self._item_by_name_cache[name]
         with self._get_connection() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
@@ -120,7 +161,12 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                 (name,),
             )
             row = cursor.fetchone()
-            return self._to_domain(row) if row else None
+            item = self._to_domain(row) if row else None
+            if item:
+                with self._cache_lock:
+                    self._item_by_name_cache[name] = item
+                    self._item_cache[item.item_id] = item
+            return item
 
     def update(self, item: Item):
         with self._get_connection() as conn:
@@ -145,6 +191,10 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                 ),
             )
             conn.commit()
+        with self._cache_lock:
+            self._item_cache.clear()
+            self._item_by_name_cache.clear()
+            self._all_items_cached = False
 
     def _to_domain_from_row(self, row: sqlite3.Row) -> Item:
         """从 sqlite3.Row 对象转换到领域模型"""
@@ -165,16 +215,31 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
 
     # --- Fish Read Methods ---
     def get_fish_by_id(self, fish_id: int) -> Optional[Fish]:
+        with self._cache_lock:
+            if fish_id in self._fish_cache:
+                return self._fish_cache[fish_id]
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM fish WHERE fish_id = ?", (fish_id,))
-            return self._row_to_fish(cursor.fetchone())
+            fish = self._row_to_fish(cursor.fetchone())
+            if fish:
+                with self._cache_lock:
+                    self._fish_cache[fish_id] = fish
+            return fish
 
     def get_all_fish(self) -> List[Fish]:
+        with self._cache_lock:
+            if self._all_fish_cached:
+                return sorted(self._fish_cache.values(), key=lambda f: (f.rarity, f.base_value), reverse=True)
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM fish ORDER BY rarity DESC, base_value DESC")
-            return [self._row_to_fish(row) for row in cursor.fetchall()]
+            fishes = [self._row_to_fish(row) for row in cursor.fetchall()]
+            with self._cache_lock:
+                for fish in fishes:
+                    self._fish_cache[fish.fish_id] = fish
+                self._all_fish_cached = True
+            return fishes
 
     def get_random_fish(self, rarity: Optional[int] = None) -> Optional[Fish]:
         with self._get_connection() as conn:
@@ -187,6 +252,9 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
             return self._row_to_fish(row) if row else None
 
     def get_fishes_by_rarity(self, rarity: int) -> List[Fish]:
+        with self._cache_lock:
+            if self._all_fish_cached:
+                return [f for f in self._fish_cache.values() if f.rarity == rarity]
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM fish WHERE rarity = ?", (rarity,))
@@ -194,74 +262,136 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
 
     # --- Rod Read Methods ---
     def get_rod_by_id(self, rod_id: int) -> Optional[Rod]:
+        with self._cache_lock:
+            if rod_id in self._rod_cache:
+                return self._rod_cache[rod_id]
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM rods WHERE rod_id = ?", (rod_id,))
-            return self._row_to_rod(cursor.fetchone())
+            rod = self._row_to_rod(cursor.fetchone())
+            if rod:
+                with self._cache_lock:
+                    self._rod_cache[rod_id] = rod
+            return rod
 
     def get_all_rods(self) -> List[Rod]:
+        with self._cache_lock:
+            if self._all_rods_cached:
+                return sorted(self._rod_cache.values(), key=lambda r: r.rarity, reverse=True)
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM rods ORDER BY rarity DESC")
-            return [self._row_to_rod(row) for row in cursor.fetchall()]
+            rods = [self._row_to_rod(row) for row in cursor.fetchall()]
+            with self._cache_lock:
+                for rod in rods:
+                    self._rod_cache[rod.rod_id] = rod
+                self._all_rods_cached = True
+            return rods
 
     # --- Bait Read Methods ---
     def get_bait_by_id(self, bait_id: int) -> Optional[Bait]:
+        with self._cache_lock:
+            if bait_id in self._bait_cache:
+                return self._bait_cache[bait_id]
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM baits WHERE bait_id = ?", (bait_id,))
-            return self._row_to_bait(cursor.fetchone())
+            bait = self._row_to_bait(cursor.fetchone())
+            if bait:
+                with self._cache_lock:
+                    self._bait_cache[bait_id] = bait
+            return bait
 
     def get_all_baits(self) -> List[Bait]:
+        with self._cache_lock:
+            if self._all_baits_cached:
+                return sorted(self._bait_cache.values(), key=lambda b: b.rarity, reverse=True)
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM baits ORDER BY rarity DESC")
-            return [self._row_to_bait(row) for row in cursor.fetchall()]
+            baits = [self._row_to_bait(row) for row in cursor.fetchall()]
+            with self._cache_lock:
+                for bait in baits:
+                    self._bait_cache[bait.bait_id] = bait
+                self._all_baits_cached = True
+            return baits
 
     # --- Accessory Read Methods ---
     def get_accessory_by_id(self, accessory_id: int) -> Optional[Accessory]:
+        with self._cache_lock:
+            if accessory_id in self._accessory_cache:
+                return self._accessory_cache[accessory_id]
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM accessories WHERE accessory_id = ?", (accessory_id,))
-            return self._row_to_accessory(cursor.fetchone())
+            accessory = self._row_to_accessory(cursor.fetchone())
+            if accessory:
+                with self._cache_lock:
+                    self._accessory_cache[accessory_id] = accessory
+            return accessory
 
     def get_all_accessories(self) -> List[Accessory]:
+        with self._cache_lock:
+            if self._all_accessories_cached:
+                return sorted(self._accessory_cache.values(), key=lambda a: a.rarity, reverse=True)
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM accessories ORDER BY rarity DESC")
-            return [self._row_to_accessory(row) for row in cursor.fetchall()]
+            accessories = [self._row_to_accessory(row) for row in cursor.fetchall()]
+            with self._cache_lock:
+                for acc in accessories:
+                    self._accessory_cache[acc.accessory_id] = acc
+                self._all_accessories_cached = True
+            return accessories
 
     # --- Title Read Methods ---
     def get_title_by_id(self, title_id: int) -> Optional[Title]:
+        with self._cache_lock:
+            if title_id in self._title_cache:
+                return self._title_cache[title_id]
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM titles WHERE title_id = ?", (title_id,))
-            return self._row_to_title(cursor.fetchone())
+            title = self._row_to_title(cursor.fetchone())
+            if title:
+                with self._cache_lock:
+                    self._title_cache[title_id] = title
+            return title
 
     def get_all_titles(self) -> List[Title]:
+        with self._cache_lock:
+            if self._all_titles_cached:
+                return sorted(self._title_cache.values(), key=lambda t: t.title_id)
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM titles ORDER BY title_id")
-            return [self._row_to_title(row) for row in cursor.fetchall()]
+            titles = [self._row_to_title(row) for row in cursor.fetchall()]
+            with self._cache_lock:
+                for t in titles:
+                    self._title_cache[t.title_id] = t
+                self._all_titles_cached = True
+            return titles
 
     def get_title_by_name(self, name: str) -> Optional[Title]:
+        with self._cache_lock:
+            if name in self._title_by_name_cache:
+                return self._title_by_name_cache[name]
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM titles WHERE name = ?", (name,))
-            return self._row_to_title(cursor.fetchone())
+            title = self._row_to_title(cursor.fetchone())
+            if title:
+                with self._cache_lock:
+                    self._title_by_name_cache[name] = title
+                    self._title_cache[title.title_id] = title
+            return title
 
     # --- Item Read Methods ---
     def get_item_by_id(self, item_id: int) -> Optional[Item]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM items WHERE item_id = ?", (item_id,))
-            return self._row_to_item(cursor.fetchone())
+        return self.get_by_id(item_id)
 
     def get_all_items(self) -> List[Item]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM items ORDER BY rarity DESC, cost DESC")
-            return [self._row_to_item(row) for row in cursor.fetchall()]
+        return self.get_all()
 
     # ==========================================================
     # Admin Panel CRUD Methods
@@ -276,6 +406,9 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                 VALUES (:name, :description, :rarity, :base_value, :min_weight, :max_weight, :icon_url)
             """, {**data, "icon_url": data.get("icon_url")})
             conn.commit()
+        with self._cache_lock:
+            self._fish_cache.clear()
+            self._all_fish_cached = False
 
     def update_fish_template(self, fish_id: int, data: Dict[str, Any]) -> None:
         data["fish_id"] = fish_id
@@ -289,12 +422,18 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                 WHERE fish_id = :fish_id
             """, {**data, "icon_url": data.get("icon_url")})
             conn.commit()
+        with self._cache_lock:
+            self._fish_cache.clear()
+            self._all_fish_cached = False
 
     def delete_fish_template(self, fish_id: int) -> None:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM fish WHERE fish_id = ?", (fish_id,))
             conn.commit()
+        with self._cache_lock:
+            self._fish_cache.clear()
+            self._all_fish_cached = False
 
     # --- Rod Admin CRUD ---
     def add_rod_template(self, data: Dict[str, Any]) -> None:
@@ -313,6 +452,9 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                         :bonus_rare_fish_chance, :durability, :icon_url)
             """, {**data, "purchase_cost": data.get("purchase_cost") or None, "durability": durability_value, "icon_url": data.get("icon_url")})
             conn.commit()
+        with self._cache_lock:
+            self._rod_cache.clear()
+            self._all_rods_cached = False
 
     def update_rod_template(self, rod_id: int, data: Dict[str, Any]) -> None:
         data["rod_id"] = rod_id
@@ -332,12 +474,18 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                 WHERE rod_id = :rod_id
             """, {**data, "purchase_cost": data.get("purchase_cost") or None, "durability": durability_value, "icon_url": data.get("icon_url")})
             conn.commit()
+        with self._cache_lock:
+            self._rod_cache.clear()
+            self._all_rods_cached = False
 
     def delete_rod_template(self, rod_id: int) -> None:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM rods WHERE rod_id = ?", (rod_id,))
             conn.commit()
+        with self._cache_lock:
+            self._rod_cache.clear()
+            self._all_rods_cached = False
 
     # --- Bait Admin CRUD ---
     def add_bait_template(self, data: Dict[str, Any]) -> None:
@@ -372,6 +520,9 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                 )
             """, params)
             conn.commit()
+        with self._cache_lock:
+            self._bait_cache.clear()
+            self._all_baits_cached = False
 
     def update_bait_template(self, bait_id: int, data: Dict[str, Any]) -> None:
         """后台更新一个鱼饵的信息，包含所有结构化效果字段"""
@@ -404,12 +555,18 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                 WHERE bait_id = :bait_id
             """, params)
             conn.commit()
+        with self._cache_lock:
+            self._bait_cache.clear()
+            self._all_baits_cached = False
 
     def delete_bait_template(self, bait_id: int) -> None:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM baits WHERE bait_id = ?", (bait_id,))
             conn.commit()
+        with self._cache_lock:
+            self._bait_cache.clear()
+            self._all_baits_cached = False
 
     # --- Accessory Admin CRUD ---
     def add_accessory_template(self, data: Dict[str, Any]) -> None:
@@ -424,6 +581,9 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                         :other_bonus_description, :icon_url)
             """, {**data, "icon_url": data.get("icon_url")})
             conn.commit()
+        with self._cache_lock:
+            self._accessory_cache.clear()
+            self._all_accessories_cached = False
 
     def update_accessory_template(self, accessory_id: int, data: Dict[str, Any]) -> None:
         data["accessory_id"] = accessory_id
@@ -440,12 +600,18 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                 WHERE accessory_id = :accessory_id
             """, {**data, "icon_url": data.get("icon_url")})
             conn.commit()
+        with self._cache_lock:
+            self._accessory_cache.clear()
+            self._all_accessories_cached = False
 
     def delete_accessory_template(self, accessory_id: int) -> None:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM accessories WHERE accessory_id = ?", (accessory_id,))
             conn.commit()
+        with self._cache_lock:
+            self._accessory_cache.clear()
+            self._all_accessories_cached = False
 
     # --- Item Admin CRUD ---
     def add_item_template(self, data: Dict[str, Any]) -> None:
@@ -460,6 +626,10 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                 "icon_url": data.get("icon_url")
             })
             conn.commit()
+        with self._cache_lock:
+            self._item_cache.clear()
+            self._item_by_name_cache.clear()
+            self._all_items_cached = False
 
     def update_item_template(self, item_id: int, data: Dict[str, Any]) -> None:
         data["item_id"] = item_id
@@ -477,12 +647,20 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                 "icon_url": data.get("icon_url")
             })
             conn.commit()
+        with self._cache_lock:
+            self._item_cache.clear()
+            self._item_by_name_cache.clear()
+            self._all_items_cached = False
 
     def delete_item_template(self, item_id: int) -> None:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM items WHERE item_id = ?", (item_id,))
             conn.commit()
+        with self._cache_lock:
+            self._item_cache.clear()
+            self._item_by_name_cache.clear()
+            self._all_items_cached = False
 
     def add_title_template(self, data: Dict[str, Any]) -> None:
         with self._get_connection() as conn:
@@ -492,6 +670,10 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                 VALUES (:title_id, :name, :description, :display_format)
             """, data)
             conn.commit()
+        with self._cache_lock:
+            self._title_cache.clear()
+            self._title_by_name_cache.clear()
+            self._all_titles_cached = False
 
     def update_title_template(self, title_id: int, data: Dict[str, Any]) -> None:
         with self._get_connection() as conn:
@@ -502,9 +684,17 @@ class SqliteItemTemplateRepository(AbstractItemTemplateRepository):
                 WHERE title_id = :title_id
             """, {**data, "title_id": title_id})
             conn.commit()
+        with self._cache_lock:
+            self._title_cache.clear()
+            self._title_by_name_cache.clear()
+            self._all_titles_cached = False
 
     def delete_title_template(self, title_id: int) -> None:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM titles WHERE title_id = ?", (title_id,))
             conn.commit()
+        with self._cache_lock:
+            self._title_cache.clear()
+            self._title_by_name_cache.clear()
+            self._all_titles_cached = False

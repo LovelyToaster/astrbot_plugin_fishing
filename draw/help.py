@@ -358,18 +358,20 @@ def draw_help_image():
     image = create_vertical_gradient(width, final_height, bg_top, bg_bot)
     draw = ImageDraw.Draw(image)
 
-    # 绘制 Logo 和 标题
+    # 绘制 Logo 和 标题（复用内存处理结果）
+    global _PROCESSED_LOGO
     try:
-        logo = Image.open(os.path.join(os.path.dirname(__file__), "resource", "astrbot_logo.jpg"))
-        logo = replace_white_background(logo, bg_top)
-        logo.thumbnail((logo_size, logo_size), Image.Resampling.LANCZOS)
-        mask = Image.new("L", logo.size, 0)
-        mask_draw = ImageDraw.Draw(mask)
-        mask_draw.rounded_rectangle([0, 0, logo.size[0], logo.size[1]], 20, fill=255)
-        output = Image.new("RGBA", logo.size, (0, 0, 0, 0))
-        output.paste(logo, (0, 0))
-        output.putalpha(mask)
-        image.paste(output, (logo_x, logo_y), output)
+        if '_PROCESSED_LOGO' not in globals() or _PROCESSED_LOGO is None:
+            raw_logo = Image.open(os.path.join(os.path.dirname(__file__), "resource", "astrbot_logo.jpg"))
+            raw_logo = replace_white_background(raw_logo, bg_top)
+            raw_logo.thumbnail((logo_size, logo_size), Image.Resampling.LANCZOS)
+            mask = Image.new("L", raw_logo.size, 0)
+            mask_draw = ImageDraw.Draw(mask)
+            mask_draw.rounded_rectangle([0, 0, raw_logo.size[0], raw_logo.size[1]], 20, fill=255)
+            _PROCESSED_LOGO = Image.new("RGBA", raw_logo.size, (0, 0, 0, 0))
+            _PROCESSED_LOGO.paste(raw_logo, (0, 0))
+            _PROCESSED_LOGO.putalpha(mask)
+        image.paste(_PROCESSED_LOGO, (logo_x, logo_y), _PROCESSED_LOGO)
     except Exception as e:
         # 如果没有logo文件，绘制一个圆角占位符
         draw.rounded_rectangle((logo_x, logo_y, logo_x + logo_size, logo_y + logo_size),

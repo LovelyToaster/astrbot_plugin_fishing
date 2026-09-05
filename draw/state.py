@@ -1,15 +1,15 @@
-﻿import os
+import os
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
-import requests
 from io import BytesIO
 import time
 import json
 from .utils import get_user_avatar
 from .styles import (
     COLOR_SUCCESS, COLOR_WARNING, COLOR_ERROR, COLOR_GOLD, COLOR_RARE,
-    COLOR_REFINE_RED, COLOR_REFINE_ORANGE, COLOR_CORNER, load_font
+    COLOR_REFINE_RED, COLOR_REFINE_ORANGE, COLOR_CORNER, load_font,
+    FONT_PATH_BOLD
 )
 from .text_utils import load_font_with_cjk_fallback, draw_text_smart
 
@@ -23,41 +23,6 @@ def format_rarity_display(rarity: int) -> str:
 async def draw_state_image(user_data: Dict[str, Any], data_dir: str, avatar_config: dict = None) -> Image.Image:
     """
     绘制用户状态图像
-    
-    Args:
-        user_data: 包含用户状态信息的字典，    # 定义状态信息的网格位置
-    status_col_x = card_margin + 15
-    status_row1_y = current_y + 12
-    status_row2_y = current_y + 35
-    status_row3_y = current_y + 58
-
-    # 自动钓鱼状态
-    auto_fishing = user_data.get('auto_fishing_enabled', False)
-    if auto_fishing:
-        auto_text = "自动钓鱼: 已开启"
-        auto_color = positive_color
-    else:
-        auto_text = "自动钓鱼: 已关闭"
-        auto_color = negative_color
-    draw.text((status_col_x, status_row1_y), auto_text, font=content_font, fill=auto_color)      - user_id: 用户ID
-            - nickname: 用户昵称
-            - coins: 金币数量
-            - current_rod: 当前装备的鱼竿信息
-            - current_accessory: 当前装备的饰品信息
-            - current_bait: 当前装备的鱼饵信息
-            - auto_fishing_enabled: 是否开启自动钓鱼
-            - steal_cooldown_remaining: 偷鱼剩余CD时间（秒）
-            - fishing_zone: 当前钓鱼区域
-            - current_title: 当前称号信息
-            - total_fishing_count: 总钓鱼次数
-            - steal_total_value: 偷鱼总价值 TODO
-            - signed_in_today: 今日是否签到
-            - wipe_bomb_remaining: 擦弹剩余次数
-            - electric_fish_cooldown_remaining: 电鱼剩余CD时间（秒）
-            - wof_remaining_plays: 命运之轮剩余次数
-            - pond_info: 鱼塘信息
-    Returns:
-        PIL.Image.Image: 生成的状态图像
     """
     # 画布尺寸 
     width, height = 620, 640
@@ -70,21 +35,12 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, avatar_conf
     image = create_vertical_gradient(width, height, bg_top, bg_bot)
     draw = ImageDraw.Draw(image)
 
-    # 2. 加载字体（称号字体使用CJK回退支持）
-    def load_font(name, size):
-        path = os.path.join(os.path.dirname(__file__), "resource", name)
-        try:
-            return ImageFont.truetype(path, size)
-        except Exception as e:
-            return ImageFont.load_default()
-
-    font_path = os.path.join(os.path.dirname(__file__), "resource", "DouyinSansBold.otf")
-    title_font = load_font("DouyinSansBold.otf", 28)
-    subtitle_font = load_font("DouyinSansBold.otf", 24)
-    content_font = load_font("DouyinSansBold.otf", 20)
-    # 称号字体使用CJK回退支持，确保繁体中文能正确显示
-    small_font = load_font_with_cjk_fallback(font_path, 16)
-    tiny_font = load_font("DouyinSansBold.otf", 14)
+    # 2. 加载字体（复用全局缓存，避免每次磁盘解析）
+    title_font = load_font(28)
+    subtitle_font = load_font(24)
+    content_font = load_font(20)
+    small_font = load_font_with_cjk_fallback(FONT_PATH_BOLD, 16)
+    tiny_font = load_font(14)
 
     # 3. 颜色定义 - 温和协调的海洋主题配色
     # 主色调：柔和蓝系
@@ -111,22 +67,13 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, avatar_conf
 
     # 4. 获取文本尺寸的辅助函数
     def get_text_size(text, font):
-        # 如果是FontWithFallback类型，使用主字体测量（简化处理）
         actual_font = font.primary_font if hasattr(font, 'primary_font') else font
         bbox = draw.textbbox((0, 0), text, font=actual_font)
         return bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-    # 5. 绘制圆角矩形
+    # 5. 绘制圆角矩形（使用 Pillow 原生 C 实现）
     def draw_rounded_rectangle(draw, bbox, radius, fill=None, outline=None, width=1):
-        x1, y1, x2, y2 = bbox
-        # 绘制主体矩形
-        draw.rectangle([x1 + radius, y1, x2 - radius, y2], fill=fill, outline=outline, width=width)
-        draw.rectangle([x1, y1 + radius, x2, y2 - radius], fill=fill, outline=outline, width=width)
-        # 绘制圆角
-        draw.ellipse([x1, y1, x1 + 2*radius, y1 + 2*radius], fill=fill, outline=outline, width=width)
-        draw.ellipse([x2 - 2*radius, y1, x2, y1 + 2*radius], fill=fill, outline=outline, width=width)
-        draw.ellipse([x1, y2 - 2*radius, x1 + 2*radius, y2], fill=fill, outline=outline, width=width)
-        draw.ellipse([x2 - 2*radius, y2 - 2*radius, x2, y2], fill=fill, outline=outline, width=width)
+        draw.rounded_rectangle(bbox, radius=radius, fill=fill, outline=outline, width=width)
 
     # 绘制标题
     title_text = "用户状态面板"

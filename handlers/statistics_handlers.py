@@ -5,6 +5,7 @@ from astrbot.api.event import AstrMessageEvent
 from astrbot.api import logger
 
 from ..draw.statistics import draw_user_statistics_image, draw_statistics_ranking_image
+from ..draw.utils import run_in_thread
 from ..core.services.statistics_service import StatisticsService, parse_period
 from ..utils import sanitize_filename
 
@@ -68,7 +69,7 @@ async def _send_user_statistics(
     )
 
     try:
-        draw_user_statistics_image(data, output_path)
+        await run_in_thread(draw_user_statistics_image, data, output_path)
     except Exception as e:
         logger.error(f"[统计] 绘制个人统计图片失败: {e}")
         yield event.plain_result("❌ 生成统计图片失败，请稍后再试。")
@@ -102,7 +103,7 @@ async def _send_leaderboard(
     period_label = plugin.statistics_service.get_period_label(period)
 
     try:
-        draw_statistics_ranking_image(rows, output_path, period_label)
+        await run_in_thread(draw_statistics_ranking_image, rows, output_path, period_label)
     except Exception as e:
         logger.error(f"[统计] 绘制排行榜图片失败: {e}")
         yield event.plain_result("❌ 生成排行榜图片失败，请稍后再试。")

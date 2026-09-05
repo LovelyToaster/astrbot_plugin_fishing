@@ -39,6 +39,7 @@ class AchievementService:
 
         self.achievement_check_thread: Optional[threading.Thread] = None
         self.achievement_check_running = False
+        self._stop_event = threading.Event()
 
     def _load_achievements(self) -> List[BaseAchievement]:
         """动态扫描并加载所有成就类。"""
@@ -195,27 +196,39 @@ class AchievementService:
         if self.achievement_check_thread and self.achievement_check_thread.is_alive():
             return
         self.achievement_check_running = True
+        self._stop_event.clear()
         self.achievement_check_thread = threading.Thread(target=self._achievement_check_loop, daemon=True)
         self.achievement_check_thread.start()
 
     def stop_achievement_check_task(self):
         """停止成就检查的后台线程。"""
         self.achievement_check_running = False
+        self._stop_event.set()
         if self.achievement_check_thread:
             self.achievement_check_thread.join(timeout=1.0)
 
     def _achievement_check_loop(self):
         """成就检查循环任务。"""
-        while self.achievement_check_running:
+        # 启动后等待 120 秒再执行首次检查，避免在插件/机器人启动高峰期抢占 SQLite 和 CPU 资源
+        if self._stop_event.wait(120):
+            return
+
+        while self.achievement_check_running and not self._stop_event.is_set():
             try:
                 all_user_ids = self.user_repo.get_all_user_ids()
                 for user_id in all_user_ids:
+                    if not self.achievement_check_running or self._stop_event.is_set():
+                        break
                     self._process_user_achievements(user_id)
-                time.sleep(600) # 10分钟检查一次
+                    # 每处理一个用户微休 0.05 秒，避免密集并发查询打满 SQLite
+                    if self._stop_event.wait(0.05):
+                        break
+                # 10分钟检查一次，使用 _stop_event.wait 支持毫秒级优雅退出
+                self._stop_event.wait(600)
             except Exception as e:
                 logger.error(f"成就检查任务出错: {e}")
                 logger.error("堆栈信息:", exc_info=True)
-                time.sleep(60)
+                self._stop_event.wait(60)
 
     def _process_user_achievements(self, user_id: str):
         """处理单个用户的成就检查和发放流程。"""

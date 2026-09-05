@@ -205,7 +205,7 @@ def draw_user_statistics_image(data: Dict[str, Any], output_path: str) -> None:
     img = img.crop((0, 0, IMG_WIDTH, final_height))
 
     try:
-        img.save(output_path)
+        img.save(output_path, compress_level=1)
         logger.info(f"统计图片已保存到 {output_path}")
     except Exception as e:
         logger.error(f"保存统计图片失败: {e}")
@@ -243,14 +243,14 @@ def draw_statistics_ranking_image(
     # TOP5 排行榜
     top_users = data[:5] if data else []
 
-    # 奖杯加载
-    trophy_symbols = []
-    try:
-        gold_trophy = Image.open(os.path.join(os.path.dirname(__file__), "resource", "gold.png")).resize((40, 40))
-        silver_trophy = Image.open(os.path.join(os.path.dirname(__file__), "resource", "silver.png")).resize((35, 35))
-        bronze_trophy = Image.open(os.path.join(os.path.dirname(__file__), "resource", "bronze.png")).resize((35, 35))
+    # 奖杯加载（使用常驻内存缓存）
+    from .utils import get_static_resource
+    gold_trophy = get_static_resource("gold.png", (40, 40))
+    silver_trophy = get_static_resource("silver.png", (35, 35))
+    bronze_trophy = get_static_resource("bronze.png", (35, 35))
+    if gold_trophy and silver_trophy and bronze_trophy:
         trophy_symbols = [gold_trophy, silver_trophy, bronze_trophy]
-    except Exception:
+    else:
         trophy_symbols = ["🥇", "🥈", "🥉"]
 
     from .styles import COLOR_TEXT_GOLD, COLOR_TEXT_SILVER, COLOR_TEXT_BRONZE
@@ -288,7 +288,7 @@ def draw_statistics_ranking_image(
             no_data_text, font=font_name, fill=COLOR_TEXT_GRAY,
         )
         try:
-            img.save(output_path)
+            img.save(output_path, compress_level=1)
         except Exception as e:
             logger.error(f"保存统计排行榜图片失败: {e}")
             raise e
@@ -352,7 +352,7 @@ def draw_statistics_ranking_image(
         current_y = card_y2 + USER_CARD_MARGIN
 
     try:
-        img.save(output_path)
+        img.save(output_path, compress_level=1)
         logger.info(f"统计排行榜图片已保存到 {output_path}")
     except Exception as e:
         logger.error(f"保存统计排行榜图片失败: {e}")

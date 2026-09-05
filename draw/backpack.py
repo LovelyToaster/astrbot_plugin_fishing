@@ -276,15 +276,7 @@ async def _draw_backpack_image_impl(user_data: Dict[str, Any], data_dir: str, av
 
     # 5. 绘制圆角矩形
     def draw_rounded_rectangle(draw, bbox, radius, fill=None, outline=None, width=1):
-        x1, y1, x2, y2 = bbox
-        # 绘制主体矩形
-        draw.rectangle([x1 + radius, y1, x2 - radius, y2], fill=fill, outline=outline, width=width)
-        draw.rectangle([x1, y1 + radius, x2, y2 - radius], fill=fill, outline=outline, width=width)
-        # 绘制圆角
-        draw.ellipse([x1, y1, x1 + 2*radius, y1 + 2*radius], fill=fill, outline=outline, width=width)
-        draw.ellipse([x2 - 2*radius, y1, x2, y1 + 2*radius], fill=fill, outline=outline, width=width)
-        draw.ellipse([x1, y2 - 2*radius, x1 + 2*radius, y2], fill=fill, outline=outline, width=width)
-        draw.ellipse([x2 - 2*radius, y2 - 2*radius, x2, y2], fill=fill, outline=outline, width=width)
+        draw.rounded_rectangle(bbox, radius=radius, fill=fill, outline=outline, width=width)
 
     # 绘制标题
     title_text = "用户背包"
