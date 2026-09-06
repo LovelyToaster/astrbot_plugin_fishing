@@ -34,6 +34,7 @@ class FishingService:
         fishing_zone_service: FishingZoneService,
         fish_weight_service: FishWeightService,
         config: Dict[str, Any],
+        statistics_repo=None,
     ):
         self.user_repo = user_repo
         self.inventory_repo = inventory_repo
@@ -43,6 +44,7 @@ class FishingService:
         self.fish_weight_service = fish_weight_service
         self.fishing_zone_service = fishing_zone_service
         self.config = config
+        self.statistics_repo = statistics_repo
         self.cat_service: Any = None
 
         # 获取每日刷新时间配置
@@ -519,6 +521,26 @@ class FishingService:
             bait_id=user.current_bait_id
         )
         self.log_repo.add_fishing_record(record)
+
+        # 记录本次实际钓获数量和鱼的估算价值，供日报/周报聚合。
+        if self.statistics_repo:
+            try:
+                fish_value = value * total_catches * (2 if quality_level == 1 else 1)
+                self.statistics_repo.add_log(
+                    user_id=user.user_id,
+                    action_type="fish",
+                    success=True,
+                    fish_count=total_catches,
+                    coin_amount=fish_value,
+                    details={
+                        "fish_id": fish_template.fish_id,
+                        "fish_name": fish_template.name,
+                        "rarity": fish_template.rarity,
+                        "quality_level": quality_level,
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"[统计] 写入钓鱼统计日志失败: {e}")
 
         # 7. 构建成功返回结果
         result = {

@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+from datetime import datetime
 
 from astrbot.api import logger, AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, filter, MessageChain
@@ -30,6 +31,8 @@ from .core.repositories.sqlite_statistics_repo import SqliteStatisticsRepository
 from .core.repositories.sqlite_ai_state_repo import SqliteAIPlayerStateRepository
 from .core.repositories.sqlite_ai_snapshot_repo import SqliteAIDecisionSnapshotRepository
 from .core.services.statistics_service import StatisticsService
+from .core.utils import get_now
+from .draw.statistics import draw_period_report_image_async
 
 from .core.services.data_setup_service import DataSetupService
 from .core.services.item_template_service import ItemTemplateService
@@ -268,7 +271,9 @@ class FishingPlugin(Star):
         run_migrations(db_path, migrations_path)
 
         # --- 2. 组合根：实例化所有仓储层 ---
-        self.user_repo = SqliteUserRepository(db_path)
+        # 统计仓储先初始化，让用户仓储可以统一捕获所有金币余额变动。
+        self.statistics_repo = SqliteStatisticsRepository(db_path)
+        self.user_repo = SqliteUserRepository(db_path, statistics_repo=self.statistics_repo)
         self.item_template_repo = SqliteItemTemplateRepository(db_path)
         self.inventory_repo = SqliteInventoryRepository(db_path)
         self.gacha_repo = SqliteGachaRepository(db_path)
@@ -280,9 +285,6 @@ class FishingPlugin(Star):
         self.exchange_repo = SqliteExchangeRepository(db_path)
         self.bank_repo = SqliteBankRepository(db_path)
         self.cat_repo = SQLiteCatRepository(self.db_manager)
-
-        # 统计仓储（必须在所有使用它的服务之前初始化）
-        self.statistics_repo = SqliteStatisticsRepository(db_path)
 
         # AI 玩家状态仓储
         self.ai_state_repo = SqliteAIPlayerStateRepository(db_path)
@@ -328,6 +330,7 @@ class FishingPlugin(Star):
             self.fishing_zone_service,
             self.fish_weight_service,
             self.game_config,
+            statistics_repo=self.statistics_repo,
         )
         
         # 导入并初始化展示柜服务
@@ -539,6 +542,18 @@ class FishingPlugin(Star):
         self._game_toggles_path = os.path.join(self.data_dir, "game_toggles.json")
         self.game_toggles: dict = self._load_game_toggles()
 
+        # --- 每日/每周统计报表 ---
+        self._statistics_report_config = config.get("statistics_report", {}) or {}
+        self._statistics_default_group_path = os.path.join(
+            self.data_dir, "statistics_report_default.json"
+        )
+        self._statistics_default_group_id = self._load_statistics_default_group_id()
+        self._statistics_report_task = None
+        if self._statistics_report_config.get("enabled", False):
+            self._statistics_report_task = asyncio.create_task(
+                self._statistics_report_scheduler()
+            )
+
     # =========== 游戏模块开关 ==========
 
     def _load_game_toggles(self) -> dict:
@@ -558,6 +573,130 @@ class FishingPlugin(Star):
                 json.dump(self.game_toggles, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"保存游戏开关配置失败: {e}")
+
+    def _load_statistics_default_group_id(self) -> str:
+        """读取未配置报表群号时使用的默认群号。"""
+        try:
+            if os.path.exists(self._statistics_default_group_path):
+                with open(self._statistics_default_group_path, "r", encoding="utf-8") as f:
+                    saved = json.load(f)
+                    group_id = saved.get("group_id", "")
+                    if group_id:
+                        return str(group_id).strip()
+
+                    # 兼容旧版本保存的 unified_msg_origin。
+                    origin = str(saved.get("unified_msg_origin", "")).strip()
+                    return origin.rsplit(":", 1)[-1] if origin else ""
+        except Exception as e:
+            logger.warning(f"加载统计报表默认群失败: {e}")
+        return ""
+
+    def remember_statistics_default_group(self, event: AstrMessageEvent) -> None:
+        """把群聊中的统计命令所在群记为自动报表的默认目标。"""
+        try:
+            group_id = event.get_group_id()
+            if not group_id:
+                return
+            group_id = str(group_id).strip()
+            if group_id == self._statistics_default_group_id:
+                return
+            self._statistics_default_group_id = group_id
+            with open(self._statistics_default_group_path, "w", encoding="utf-8") as f:
+                json.dump({"group_id": group_id}, f, ensure_ascii=False)
+        except Exception as e:
+            logger.debug(f"保存统计报表默认群失败: {e}")
+
+    def _get_statistics_report_origin(self) -> str:
+        """返回自动报表目标；平台使用统计报表自己的配置。"""
+        group_id = str(
+            self._statistics_report_config.get("group_id", "")
+            or self._statistics_default_group_id
+            or ""
+        ).strip()
+        if not group_id:
+            return ""
+
+        platform = str(
+            self._statistics_report_config.get("platform", "aiocqhttp")
+            or "aiocqhttp"
+        ).strip()
+        return f"{platform}:GroupMessage:{group_id}"
+
+    @staticmethod
+    def _parse_statistics_report_time(value, fallback: str):
+        try:
+            return datetime.strptime(str(value or fallback).strip(), "%H:%M").time()
+        except (TypeError, ValueError):
+            logger.warning(f"统计报表时间配置无效: {value!r}，将使用 {fallback}")
+            return datetime.strptime(fallback, "%H:%M").time()
+
+    async def _statistics_report_scheduler(self):
+        """按配置发送每日/每周统计图片。"""
+        config = self._statistics_report_config
+        daily_time = self._parse_statistics_report_time(config.get("daily_time"), "22:00")
+        weekly_time = self._parse_statistics_report_time(config.get("weekly_time"), "22:00")
+        try:
+            weekly_day = min(7, max(1, int(config.get("weekly_day", 7))))
+        except (TypeError, ValueError):
+            weekly_day = 7
+
+        last_daily_key = None
+        last_weekly_key = None
+        try:
+            while True:
+                now = get_now()
+                minute_key = now.strftime("%Y-%m-%d %H:%M")
+
+                if (
+                    config.get("daily_enabled", True)
+                    and now.hour == daily_time.hour
+                    and now.minute == daily_time.minute
+                    and last_daily_key != minute_key
+                ):
+                    last_daily_key = minute_key
+                    await self._send_scheduled_statistics_report("today")
+
+                if (
+                    config.get("weekly_enabled", True)
+                    and now.isoweekday() == weekly_day
+                    and now.hour == weekly_time.hour
+                    and now.minute == weekly_time.minute
+                    and last_weekly_key != minute_key
+                ):
+                    last_weekly_key = minute_key
+                    await self._send_scheduled_statistics_report("week")
+
+                await asyncio.sleep(20)
+        except asyncio.CancelledError:
+            logger.info("统计报表任务已取消")
+        except Exception as e:
+            logger.error(f"统计报表任务出错: {e}", exc_info=True)
+
+    async def _send_scheduled_statistics_report(self, period: str) -> bool:
+        """生成并主动发送一张自动统计报表。"""
+        origin = self._get_statistics_report_origin()
+        if not origin:
+            logger.warning("统计报表未发送：未配置群号，且还没有记录默认群聊")
+            return False
+
+        try:
+            data = self.statistics_service.get_period_report(period)
+            output_path = os.path.join(
+                self.tmp_dir,
+                f"statistics_report_auto_{period}_{get_now().strftime('%Y%m%d%H%M%S')}.png",
+            )
+            await draw_period_report_image_async(
+                data,
+                output_path,
+                self.data_dir,
+                self.game_config.get("avatar_config"),
+            )
+            return await self._send_initiative_image(
+                {"unified_msg_origin": origin}, output_path
+            )
+        except Exception as e:
+            logger.error(f"发送自动统计报表失败: {e}", exc_info=True)
+            return False
 
     def _get_game_session_id_from_event(self, event: AstrMessageEvent) -> str:
         """从事件获取游戏会话ID（群ID）"""
@@ -1692,7 +1831,7 @@ class FishingPlugin(Star):
 
     @filter.command("统计")
     async def statistics(self, event: AstrMessageEvent):
-        """查看你的偷鱼、电鱼、卖鱼统计数据，支持排行榜。用法：/统计 [今天/本周/本月] 或 /统计 排行榜 [今天/本周/本月]"""
+        """查看个人或群统计数据。手动群报表用法：/统计 总览 [今天/本周/本月]；也支持个人统计和排行榜。"""
         async for r in statistics_handlers.statistics(self, event):
             yield r
 
@@ -2090,6 +2229,9 @@ class FishingPlugin(Star):
         # 取消红包清理任务
         if hasattr(self, '_red_packet_cleanup_task') and self._red_packet_cleanup_task:
             self._red_packet_cleanup_task.cancel()
+
+        if hasattr(self, '_statistics_report_task') and self._statistics_report_task:
+            self._statistics_report_task.cancel()
 
         if self.web_admin_task:
             self.web_admin_task.cancel()

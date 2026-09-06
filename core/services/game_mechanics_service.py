@@ -106,6 +106,7 @@ class GameMechanicsService:
         success: bool,
         target_id: Optional[str] = None,
         fish_count: int = 0,
+        coin_amount: int = 0,
         details: Optional[Dict[str, Any]] = None,
     ):
         """安全写入统计日志，写入失败不影响主业务。"""
@@ -118,6 +119,7 @@ class GameMechanicsService:
                 action_type=action_type,
                 success=success,
                 fish_count=fish_count,
+                coin_amount=coin_amount,
                 details=details,
             )
         except Exception as e:
@@ -1119,6 +1121,7 @@ class GameMechanicsService:
             action_type="steal",
             success=True,
             fish_count=1,
+            coin_amount=actual_value,
             details={
                 "fish_id": stolen_fish_item.fish_id,
                 "fish_name": stolen_fish_template.name,
@@ -1699,6 +1702,7 @@ class GameMechanicsService:
             action_type="electric_fish",
             success=True,
             fish_count=actual_stolen_count,
+            coin_amount=total_value_stolen,
             details={
                 "success_type": success_type,
                 "stolen_summary": stolen_summary,

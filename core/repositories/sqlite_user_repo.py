@@ -12,8 +12,9 @@ from .abstract_repository import AbstractUserRepository
 class SqliteUserRepository(AbstractUserRepository):
     """用户数据仓储的SQLite实现"""
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, statistics_repo=None):
         self.db_path = db_path
+        self.statistics_repo = statistics_repo
         self._local = threading.local()
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -166,15 +167,28 @@ class SqliteUserRepository(AbstractUserRepository):
         
         sql = f"UPDATE users SET {set_clause} WHERE user_id = ?"
 
+        coin_delta = 0
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
+                cursor.execute("SELECT coins FROM users WHERE user_id = ?", (user.user_id,))
+                previous_row = cursor.fetchone()
+                if previous_row is not None:
+                    coin_delta = int(user.coins or 0) - int(previous_row[0] or 0)
                 cursor.execute(sql, tuple(values))
                 if cursor.rowcount == 0:
                     logger.warning(f"尝试更新不存在的用户 {user.user_id}，将转为添加操作。")
                     self.add(user) # 如果更新失败（比如用户不存在），则尝试添加
                 else:
                     conn.commit()
+            if coin_delta and self.statistics_repo:
+                self.statistics_repo.add_log(
+                    user_id=user.user_id,
+                    action_type="coin_earn" if coin_delta > 0 else "coin_spend",
+                    success=True,
+                    coin_amount=coin_delta,
+                    details={"source": "user_balance_update"},
+                )
         except sqlite3.Error as e:
             logger.error(f"更新用户 {user.user_id} 数据时发生数据库错误: {e}")
             raise

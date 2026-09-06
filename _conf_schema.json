@@ -717,6 +717,58 @@
       }
     }
   },
+  "statistics_report": {
+    "description": "每日/每周群统计报表",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用自动统计报表",
+        "type": "bool",
+        "hint": "开启后按下方时间自动发送日报/周报图片",
+        "default": false
+      },
+      "daily_enabled": {
+        "description": "发送每日统计",
+        "type": "bool",
+        "default": true
+      },
+      "daily_time": {
+        "description": "每日发送时间",
+        "type": "string",
+        "hint": "24小时制 HH:MM，例如 22:00",
+        "default": "22:00"
+      },
+      "weekly_enabled": {
+        "description": "发送每周统计",
+        "type": "bool",
+        "default": true
+      },
+      "weekly_day": {
+        "description": "每周发送日",
+        "type": "int",
+        "hint": "1=周一，7=周日",
+        "default": 7
+      },
+      "weekly_time": {
+        "description": "每周发送时间",
+        "type": "string",
+        "hint": "24小时制 HH:MM，例如 22:00",
+        "default": "22:00"
+      },
+      "group_id": {
+        "description": "统计报表群号",
+        "type": "string",
+        "hint": "仅影响自动发送；手动命令始终发送到当前命令所在群。留空则使用默认群",
+        "default": ""
+      },
+      "platform": {
+        "description": "统计报表发送平台",
+        "type": "string",
+        "hint": "仅影响自动发送，例如 aiocqhttp；手动命令使用当前事件平台",
+        "default": "aiocqhttp"
+      }
+    }
+  },
   "ai_player": {
     "description": "AI 玩家系统配置",
     "type": "object",

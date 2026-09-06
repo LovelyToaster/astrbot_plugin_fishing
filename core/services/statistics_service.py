@@ -118,6 +118,14 @@ class StatisticsService:
 
         return rows
 
+    def get_period_report(self, period: str) -> Dict[str, Any]:
+        """获取日报/周报所需的全局统计数据。"""
+        start_time, end_time = get_period_range(period)
+        report = self.statistics_repo.get_period_report(start_time, end_time)
+        report["period"] = period
+        report["period_label"] = self.get_period_label(period)
+        return report
+
     @staticmethod
     def get_period_label(period: str) -> str:
         """获取时段的中文标签"""

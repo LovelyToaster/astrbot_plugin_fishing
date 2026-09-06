@@ -35,6 +35,7 @@ class SqliteStatisticsRepository:
         target_id: Optional[str] = None,
         fish_count: int = 0,
         details: Optional[dict] = None,
+        coin_amount: int = 0,
     ) -> None:
         """写入一条统计日志"""
         try:
@@ -44,8 +45,8 @@ class SqliteStatisticsRepository:
                 cursor.execute(
                     """
                     INSERT INTO statistics_logs
-                        (user_id, target_id, action_type, success, fish_count, details, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                        (user_id, target_id, action_type, success, fish_count, coin_amount, details, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         user_id,
@@ -53,6 +54,7 @@ class SqliteStatisticsRepository:
                         action_type,
                         1 if success else 0,
                         fish_count,
+                        int(coin_amount or 0),
                         json.dumps(details, ensure_ascii=False) if details else None,
                         now.strftime(DATETIME_FORMAT),
                     ),
@@ -60,6 +62,194 @@ class SqliteStatisticsRepository:
                 conn.commit()
         except Exception as e:
             logger.error(f"[统计] 写入统计日志失败: {e} (action={action_type}, user={user_id})")
+
+    def get_period_report(
+        self,
+        start_time: datetime,
+        end_time: datetime,
+        limit: int = 1,
+    ) -> Dict[str, Any]:
+        """获取群发日报/周报需要的各项冠军数据。"""
+        empty = {
+            "coins_earned": None,
+            "coins_spent": None,
+            "coins_net": None,
+            "fishing": None,
+            "steal": None,
+            "electric_fish": None,
+            "totals": {
+                "coins_earned": 0,
+                "coins_spent": 0,
+                "fish_count": 0,
+                "steal_count": 0,
+                "electric_fish_count": 0,
+            },
+        }
+
+        start = start_time.strftime(DATETIME_FORMAT)
+        end = end_time.strftime(DATETIME_FORMAT)
+
+        def top_row(conn, sql: str, params):
+            row = conn.execute(sql, params).fetchone()
+            return dict(row) if row else None
+
+        try:
+            with self._get_connection() as conn:
+                # SYSTEM 账户不参与群统计；AI 账户仍按正常玩家统计。
+                user_filter = (
+                    "AND u.user_id IS NOT NULL "
+                    "AND COALESCE(u.is_system, 0) = 0"
+                )
+
+                earned = top_row(
+                    conn,
+                    f"""
+                    SELECT sl.user_id, COALESCE(u.nickname, sl.user_id) AS nickname,
+                           SUM(sl.coin_amount) AS amount
+                    FROM statistics_logs sl
+                    LEFT JOIN users u ON u.user_id = sl.user_id
+                    WHERE sl.action_type = 'coin_earn'
+                      AND sl.coin_amount > 0
+                      AND sl.created_at >= ? AND sl.created_at <= ?
+                      {user_filter}
+                    GROUP BY sl.user_id
+                    ORDER BY amount DESC, sl.user_id ASC
+                    LIMIT ?
+                    """,
+                    (start, end, limit),
+                )
+                spent = top_row(
+                    conn,
+                    f"""
+                    SELECT sl.user_id, COALESCE(u.nickname, sl.user_id) AS nickname,
+                           SUM(ABS(sl.coin_amount)) AS amount
+                    FROM statistics_logs sl
+                    LEFT JOIN users u ON u.user_id = sl.user_id
+                    WHERE sl.action_type = 'coin_spend'
+                      AND sl.coin_amount < 0
+                      AND sl.created_at >= ? AND sl.created_at <= ?
+                      {user_filter}
+                    GROUP BY sl.user_id
+                    ORDER BY amount DESC, sl.user_id ASC
+                    LIMIT ?
+                    """,
+                    (start, end, limit),
+                )
+                net = top_row(
+                    conn,
+                    f"""
+                    SELECT sl.user_id, COALESCE(u.nickname, sl.user_id) AS nickname,
+                           COALESCE(SUM(CASE
+                               WHEN sl.action_type = 'coin_earn' AND sl.coin_amount > 0
+                                   THEN sl.coin_amount
+                               ELSE 0
+                           END), 0) AS earned,
+                           COALESCE(SUM(CASE
+                               WHEN sl.action_type = 'coin_spend' AND sl.coin_amount < 0
+                                   THEN ABS(sl.coin_amount)
+                               ELSE 0
+                           END), 0) AS spent,
+                           COALESCE(SUM(CASE
+                               WHEN sl.action_type = 'coin_earn' AND sl.coin_amount > 0
+                                   THEN sl.coin_amount
+                               WHEN sl.action_type = 'coin_spend' AND sl.coin_amount < 0
+                                   THEN sl.coin_amount
+                               ELSE 0
+                           END), 0) AS amount
+                    FROM statistics_logs sl
+                    LEFT JOIN users u ON u.user_id = sl.user_id
+                    WHERE sl.action_type IN ('coin_earn', 'coin_spend')
+                      AND sl.created_at >= ? AND sl.created_at <= ?
+                      {user_filter}
+                    GROUP BY sl.user_id
+                    ORDER BY amount DESC, sl.user_id ASC
+                    LIMIT ?
+                    """,
+                    (start, end, limit),
+                )
+                fishing = top_row(
+                    conn,
+                    f"""
+                    SELECT sl.user_id, COALESCE(u.nickname, sl.user_id) AS nickname,
+                           SUM(sl.fish_count) AS count,
+                           SUM(CASE WHEN sl.coin_amount > 0 THEN sl.coin_amount ELSE 0 END) AS value
+                    FROM statistics_logs sl
+                    LEFT JOIN users u ON u.user_id = sl.user_id
+                    WHERE sl.action_type = 'fish' AND sl.success = 1
+                      AND sl.created_at >= ? AND sl.created_at <= ?
+                      {user_filter}
+                    GROUP BY sl.user_id
+                    ORDER BY count DESC, value DESC, sl.user_id ASC
+                    LIMIT ?
+                    """,
+                    (start, end, limit),
+                )
+
+                social_sql = f"""
+                    SELECT sl.user_id, COALESCE(u.nickname, sl.user_id) AS nickname,
+                           COALESCE(SUM(sl.fish_count), 0) AS count,
+                           SUM(CASE WHEN sl.coin_amount > 0 THEN sl.coin_amount ELSE 0 END) AS value
+                    FROM statistics_logs sl
+                    LEFT JOIN users u ON u.user_id = sl.user_id
+                    WHERE sl.action_type = ? AND sl.success = 1
+                      AND sl.created_at >= ? AND sl.created_at <= ?
+                      {user_filter}
+                    GROUP BY sl.user_id
+                    ORDER BY count DESC, value DESC, sl.user_id ASC
+                    LIMIT ?
+                """
+                steal = top_row(conn, social_sql, ("steal", start, end, limit))
+                electric = top_row(
+                    conn, social_sql, ("electric_fish", start, end, limit)
+                )
+
+                totals = conn.execute(
+                    f"""
+                    SELECT
+                        COALESCE(SUM(CASE WHEN action_type = 'coin_earn' AND coin_amount > 0 THEN coin_amount ELSE 0 END), 0) AS coins_earned,
+                        COALESCE(SUM(CASE WHEN action_type = 'coin_spend' AND coin_amount < 0 THEN ABS(coin_amount) ELSE 0 END), 0) AS coins_spent,
+                        COALESCE(SUM(CASE WHEN action_type = 'fish' AND success = 1 THEN fish_count ELSE 0 END), 0) AS fish_count,
+                        COALESCE(SUM(CASE WHEN action_type = 'steal' AND success = 1 THEN fish_count ELSE 0 END), 0) AS steal_count,
+                        COALESCE(SUM(CASE WHEN action_type = 'electric_fish' AND success = 1 THEN fish_count ELSE 0 END), 0) AS electric_fish_count
+                    FROM statistics_logs sl
+                    LEFT JOIN users u ON u.user_id = sl.user_id
+                    WHERE sl.created_at >= ? AND sl.created_at <= ?
+                      {user_filter}
+                    """,
+                    (start, end),
+                ).fetchone()
+
+                empty.update(
+                    {
+                        "coins_earned": earned,
+                        "coins_spent": spent,
+                        "coins_net": net,
+                        "fishing": fishing,
+                        "steal": steal,
+                        "electric_fish": electric,
+                        "totals": dict(totals) if totals else empty["totals"],
+                    }
+                )
+        except Exception as e:
+            logger.error(f"[统计] 查询群统计失败: {e}")
+
+        for key in (
+            "coins_earned",
+            "coins_spent",
+            "coins_net",
+            "fishing",
+            "steal",
+            "electric_fish",
+        ):
+            row = empty.get(key)
+            if row:
+                for value_key in ("amount", "count", "value", "earned", "spent"):
+                    if value_key in row:
+                        row[value_key] = int(row[value_key] or 0)
+        empty["totals"] = {
+            key: int(value or 0) for key, value in empty["totals"].items()
+        }
+        return empty
 
     def get_user_summary(
         self,

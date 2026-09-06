@@ -1,3 +1,4 @@
+import asyncio
 import os
 from typing import Dict, Any, List
 
@@ -13,6 +14,7 @@ from .styles import (
     COLOR_GOLD, load_font,
 )
 from .rank import draw_rounded_rectangle, get_text_metrics, format_large_number
+from .utils import get_user_avatar, run_in_thread
 
 
 def format_number(number):
@@ -356,4 +358,301 @@ def draw_statistics_ranking_image(
         logger.info(f"统计排行榜图片已保存到 {output_path}")
     except Exception as e:
         logger.error(f"保存统计排行榜图片失败: {e}")
+        raise e
+
+
+async def draw_period_report_image_async(
+    data: Dict[str, Any],
+    output_path: str,
+    data_dir: str = None,
+    avatar_config: dict = None,
+) -> None:
+    """参考其他用户图片的绘制流程，异步获取头像后在线程中绘制报表。"""
+    avatars = {}
+    user_ids = []
+    for key in ("coins_net", "coins_earned", "coins_spent", "fishing", "steal", "electric_fish"):
+        row = data.get(key) or {}
+        user_id = str(row.get("user_id") or "").strip()
+        if user_id and user_id not in user_ids:
+            user_ids.append(user_id)
+
+    async def fetch_avatar(user_id):
+        try:
+            return user_id, await get_user_avatar(
+                user_id, data_dir, avatar_size=46, avatar_config=avatar_config
+            )
+        except Exception as e:
+            logger.warning(f"获取统计报表用户头像失败: {e}, user_id={user_id}")
+            return user_id, None
+
+    if data_dir and user_ids:
+        avatar_results = await asyncio.gather(
+            *(fetch_avatar(user_id) for user_id in user_ids)
+        )
+        avatars = {
+            user_id: avatar
+            for user_id, avatar in avatar_results
+            if avatar is not None
+        }
+
+    await run_in_thread(draw_period_report_image, data, output_path, avatars)
+
+
+def draw_period_report_image(
+    data: Dict[str, Any], output_path: str, avatars: Dict[str, Image.Image] = None
+) -> None:
+    """绘制面向群聊的日报/周报图片，使用四列统一卡片布局。"""
+    try:
+        font_title = load_font(30)
+        font_section = load_font(18)
+        font_name = load_font(14)
+        font_value = load_font(22)
+        font_meta = load_font(12)
+    except IOError:
+        fallback_font = ImageFont.load_default()
+        font_title = font_section = font_name = font_value = font_meta = fallback_font
+
+    period_label = data.get("period_label", "统计")
+    title = f"{period_label}钓鱼世界报表"
+    avatars = avatars or {}
+    header_height = 82
+    card_height = 286
+    card_gap = 10
+    grid_y = PADDING + header_height + 18
+    content_width = IMG_WIDTH - PADDING * 2
+    card_width = (content_width - card_gap * 3) // 4
+    total_height = grid_y + card_height + PADDING
+
+    img = Image.new("RGB", (IMG_WIDTH, total_height), COLOR_BACKGROUND)
+    draw = ImageDraw.Draw(img)
+    draw_rounded_rectangle(
+        draw, (PADDING, PADDING, IMG_WIDTH - PADDING, PADDING + header_height),
+        radius=CORNER_RADIUS, fill=COLOR_HEADER_BG,
+    )
+    def draw_centered_text(text, center_x, center_y, font, fill):
+        """按实际字形包围盒居中，避免字体左/右留白造成视觉偏移。"""
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_center_x = (bbox[0] + bbox[2]) / 2
+        text_center_y = (bbox[1] + bbox[3]) / 2
+        draw.text(
+            (center_x - text_center_x, center_y - text_center_y),
+            text,
+            font=font,
+            fill=fill,
+        )
+
+    draw_centered_text(
+        title,
+        IMG_WIDTH // 2,
+        PADDING + header_height // 2,
+        font_title,
+        COLOR_HEADER_TEXT,
+    )
+    def name_lines(row, max_width, max_lines=2):
+        if not row:
+            return ["暂无数据"]
+        name = str(row.get("nickname") or row.get("user_id") or "未知用户")
+        if get_text_metrics(name, font_name, draw)[1][0] <= max_width:
+            return [name]
+
+        lines = []
+        current = ""
+        for char in name:
+            candidate = current + char
+            if not current or get_text_metrics(candidate, font_name, draw)[1][0] <= max_width:
+                current = candidate
+            else:
+                lines.append(current)
+                current = char
+        if current:
+            lines.append(current)
+
+        if len(lines) <= max_lines:
+            return lines
+
+        lines = lines[:max_lines]
+        last_line = lines[-1]
+        while last_line and get_text_metrics(last_line + "…", font_name, draw)[1][0] > max_width:
+            last_line = last_line[:-1]
+        lines[-1] = (last_line or "…") + "…"
+        return lines
+
+    def display_value(row, key):
+        if not row:
+            return "—"
+        value = int(row.get(key, 0) or 0)
+        return format_number(value)
+
+    def centered_text(text, center_x, center_y, font, fill):
+        draw_centered_text(text, center_x, center_y, font, fill)
+
+    def draw_name(row, center_x, top_y, max_width):
+        lines = name_lines(row, max_width)
+        line_height = 17
+        for index, line in enumerate(lines):
+            centered_text(
+                line,
+                center_x,
+                top_y + index * line_height + line_height / 2,
+                font_name,
+                COLOR_TEXT_DARK,
+            )
+
+    def draw_centered_group(items, center_x, top_y, gap=6):
+        """按实际字形高度垂直排列文字，保证不同字号之间的视觉间距一致。"""
+        current_y = top_y
+        for text, font, fill in items:
+            bbox = draw.textbbox((0, 0), text, font=font)
+            text_height = max(1, bbox[3] - bbox[1])
+            centered_text(text, center_x, current_y + text_height / 2, font, fill)
+            current_y += text_height + gap
+
+    def draw_avatar(row, center_x, center_y, size=46):
+        avatar = avatars.get(str((row or {}).get("user_id") or "")) if row else None
+        x1 = int(center_x - size / 2)
+        y1 = int(center_y - size / 2)
+        x2 = x1 + size
+        y2 = y1 + size
+        if avatar is not None:
+            try:
+                resampling = getattr(Image, "Resampling", Image)
+                avatar = avatar.convert("RGBA").resize((size, size), resampling.LANCZOS)
+                mask = Image.new("L", (size, size), 0)
+                ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
+                img.paste(avatar, (x1, y1), mask)
+            except Exception:
+                avatar = None
+        if avatar is None:
+            fallback_text = "—"
+            fallback_fill = (232, 240, 248)
+            if row:
+                fallback_text = str(row.get("nickname") or row.get("user_id") or "?")[:1]
+                fallback_fill = (214, 231, 245)
+            draw.ellipse((x1, y1, x2, y2), fill=fallback_fill, outline=COLOR_CARD_BORDER, width=2)
+            centered_text(fallback_text, center_x, center_y, font_section, COLOR_ACCENT)
+        draw.ellipse((x1, y1, x2, y2), outline=(214, 225, 236), width=2)
+
+    def draw_card_frame(x1, y1, x2, y2, accent):
+        draw_rounded_rectangle(
+            draw, (x1, y1, x2, y2), radius=12,
+            fill=COLOR_CARD_BG, outline=COLOR_CARD_BORDER, width=2,
+        )
+        draw.rounded_rectangle((x1, y1, x2, y1 + 6), radius=6, fill=accent)
+
+    def draw_coin_card(row, x1, x2):
+        """绘制最终净收益冠军，所有金币数据归属于同一位用户。"""
+        center_x = (x1 + x2) // 2
+        draw_card_frame(x1, grid_y, x2, grid_y + card_height, COLOR_GOLD)
+        centered_text("金币", center_x, grid_y + 30, font_section, COLOR_GOLD)
+        draw_avatar(row, center_x, grid_y + 79, 42)
+        draw_name(row, center_x, grid_y + 107, card_width - 18)
+
+        draw.line(
+            (x1 + 12, grid_y + 150, x2 - 12, grid_y + 150),
+            fill=COLOR_CARD_BORDER,
+            width=1,
+        )
+        divider_x = (x1 + x2) // 2
+        left_x = (x1 + divider_x) // 2
+        right_x = (divider_x + x2) // 2
+        draw_centered_group(
+            [
+                ("获得", font_meta, COLOR_TEXT_GRAY),
+                (display_value(row, "earned"), font_value, COLOR_GOLD),
+                ("金币", font_meta, COLOR_TEXT_GRAY),
+            ],
+            left_x,
+            grid_y + 160,
+            gap=6,
+        )
+        draw_centered_group(
+            [
+                ("花费", font_meta, COLOR_TEXT_GRAY),
+                (display_value(row, "spent"), font_value, COLOR_ERROR),
+                ("金币", font_meta, COLOR_TEXT_GRAY),
+            ],
+            right_x,
+            grid_y + 160,
+            gap=6,
+        )
+
+        draw.line(
+            (x1 + 12, grid_y + 220, x2 - 12, grid_y + 220),
+            fill=COLOR_CARD_BORDER,
+            width=1,
+        )
+        draw_centered_group(
+            [
+                ("最终获得", font_meta, COLOR_SUCCESS),
+                (display_value(row, "amount"), font_value, COLOR_SUCCESS),
+                ("金币", font_meta, COLOR_TEXT_GRAY),
+            ],
+            center_x,
+            grid_y + 228,
+            gap=6,
+        )
+
+    def draw_activity_card(index, title_text, row, accent, count_label, coin_label):
+        x1 = PADDING + index * (card_width + card_gap)
+        x2 = x1 + card_width
+        draw_card_frame(x1, grid_y, x2, grid_y + card_height, accent)
+        center_x = (x1 + x2) // 2
+        centered_text(title_text, center_x, grid_y + 30, font_section, accent)
+        draw_avatar(row, center_x, grid_y + 78, 46)
+        draw_name(row, center_x, grid_y + 108, card_width - 18)
+        draw.line((x1 + 12, grid_y + 150, x2 - 12, grid_y + 150), fill=COLOR_CARD_BORDER, width=1)
+        divider_x = (x1 + x2) // 2
+        draw.line((divider_x, grid_y + 165, divider_x, grid_y + 264), fill=COLOR_CARD_BORDER, width=1)
+        left_x = (x1 + divider_x) // 2
+        right_x = (divider_x + x2) // 2
+        draw_centered_group(
+            [
+                (count_label, font_meta, COLOR_TEXT_GRAY),
+                (display_value(row, "count"), font_value, accent),
+                ("数量", font_meta, COLOR_TEXT_GRAY),
+            ],
+            left_x,
+            grid_y + 185,
+            gap=6,
+        )
+        draw_centered_group(
+            [
+                (coin_label, font_meta, COLOR_TEXT_GRAY),
+                (display_value(row, "value"), font_value, COLOR_GOLD),
+                ("金币", font_meta, COLOR_TEXT_GRAY),
+            ],
+            right_x,
+            grid_y + 185,
+            gap=6,
+        )
+
+    cards = [
+        ("钓鱼", data.get("fishing"), COLOR_SUCCESS, "钓鱼数量", "获得金币"),
+        ("偷鱼", data.get("steal"), COLOR_ACCENT, "偷鱼数量", "获得金币"),
+        ("电鱼", data.get("electric_fish"), COLOR_WARNING, "电鱼数量", "获得金币"),
+    ]
+
+    # 第一列按最终净收益只展示一位用户，获得和花费并列，最终获得单独一行。
+    first_x1 = PADDING
+    first_x2 = first_x1 + card_width
+    coin_row = data.get("coins_net")
+    if coin_row is None:
+        # 兼容旧数据结构；正式报表由仓储层提供 coins_net。
+        earned_row = data.get("coins_earned") or {}
+        coin_row = {
+            **earned_row,
+            "earned": earned_row.get("amount", 0),
+            "spent": 0,
+            "amount": earned_row.get("amount", 0),
+        } if earned_row else None
+    draw_coin_card(coin_row, first_x1, first_x2)
+
+    for index, card in enumerate(cards, start=1):
+        draw_activity_card(index, *card)
+
+    try:
+        img.save(output_path, compress_level=1)
+        logger.info(f"群统计图片已保存到 {output_path}")
+    except Exception as e:
+        logger.error(f"保存群统计图片失败: {e}")
         raise e

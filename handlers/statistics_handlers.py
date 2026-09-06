@@ -4,7 +4,11 @@ import time
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api import logger
 
-from ..draw.statistics import draw_user_statistics_image, draw_statistics_ranking_image
+from ..draw.statistics import (
+    draw_user_statistics_image,
+    draw_statistics_ranking_image,
+    draw_period_report_image_async,
+)
 from ..draw.utils import run_in_thread
 from ..core.services.statistics_service import StatisticsService, parse_period
 from ..utils import sanitize_filename
@@ -31,6 +35,16 @@ async def statistics(plugin: "FishingPlugin", event: AstrMessageEvent) -> AsyncG
     user_id = plugin._get_effective_user_id(event)
     args = event.message_str.strip().split()
     subcmd = args[1] if len(args) > 1 else None
+
+    if subcmd in {"总览", "报表", "群统计", "全局"}:
+        # 手动统计始终通过当前事件发送，不能被自动报表的目标群配置影响。
+        # 当前群仅作为自动报表未指定群号时的默认目标。
+        plugin.remember_statistics_default_group(event)
+        period_text = args[2] if len(args) > 2 else None
+        period = parse_period(period_text)
+        async for r in _send_period_report(plugin, event, user_id, period):
+            yield r
+        return
 
     # 检查是否为排行榜子命令
     if subcmd == "排行榜":
@@ -73,6 +87,41 @@ async def _send_user_statistics(
     except Exception as e:
         logger.error(f"[统计] 绘制个人统计图片失败: {e}")
         yield event.plain_result("❌ 生成统计图片失败，请稍后再试。")
+        return
+
+    yield event.image_result(output_path)
+
+
+async def _send_period_report(
+    plugin: "FishingPlugin",
+    event: AstrMessageEvent,
+    user_id: str,
+    period: str,
+) -> AsyncGenerator:
+    """生成并发送全局日报/周报图片。"""
+    try:
+        data = plugin.statistics_service.get_period_report(period)
+    except Exception as e:
+        logger.error(f"[统计] 获取群统计数据失败: {e}")
+        yield event.plain_result("❌ 获取群统计数据失败，请稍后再试。")
+        return
+
+    safe_uid = sanitize_filename(user_id)
+    timestamp = int(time.time())
+    output_path = os.path.join(
+        plugin.tmp_dir,
+        f"statistics_report_{safe_uid}_{period}_{timestamp}.png",
+    )
+    try:
+        await draw_period_report_image_async(
+            data,
+            output_path,
+            plugin.data_dir,
+            plugin.game_config.get("avatar_config"),
+        )
+    except Exception as e:
+        logger.error(f"[统计] 绘制群统计图片失败: {e}")
+        yield event.plain_result("❌ 生成群统计图片失败，请稍后再试。")
         return
 
     yield event.image_result(output_path)
