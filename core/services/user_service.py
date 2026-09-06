@@ -14,7 +14,8 @@ from ..repositories.abstract_repository import (
 )
 from .gacha_service import GachaService
 from ..domain.models import User, TaxRecord
-from ..utils import get_now, get_today
+from ..utils import get_now, get_today, calculate_fish_unit_value, get_user_coins_chance_by_repo
+
 
 
 class UserService:
@@ -838,13 +839,16 @@ class UserService:
                 return {"success": False, "message": "用户不存在"}
             
             # 获取鱼类库存
+            coins_chance = get_user_coins_chance_by_repo(self.inventory_repo, self.item_template_repo, user_id)
             fish_inventory = self.inventory_repo.get_fish_inventory(user_id)
             fish_data = []
             for item in fish_inventory:
                 fish_template = self.item_template_repo.get_fish_by_id(item.fish_id)
                 if fish_template:
-                    # 计算实际价值（高品质鱼双倍价值）
-                    actual_value = fish_template.base_value * (1 + item.quality_level)
+                    # 计算实际价值（含品质翻倍与装备金币加成）
+                    actual_value = calculate_fish_unit_value(
+                        fish_template.base_value, item.quality_level, coins_chance
+                    )
                     fish_data.append({
                         "fish_id": item.fish_id,
                         "name": fish_template.name,

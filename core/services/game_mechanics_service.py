@@ -14,7 +14,7 @@ from ..repositories.abstract_repository import (
     AbstractUserBuffRepository,
 )
 from ..domain.models import WipeBombLog, User
-from ...core.utils import get_now, get_today
+from ...core.utils import get_now, get_today, calculate_fish_unit_value, get_user_coins_chance_by_repo
 
 if TYPE_CHECKING:
     from ..repositories.sqlite_user_repo import SqliteUserRepository
@@ -1107,39 +1107,46 @@ class GameMechanicsService:
                 pass
         # ========== 盾破计数结束（steal_fish）==========
         # 6. 生成成功消息
+        # 获取双方装备金币加成
+        thief_coins_chance = get_user_coins_chance_by_repo(self.inventory_repo, self.item_template_repo, thief_id)
+        victim_coins_chance = get_user_coins_chance_by_repo(self.inventory_repo, self.item_template_repo, victim_id)
+
         # 构建品质信息
-        quality_info = ""
-        actual_value = stolen_fish_template.base_value
-        if stolen_fish_item.quality_level == 1:
-            quality_info = "（✨高品质）"
-            actual_value = stolen_fish_template.base_value * 2
-        
-        # 写入偷鱼统计日志
+        quality_info = "（✨高品质）" if stolen_fish_item.quality_level == 1 else ""
+        thief_actual_value = calculate_fish_unit_value(
+            stolen_fish_template.base_value, stolen_fish_item.quality_level, thief_coins_chance
+        )
+        victim_actual_value = calculate_fish_unit_value(
+            stolen_fish_template.base_value, stolen_fish_item.quality_level, victim_coins_chance
+        )
+
+        # 写入偷鱼统计日志（记录偷窃者实际获得的价值）
         self._add_statistics_log(
             user_id=thief_id,
             target_id=victim_id,
             action_type="steal",
             success=True,
             fish_count=1,
-            coin_amount=actual_value,
+            coin_amount=thief_actual_value,
             details={
                 "fish_id": stolen_fish_item.fish_id,
                 "fish_name": stolen_fish_template.name,
                 "rarity": stolen_fish_template.rarity,
                 "quality_level": stolen_fish_item.quality_level,
-                "value": actual_value,
+                "value": thief_actual_value,
+                "victim_value": victim_actual_value,
             },
         )
 
         return {
             "success": True,
-            "message": f"✅ 成功从【{victim.nickname}】的鱼塘里偷到了一条{stolen_fish_template.rarity}★【{stolen_fish_template.name}】{quality_info}！价值 {actual_value} 金币{shield_recovery_msg}",
+            "message": f"✅ 成功从【{victim.nickname}】的鱼塘里偷到了一条{stolen_fish_template.rarity}★【{stolen_fish_template.name}】{quality_info}！价值 {thief_actual_value} 金币{shield_recovery_msg}",
             "thief_nickname": thief.nickname or thief.user_id,
             "victim_notification": {
                 "stolen_fish_name": stolen_fish_template.name,
                 "rarity": stolen_fish_template.rarity,
                 "quality_level": stolen_fish_item.quality_level,
-                "value": actual_value,
+                "value": victim_actual_value,
             },
             "notification_events": notification_events,
         }
@@ -1558,14 +1565,14 @@ class GameMechanicsService:
             success_type = "🔹小成功"
             multiplier_range = (0.05, 0.10)
         
-        # 5. 准备数据：获取鱼模板并将鱼塘扁平化
+        # 5. 准备数据：获取鱼模板并将鱼塘扁平化（保留品质属性）
         fish_templates = {
             item.fish_id: self.item_template_repo.get_fish_by_id(item.fish_id)
             for item in victim_inventory
         }
         all_fish_in_pond = []
         for item in victim_inventory:
-            all_fish_in_pond.extend([item.fish_id] * item.quantity)
+            all_fish_in_pond.extend([(item.fish_id, item.quality_level)] * item.quantity)
 
         # 6. 决定偷取数量并进行初次完全随机抽样
         num_to_steal = 0
@@ -1591,24 +1598,25 @@ class GameMechanicsService:
         actual_num_to_steal = min(num_to_steal, len(all_fish_in_pond))
         initial_catch = random.sample(all_fish_in_pond, actual_num_to_steal)
 
-        # 7. 检查并修正高星鱼数量
+        # 7. 检查并修正高星鱼数量（保留品质）
         high_rarity_caught = []
         low_rarity_caught = []
-        for fish_id in initial_catch:
+        for fish_tuple in initial_catch:
+            fish_id, q_level = fish_tuple
             template = fish_templates.get(fish_id)
             if template and template.rarity >= 5:
-                high_rarity_caught.append(fish_id)
+                high_rarity_caught.append(fish_tuple)
             else:
-                low_rarity_caught.append(fish_id)
-        
-        final_stolen_fish_ids = []
+                low_rarity_caught.append(fish_tuple)
+
+        final_stolen_fish = []
         if len(high_rarity_caught) <= 1:
-            final_stolen_fish_ids = initial_catch
+            final_stolen_fish = initial_catch
         else:
             random.shuffle(high_rarity_caught)
-            final_stolen_fish_ids.append(high_rarity_caught.pop(0))
-            final_stolen_fish_ids.extend(low_rarity_caught)
-            
+            final_stolen_fish.append(high_rarity_caught.pop(0))
+            final_stolen_fish.extend(low_rarity_caught)
+
             num_to_replace = len(high_rarity_caught)
 
             from collections import Counter
@@ -1617,45 +1625,56 @@ class GameMechanicsService:
             pond_counts.subtract(initial_catch_counts)
 
             replacement_pool = []
-            for fish_id, count in pond_counts.items():
+            for fish_tuple, count in pond_counts.items():
                 if count > 0:
-                    template = fish_templates.get(fish_id)
+                    template = fish_templates.get(fish_tuple[0])
                     if template and template.rarity < 5:
-                        replacement_pool.extend([fish_id] * count)
-            
+                        replacement_pool.extend([fish_tuple] * count)
+
             if replacement_pool:
                 num_can_replace = min(num_to_replace, len(replacement_pool))
                 replacements = random.sample(replacement_pool, num_can_replace)
-                final_stolen_fish_ids.extend(replacements)
+                final_stolen_fish.extend(replacements)
 
-        # 8. 统计最终偷到的鱼
-        stolen_fish_counts = {}
-        for fish_id in final_stolen_fish_ids:
-            stolen_fish_counts[fish_id] = stolen_fish_counts.get(fish_id, 0) + 1
-    
-        # 9. 执行电鱼事务并计算总价值
+        # 8. 统计最终偷到的鱼：以 (fish_id, quality_level) 聚合计数
+        from collections import Counter
+        stolen_fish_counts = Counter(final_stolen_fish)
+
+        # 9. 执行电鱼事务并计算双方总价值
+        # 获取双方装备金币加成
+        thief_coins_chance = get_user_coins_chance_by_repo(self.inventory_repo, self.item_template_repo, thief_id)
+        victim_coins_chance = get_user_coins_chance_by_repo(self.inventory_repo, self.item_template_repo, victim_id)
+
         stolen_summary = []
-        total_value_stolen = 0
-    
-        for fish_id, count in stolen_fish_counts.items():
-            self.inventory_repo.update_fish_quantity(victim_id, fish_id, delta=-count, quality_level=0)
-            self.inventory_repo.add_fish_to_inventory(thief_id, fish_id, quantity=count, quality_level=0)
-            
+        total_value_thief = 0
+        total_value_victim = 0
+
+        for (fish_id, quality_level), count in stolen_fish_counts.items():
+            self.inventory_repo.update_fish_quantity(victim_id, fish_id, delta=-count, quality_level=quality_level)
+            self.inventory_repo.add_fish_to_inventory(thief_id, fish_id, quantity=count, quality_level=quality_level)
+
             template = fish_templates.get(fish_id)
             if template:
-                stolen_summary.append(f"【{template.name}】x{count}")
-                total_value_stolen += template.base_value * count
-    
+                q_label = "✨高品质" if quality_level == 1 else ""
+                name_str = f"【{q_label}{template.name}】" if q_label else f"【{template.name}】"
+                stolen_summary.append(f"{name_str}x{count}")
+
+                thief_unit_val = calculate_fish_unit_value(template.base_value, quality_level, thief_coins_chance)
+                total_value_thief += thief_unit_val * count
+
+                victim_unit_val = calculate_fish_unit_value(template.base_value, quality_level, victim_coins_chance)
+                total_value_victim += victim_unit_val * count
+
         # 10. 更新电鱼的CD时间并保存
         thief.last_electric_fish_time = now
         self.user_repo.update(thief)
-    
+
         # ========== 电鱼成功后守护海灵立即恢复 ==========
         shield_recovery_msg = ""
         if protection_buff:
             prot_payload = json.loads(protection_buff.payload or "{}")
             current_layers = prot_payload.get("layers", 0)
-            
+
             if current_layers == 0:
                 # 电鱼成功后直接恢复满层，不累计配额
                 max_layers = prot_payload.get("max_layers", 2)
@@ -1687,14 +1706,14 @@ class GameMechanicsService:
                     }
                 )
         # ========== 电鱼后守护海灵恢复结束 ==========
-    
+
         # 11. 生成成功消息
         stolen_details = "、".join(stolen_summary)
-        actual_stolen_count = len(final_stolen_fish_ids)
-        
+        actual_stolen_count = len(final_stolen_fish)
+
         # 计算收益占比
         steal_percentage = (actual_stolen_count / total_fish_count) * 100
-        
+
         # 写入电鱼成功统计日志
         self._add_statistics_log(
             user_id=thief_id,
@@ -1702,11 +1721,12 @@ class GameMechanicsService:
             action_type="electric_fish",
             success=True,
             fish_count=actual_stolen_count,
-            coin_amount=total_value_stolen,
+            coin_amount=total_value_thief,
             details={
                 "success_type": success_type,
                 "stolen_summary": stolen_summary,
-                "total_value": total_value_stolen,
+                "total_value": total_value_thief,
+                "victim_total_value": total_value_victim,
                 "base_success_rate": base_success_rate,
                 "bonus_success_rate": boost["bonus_rate"],
                 "fish_count_multiplier": boost["fish_count_multiplier"],
@@ -1717,12 +1737,13 @@ class GameMechanicsService:
 
         return {
             "success": True,
-            "message": f"{success_type}！成功对【{victim.nickname}】的鱼塘进行了电击，捕获了{actual_stolen_count}条鱼（占其总数的{steal_percentage:.1f}%），总价值 {total_value_stolen} 金币！\n分别是：{stolen_details}。\n💡 本次成功率为 {final_success_rate*100:.1f}%{boost_message}{shield_recovery_msg}",
+            "message": f"{success_type}！成功对【{victim.nickname}】的鱼塘进行了电击，捕获了{actual_stolen_count}条鱼（占其总数的{steal_percentage:.1f}%），总价值 {total_value_thief} 金币！\n分别是：{stolen_details}。\n💡 本次成功率为 {final_success_rate*100:.1f}%{boost_message}{shield_recovery_msg}",
             "thief_nickname": thief.nickname or thief.user_id,
+            "thief_total_value": total_value_thief,
             "victim_notification": {
                 "stolen_count": actual_stolen_count,
                 "stolen_summary": stolen_summary,
-                "total_value": total_value_stolen,
+                "total_value": total_value_victim,
                 "steal_percentage": steal_percentage,
             },
             "notification_events": notification_events,

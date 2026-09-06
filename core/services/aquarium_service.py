@@ -3,6 +3,8 @@ from datetime import datetime
 
 from ..repositories.abstract_repository import AbstractInventoryRepository, AbstractUserRepository, AbstractItemTemplateRepository
 from ..domain.models import User, UserAquariumItem, AquariumUpgrade, Fish
+from ...core.utils import calculate_fish_unit_value, get_user_coins_chance_by_repo
+
 
 
 class AquariumService:
@@ -26,12 +28,16 @@ class AquariumService:
         if not user:
             return {"success": False, "message": "用户不存在"}
 
+        coins_chance = get_user_coins_chance_by_repo(self.inventory_repo, self.item_template_repo, user_id)
+
         # 为了丰富信息，可以从模板仓储获取鱼的详细信息
         enriched_items = []
         for item in aquarium_items:
             if fish_template := self.item_template_repo.get_fish_by_id(item.fish_id):
-                # 计算实际价值（高品质鱼双倍价值）
-                actual_value = fish_template.base_value * (1 + item.quality_level)
+                # 计算实际价值（含品质翻倍与装备金币加成）
+                actual_value = calculate_fish_unit_value(
+                    fish_template.base_value, item.quality_level, coins_chance
+                )
                 enriched_items.append({
                     "fish_id": item.fish_id,
                     "name": fish_template.name,
@@ -44,12 +50,15 @@ class AquariumService:
                     "added_at": item.added_at
                 })
 
+        # 总价值严格等于每项加成单价 x 数量之和
+        calculated_total_value = sum(item["actual_value"] * item["quantity"] for item in enriched_items)
+
         return {
             "success": True,
             "fishes": enriched_items,
             "stats": {
                 "total_count": total_count,
-                "total_value": total_value,
+                "total_value": calculated_total_value,
                 "capacity": user.aquarium_capacity,
                 "available_space": user.aquarium_capacity - total_count
             }

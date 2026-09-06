@@ -508,7 +508,7 @@ def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo,
     Returns:
         包含用户状态信息的字典，如果用户不存在则返回None
     """
-    from ..core.utils import get_now, get_today
+    from ..core.utils import get_now, get_today, calculate_fish_unit_value, get_user_coins_chance_by_repo
     
     # 获取用户基本信息
     user = user_repo.get_by_id(user_id)
@@ -699,10 +699,17 @@ def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo,
     try:
         # 使用与inventory_service.get_user_fish_pond相同的逻辑获取鱼塘信息
         inventory_items = inventory_repo.get_fish_inventory(user_id)
-        total_value = inventory_repo.get_fish_inventory_value(user_id)
+        coins_chance = get_user_coins_chance_by_repo(inventory_repo, item_template_repo, user_id)
         
-        # 计算总鱼数
-        total_count = sum(item.quantity for item in inventory_items) if inventory_items else 0
+        total_count = 0
+        total_value = 0
+        if inventory_items:
+            for item in inventory_items:
+                template = item_template_repo.get_fish_by_id(item.fish_id)
+                if template:
+                    unit_val = calculate_fish_unit_value(template.base_value, item.quality_level, coins_chance)
+                    total_value += unit_val * item.quantity
+                    total_count += item.quantity
         
         if total_count > 0 or total_value > 0:
             pond_info = {

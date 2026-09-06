@@ -423,6 +423,16 @@ class FishingService:
             if fractional > 0 and random.random() < fractional:
                 total_catches += 1
 
+        # 4.4 计算所有加成后总共金币（方案B：解耦鱼种，直接加成结算）
+        # 基础单价（含品质翻倍）
+        base_unit_value = fish_template.base_value * (2 if quality_level == 1 else 1)
+        if coins_chance > 0:
+            final_unit_value = math.ceil(base_unit_value * (1.0 + coins_chance))
+        else:
+            final_unit_value = base_unit_value
+
+        final_total_value = final_unit_value * total_catches
+
         # 5. 处理鱼塘容量（在确定总渔获量后）
         user_fish_inventory = self.inventory_repo.get_fish_inventory(user.user_id)
         current_fish_count = sum(item.quantity for item in user_fish_inventory)
@@ -464,11 +474,8 @@ class FishingService:
         # 更新用户统计数据
         user.total_fishing_count += total_catches
         user.total_weight_caught += weight
-        # 高品质鱼的统计价值按双倍计算
-        if quality_level == 1:
-            user.total_coins_earned += fish_template.base_value * total_catches * 2
-        else:
-            user.total_coins_earned += fish_template.base_value * total_catches
+        # 统计价值按所有加成后的总金币记录
+        user.total_coins_earned += final_total_value
         user.last_fishing_time = get_now()
         
         # 处理装备耐久度消耗
@@ -514,7 +521,7 @@ class FishingService:
             user_id=user.user_id,
             fish_id=fish_template.fish_id,
             weight=weight,
-            value=value,
+            value=final_unit_value,
             timestamp=user.last_fishing_time,
             rod_instance_id=user.equipped_rod_instance_id,
             accessory_instance_id=user.equipped_accessory_instance_id,
@@ -525,7 +532,7 @@ class FishingService:
         # 记录本次实际钓获数量和鱼的估算价值，供日报/周报聚合。
         if self.statistics_repo:
             try:
-                fish_value = value * total_catches * (2 if quality_level == 1 else 1)
+                fish_value = final_total_value
                 self.statistics_repo.add_log(
                     user_id=user.user_id,
                     action_type="fish",
@@ -537,6 +544,7 @@ class FishingService:
                         "fish_name": fish_template.name,
                         "rarity": fish_template.rarity,
                         "quality_level": quality_level,
+                        "coins_chance": coins_chance,
                     },
                 )
             except Exception as e:
@@ -549,7 +557,9 @@ class FishingService:
                 "name": fish_template.name,
                 "rarity": fish_template.rarity,
                 "weight": weight,
-                "value": value * 2 if quality_level == 1 else value,  # 高品质鱼双倍价值
+                "value": final_total_value,  # 直接给出所有加成后总共的金币
+                "unit_value": final_unit_value,
+                "catches": total_catches,
                 "quality_level": quality_level,  # 添加品质等级
                 "quality_label": "✨高品质" if quality_level == 1 else "普通"  # 添加品质标签
             }
@@ -766,7 +776,7 @@ class FishingService:
         
         return new_distribution
 
-    def _get_fish_template(self, rarity: int, zone: FishingZone, coins_chance: float):
+    def _get_fish_template(self, rarity: int, zone: FishingZone, coins_chance: float = 0.0):
         """根据稀有度和区域配置获取鱼类模板"""
         
         # 检查 FishingZone 对象是否有 'specific_fish_ids' 属性

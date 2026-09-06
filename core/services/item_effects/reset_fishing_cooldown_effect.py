@@ -53,11 +53,15 @@ class ResetFishingCooldownEffect(AbstractItemEffect):
             if fish.get('quality_level') == 1:
                 quality_display = " ✨高品质"
             
+            catches = fish.get('catches', 1)
+            count_display = f" x{catches}" if catches > 1 else ""
+            value_label = "💰总价值" if catches > 1 else "💰价值"
+
             message = (
-                f"🎣 恭喜你钓到了：{fish['name']}{quality_display}\n"
+                f"🎣 恭喜你钓到了：{fish['name']}{count_display}{quality_display}\n"
                 f"✨稀有度：{'★' * fish['rarity']} \n"
                 f"⚖️重量：{fish['weight']} 克\n"
-                f"💰价值：{fish['value']} 金币\n"
+                f"{value_label}：{fish['value']} 金币\n"
                 f"💸消耗：{fishing_cost} 金币/次"
             )
             if "equipment_broken_messages" in result:

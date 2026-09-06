@@ -5,6 +5,9 @@ import time
 from statistics import median
 from typing import Any, Dict, Optional
 
+from ...utils import calculate_fish_unit_value, get_user_coins_chance_by_repo
+
+
 
 class AIItemStrategy:
     """只根据当前资源、Buff 和游戏状态使用社交/钓鱼道具。"""
@@ -276,12 +279,16 @@ class AIItemStrategy:
     def _pond_value(self) -> float:
         total = 0.0
         try:
+            coins_chance = get_user_coins_chance_by_repo(
+                self.ctx.inventory_repo, self.ctx.item_template_repo, self.ctx.ai_user_id
+            )
             for item in self.ctx.inventory_repo.get_fish_inventory(self.ctx.ai_user_id):
                 template = self.ctx.item_template_repo.get_fish_by_id(item.fish_id)
                 if template:
-                    total += float(template.base_value) * int(item.quantity) * (
-                        1 + int(getattr(item, "quality_level", 0) or 0)
+                    unit_val = calculate_fish_unit_value(
+                        template.base_value, getattr(item, "quality_level", 0) or 0, coins_chance
                     )
+                    total += float(unit_val * int(item.quantity))
         except Exception:
             return 0.0
         return total

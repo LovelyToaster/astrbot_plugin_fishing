@@ -131,3 +131,43 @@ def from_base36(s: str) -> int:
     if not s:
         raise ValueError("empty")
     return int(s, 36)
+
+
+def calculate_fish_unit_value(base_value: int, quality_level: int = 0, coins_chance: float = 0.0) -> int:
+    """
+    统一计算单条鱼在特定品质与金币加成下的单价。
+    - 普通品质: base_value
+    - 高品质 (quality_level=1): base_value * 2
+    - 金币加成 (coins_chance): ceil(base_unit * (1.0 + coins_chance))
+    """
+    import math
+    base_unit = base_value * (2 if quality_level == 1 else 1)
+    if coins_chance > 0:
+        return math.ceil(base_unit * (1.0 + coins_chance))
+    return base_unit
+
+
+def get_user_coins_chance_by_repo(inventory_repo, item_template_repo, user_id: str) -> float:
+    """
+    通过库存与模板仓储获取用户的金币加成比例（如 0.3 代表 +30%）。
+    """
+    if not inventory_repo or not item_template_repo or not user_id:
+        return 0.0
+    try:
+        equipped_acc = inventory_repo.get_user_equipped_accessory(user_id)
+        if not equipped_acc:
+            return 0.0
+        acc_template = item_template_repo.get_accessory_by_id(equipped_acc.accessory_id)
+        if not acc_template:
+            return 0.0
+        bonus_coin_mod = getattr(acc_template, "bonus_coin_modifier", 1.0) or 1.0
+        if bonus_coin_mod <= 1.0:
+            return 0.0
+        refined_coin_mod = calculate_after_refine(
+            bonus_coin_mod,
+            refine_level=getattr(equipped_acc, "refine_level", 1) or 1,
+            rarity=getattr(acc_template, "rarity", None)
+        )
+        return max(0.0, refined_coin_mod - 1.0)
+    except Exception:
+        return 0.0
