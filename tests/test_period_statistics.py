@@ -124,6 +124,41 @@ class PeriodStatisticsTests(unittest.TestCase):
             if os.path.exists(output_path):
                 os.remove(output_path)
 
+    def test_user_summary_excludes_fishing_and_balance_logs(self):
+        self.repo.add_log("u1", "fish", fish_count=20, coin_amount=500)
+        self.repo.add_log("u1", "coin_earn", coin_amount=500)
+        self.repo.add_log("u1", "coin_spend", coin_amount=-100)
+        self.repo.add_log("u1", "steal", fish_count=2, success=True)
+        self.repo.add_log("u1", "electric_fish", fish_count=0, success=False)
+        self.repo.add_log("u1", "sell_fish", fish_count=3)
+
+        start, end = get_period_range("today")
+        summary = self.repo.get_user_summary("u1", start, end)
+
+        self.assertEqual(summary["total_actions"], 3)
+        self.assertEqual(summary["steal_count"], 1)
+        self.assertEqual(summary["electric_fish_count"], 1)
+        self.assertEqual(summary["sell_fish_count"], 1)
+        self.assertEqual(summary["success_count"], 1)
+        self.assertEqual(summary["fail_count"], 1)
+        self.assertEqual(summary["fish_count"], 5)
+
+    def test_statistics_leaderboard_excludes_fishing_and_balance_logs(self):
+        self.repo.add_log("u1", "fish", fish_count=100)
+        self.repo.add_log("u1", "coin_earn", coin_amount=1000)
+        self.repo.add_log("u1", "steal", fish_count=1)
+        self.repo.add_log("u2", "steal", fish_count=2)
+        self.repo.add_log("u2", "electric_fish", fish_count=3)
+
+        start, end = get_period_range("today")
+        leaderboard = self.repo.get_leaderboard(start, end, limit=5)
+
+        self.assertEqual([row["user_id"] for row in leaderboard], ["u2", "u1"])
+        self.assertEqual(leaderboard[0]["total_actions"], 2)
+        self.assertEqual(leaderboard[0]["fish_count"], 5)
+        self.assertEqual(leaderboard[1]["total_actions"], 1)
+        self.assertEqual(leaderboard[1]["fish_count"], 1)
+
     def test_async_report_fetches_avatar_before_drawing(self):
         data = {
             "period_label": "今天",

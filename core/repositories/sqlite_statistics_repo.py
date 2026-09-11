@@ -282,7 +282,7 @@ class SqliteStatisticsRepository:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
 
-                # 查询各 action_type 的汇总
+                # 个人统计只统计社交行为；钓鱼和金币变动有各自的独立统计口径。
                 cursor.execute(
                     """
                     SELECT
@@ -292,7 +292,10 @@ class SqliteStatisticsRepository:
                         SUM(CASE WHEN action_type IN ('steal', 'electric_fish') AND success = 0 THEN 1 ELSE 0 END) AS fail_cnt,
                         COALESCE(SUM(fish_count), 0) AS total_fish
                     FROM statistics_logs
-                    WHERE user_id = ? AND created_at >= ? AND created_at <= ?
+                    -- 排除 fish、coin_earn、coin_spend 等非社交日志
+                    WHERE user_id = ?
+                      AND action_type IN ('steal', 'electric_fish', 'sell_fish')
+                      AND created_at >= ? AND created_at <= ?
                     GROUP BY action_type
                     """,
                     (user_id, start_time.strftime(DATETIME_FORMAT), end_time.strftime(DATETIME_FORMAT)),
@@ -348,7 +351,9 @@ class SqliteStatisticsRepository:
                         SUM(CASE WHEN action_type IN ('steal', 'electric_fish') AND success = 0 THEN 1 ELSE 0 END) AS fail_count,
                         COALESCE(SUM(fish_count), 0) AS fish_count
                     FROM statistics_logs
-                    WHERE created_at >= ? AND created_at <= ?
+                    -- 排行榜的总次数只由偷鱼、电鱼、卖鱼构成
+                    WHERE action_type IN ('steal', 'electric_fish', 'sell_fish')
+                      AND created_at >= ? AND created_at <= ?
                     GROUP BY user_id
                     ORDER BY total_actions DESC, success_count DESC, fish_count DESC
                     LIMIT ?
