@@ -508,7 +508,7 @@ def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo,
     Returns:
         包含用户状态信息的字典，如果用户不存在则返回None
     """
-    from ..core.utils import get_now, get_today, calculate_fish_unit_value, get_user_coins_chance_by_repo
+    from ..core.utils import get_now, get_today, calculate_fish_unit_value
     
     # 获取用户基本信息
     user = user_repo.get_by_id(user_id)
@@ -697,9 +697,8 @@ def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo,
     # 获取鱼塘信息
     pond_info = None
     try:
-        # 使用与inventory_service.get_user_fish_pond相同的逻辑获取鱼塘信息
+        # 鱼塘库存保存了获得/转移时的固定结算单价。
         inventory_items = inventory_repo.get_fish_inventory(user_id)
-        coins_chance = get_user_coins_chance_by_repo(inventory_repo, item_template_repo, user_id)
         
         total_count = 0
         total_value = 0
@@ -707,7 +706,9 @@ def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo,
             for item in inventory_items:
                 template = item_template_repo.get_fish_by_id(item.fish_id)
                 if template:
-                    unit_val = calculate_fish_unit_value(template.base_value, item.quality_level, coins_chance)
+                    unit_val = item.unit_value or calculate_fish_unit_value(
+                        template.base_value, item.quality_level, 0.0
+                    )
                     total_value += unit_val * item.quantity
                     total_count += item.quantity
         

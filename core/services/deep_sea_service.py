@@ -13,7 +13,7 @@ from ..repositories.abstract_repository import (
     AbstractUserBuffRepository,
 )
 from ..domain.models import DeepSeaAdventure, UserBuff
-from ..utils import get_now, get_today
+from ..utils import get_now, get_today, calculate_fish_unit_value, get_user_coins_chance_by_repo
 
 
 class DeepSeaService:
@@ -92,9 +92,15 @@ class DeepSeaService:
         """获得鱼并格式化消息"""
         if not fish:
             return ""
-        self.inventory_repo.add_fish_to_inventory(user_id, fish.fish_id, quantity=1, quality_level=0)
-        adventure.current_reward += fish.base_value
-        return f"🐟 获得: {fish.name} ⭐ {fish.rarity}星 💰 {fish.base_value} 金币"
+        coins_chance = get_user_coins_chance_by_repo(
+            self.inventory_repo, self.item_template_repo, user_id
+        )
+        unit_value = calculate_fish_unit_value(fish.base_value, 0, coins_chance)
+        self.inventory_repo.add_fish_to_inventory(
+            user_id, fish.fish_id, quantity=1, quality_level=0, unit_value=unit_value
+        )
+        adventure.current_reward += unit_value
+        return f"🐟 获得: {fish.name} ⭐ {fish.rarity}星 💰 {unit_value} 金币"
 
     def _add_coins_and_format(self, user_id: str, amount: int, adventure: DeepSeaAdventure, is_loss: bool = False) -> str:
         """获得/损失金币并格式化消息"""

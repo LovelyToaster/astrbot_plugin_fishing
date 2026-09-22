@@ -12,6 +12,7 @@ from ..repositories.abstract_repository import (
     AbstractShopRepository,
 )
 from ..domain.models import Shop, ShopItem, ShopItemCost, ShopItemReward
+from ..utils import calculate_fish_unit_value, get_user_coins_chance_by_repo
 
 
 class ShopService:
@@ -624,8 +625,20 @@ class ShopService:
                     if fish_tpl:
                         # 从数据库获取奖励的品质等级设置
                         quality_level = reward.get("quality_level", 0)
+                        coins_chance = get_user_coins_chance_by_repo(
+                            self.inventory_repo, self.item_template_repo, user_id
+                        )
+                        unit_value = calculate_fish_unit_value(
+                            fish_tpl.base_value, quality_level, coins_chance
+                        )
                         # 调用水族箱的库存更新方法
-                        self.inventory_repo.update_aquarium_fish_quantity(user_id, reward_item_id, reward_quantity, quality_level)
+                        self.inventory_repo.update_aquarium_fish_quantity(
+                            user_id,
+                            reward_item_id,
+                            reward_quantity,
+                            quality_level,
+                            unit_value,
+                        )
                         
                         quality_label = " ✨高品质" if quality_level == 1 else ""
                         obtained_items.append(f"🐠 {fish_tpl.name}{quality_label} x{reward_quantity} (放入水族箱)")

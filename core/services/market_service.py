@@ -187,7 +187,13 @@ class MarketService:
     def _validate_fish_listing(self, user_id: str, item_instance_id: int, quantity: int, quality_level: int) -> Dict[str, Any]:
         """验证鱼类上架"""
         fish_inventory = self.inventory_repo.get_fish_inventory(user_id)
-        fish_item = next((item for item in fish_inventory if item.fish_id == item_instance_id and item.quality_level == quality_level), None)
+        fish_item = next(
+            (item for item in fish_inventory
+             if item.fish_id == item_instance_id
+             and item.quality_level == quality_level
+             and item.quantity >= quantity),
+            None,
+        )
         
         if not fish_item or fish_item.quantity < quantity:
             quality_label = "✨高品质" if quality_level == 1 else "普通"
@@ -202,7 +208,8 @@ class MarketService:
             "item_name": fish_template.name if fish_template else None,
             "item_description": fish_template.description if fish_template else None,
             "item_refine_level": 1,
-            "expires_at": None
+            "expires_at": None,
+            "unit_value": fish_item.unit_value,
         }
 
     def _validate_commodity_listing(self, user_id: str, item_instance_id: int, quantity: int) -> Dict[str, Any]:
@@ -234,7 +241,15 @@ class MarketService:
             "expires_at": user_commodity.expires_at
         }
 
-    def _execute_listing_transaction(self, user_id: str, item_type: str, item_instance_id: int, quantity: int, quality_level: int) -> None:
+    def _execute_listing_transaction(
+        self,
+        user_id: str,
+        item_type: str,
+        item_instance_id: int,
+        quantity: int,
+        quality_level: int,
+        unit_value: Optional[int] = None,
+    ) -> None:
         """执行上架事务 - 对于装备类物品，转移所有权到'MARKET'而不是删除"""
         if item_type == "rod":
             # 不删除鱼竿实例，而是转移所有权到市场（虚拟用户）
@@ -245,7 +260,9 @@ class MarketService:
         elif item_type == "item":
             self.inventory_repo.update_item_quantity(user_id, item_instance_id, -quantity)
         elif item_type == "fish":
-            self.inventory_repo.update_fish_quantity(user_id, item_instance_id, -quantity, quality_level)
+            self.inventory_repo.update_fish_quantity(
+                user_id, item_instance_id, -quantity, quality_level, unit_value
+            )
         elif item_type == "commodity":
             self.exchange_repo.delete_user_commodity(item_instance_id)
 
@@ -295,7 +312,14 @@ class MarketService:
             return validation_result
 
         # 执行上架事务
-        self._execute_listing_transaction(user_id, item_type, item_instance_id, quantity, quality_level)
+        self._execute_listing_transaction(
+            user_id,
+            item_type,
+            item_instance_id,
+            quantity,
+            quality_level,
+            validation_result.get("unit_value"),
+        )
 
         # 扣除税费
         seller.coins -= tax_cost
@@ -325,7 +349,8 @@ class MarketService:
             expires_at=validation_result["expires_at"],
             refine_level=validation_result["item_refine_level"],
             quality_level=quality_level if item_type == "fish" else 0,
-            is_anonymous=is_anonymous
+            is_anonymous=is_anonymous,
+            unit_value=validation_result.get("unit_value") if item_type == "fish" else None,
         )
         self.market_repo.add_listing(new_listing)
 
@@ -473,7 +498,13 @@ class MarketService:
                 # 给买家添加鱼类到水族箱（默认放入水族箱）
                 # 使用市场商品中设置的品质等级
                 quality_level = listing.quality_level
-                self.inventory_repo.add_fish_to_aquarium(buyer_id, listing.item_id, listing.quantity, quality_level)
+                self.inventory_repo.add_fish_to_aquarium(
+                    buyer_id,
+                    listing.item_id,
+                    listing.quantity,
+                    quality_level,
+                    listing.unit_value,
+                )
 
             # 4. 从市场移除该商品
             self.market_repo.remove_listing(market_id)
@@ -516,7 +547,13 @@ class MarketService:
         elif listing.item_type == "item":
             self.inventory_repo.update_item_quantity(listing.user_id, listing.item_id, listing.quantity)
         elif listing.item_type == "fish":
-            self.inventory_repo.add_fish_to_aquarium(listing.user_id, listing.item_id, listing.quantity, listing.quality_level)
+            self.inventory_repo.add_fish_to_aquarium(
+                listing.user_id,
+                listing.item_id,
+                listing.quantity,
+                listing.quality_level,
+                listing.unit_value,
+            )
         elif listing.item_type == "commodity":
             from ..domain.models import UserCommodity
             # 检查卖家交易所容量

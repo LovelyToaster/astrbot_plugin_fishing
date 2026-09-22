@@ -3,7 +3,7 @@ from datetime import datetime
 
 from ..repositories.abstract_repository import AbstractInventoryRepository, AbstractUserRepository, AbstractItemTemplateRepository
 from ..domain.models import User, UserAquariumItem, AquariumUpgrade, Fish
-from ...core.utils import calculate_fish_unit_value, get_user_coins_chance_by_repo
+from ...core.utils import calculate_fish_unit_value
 
 
 
@@ -28,15 +28,12 @@ class AquariumService:
         if not user:
             return {"success": False, "message": "用户不存在"}
 
-        coins_chance = get_user_coins_chance_by_repo(self.inventory_repo, self.item_template_repo, user_id)
-
         # 为了丰富信息，可以从模板仓储获取鱼的详细信息
         enriched_items = []
         for item in aquarium_items:
             if fish_template := self.item_template_repo.get_fish_by_id(item.fish_id):
-                # 计算实际价值（含品质翻倍与装备金币加成）
-                actual_value = calculate_fish_unit_value(
-                    fish_template.base_value, item.quality_level, coins_chance
+                actual_value = item.unit_value or calculate_fish_unit_value(
+                    fish_template.base_value, item.quality_level, 0.0
                 )
                 enriched_items.append({
                     "fish_id": item.fish_id,
@@ -86,14 +83,27 @@ class AquariumService:
 
         # 检查鱼塘中是否有足够的鱼（指定品质）
         fish_inventory = self.inventory_repo.get_fish_inventory(user_id)
-        fish_item = next((item for item in fish_inventory if item.fish_id == fish_id and item.quality_level == quality_level), None)
-        if not fish_item or fish_item.quantity < quantity:
+        matching_items = [
+            item for item in fish_inventory
+            if item.fish_id == fish_id and item.quality_level == quality_level and item.quantity > 0
+        ]
+        if sum(item.quantity for item in matching_items) < quantity:
             quality_label = "✨高品质" if quality_level == 1 else "普通"
             return {"success": False, "message": f"鱼塘中没有足够的{quality_label}{fish_template.name}"}
 
-        # 从鱼塘移除鱼，添加到水族箱（保持品质）
-        self.inventory_repo.update_fish_quantity(user_id, fish_id, -quantity, quality_level)
-        self.inventory_repo.add_fish_to_aquarium(user_id, fish_id, quantity, quality_level)
+        # 逐批转移，保留每一批鱼在获得时记录的单位价值。
+        remaining = quantity
+        for fish_item in matching_items:
+            if remaining <= 0:
+                break
+            transfer_quantity = min(remaining, fish_item.quantity)
+            self.inventory_repo.update_fish_quantity(
+                user_id, fish_id, -transfer_quantity, quality_level, fish_item.unit_value
+            )
+            self.inventory_repo.add_fish_to_aquarium(
+                user_id, fish_id, transfer_quantity, quality_level, fish_item.unit_value
+            )
+            remaining -= transfer_quantity
 
         quality_label = "✨高品质" if quality_level == 1 else "普通"
         return {
@@ -115,14 +125,27 @@ class AquariumService:
 
         # 检查水族箱中是否有足够的鱼（指定品质）
         aquarium_items = self.inventory_repo.get_aquarium_inventory(user_id)
-        fish_item = next((item for item in aquarium_items if item.fish_id == fish_id and item.quality_level == quality_level), None)
-        if not fish_item or fish_item.quantity < quantity:
+        matching_items = [
+            item for item in aquarium_items
+            if item.fish_id == fish_id and item.quality_level == quality_level and item.quantity > 0
+        ]
+        if sum(item.quantity for item in matching_items) < quantity:
             quality_label = "✨高品质" if quality_level == 1 else "普通"
             return {"success": False, "message": f"水族箱中没有足够的{quality_label}{fish_template.name}"}
 
-        # 从水族箱移除鱼，添加到鱼塘（保持品质）
-        self.inventory_repo.remove_fish_from_aquarium(user_id, fish_id, quantity, quality_level)
-        self.inventory_repo.add_fish_to_inventory(user_id, fish_id, quantity, quality_level)
+        # 逐批转移，避免不同历史单价在进出水族箱时被混合。
+        remaining = quantity
+        for fish_item in matching_items:
+            if remaining <= 0:
+                break
+            transfer_quantity = min(remaining, fish_item.quantity)
+            self.inventory_repo.remove_fish_from_aquarium(
+                user_id, fish_id, transfer_quantity, quality_level, fish_item.unit_value
+            )
+            self.inventory_repo.add_fish_to_inventory(
+                user_id, fish_id, transfer_quantity, quality_level, fish_item.unit_value
+            )
+            remaining -= transfer_quantity
 
         quality_label = "✨高品质" if quality_level == 1 else "普通"
         return {

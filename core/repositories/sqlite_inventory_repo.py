@@ -9,6 +9,7 @@ from astrbot.api import logger
 from .abstract_repository import AbstractInventoryRepository
 from ..domain.models import UserFishInventoryItem, UserAquariumItem, UserRodInstance, UserAccessoryInstance, FishingZone, AquariumUpgrade, UserShowcaseItem
 from ..database.connection_manager import DatabaseConnectionManager
+from ..utils import calculate_fish_unit_value
 
 
 class InsufficientFishQuantityError(Exception):
@@ -35,7 +36,8 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
             user_id=row['user_id'],
             fish_id=row['fish_id'],
             quality_level=row['quality_level'],
-            quantity=row['quantity']
+            quantity=row['quantity'],
+            unit_value=int(row['unit_value'] or 0) if 'unit_value' in row.keys() else 0,
         )
 
     def _row_to_aquarium_item(self, row: sqlite3.Row) -> Optional[UserAquariumItem]:
@@ -46,8 +48,17 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
             fish_id=row['fish_id'],
             quality_level=row['quality_level'],
             quantity=row['quantity'],
-            added_at=row['added_at']
+            added_at=row['added_at'],
+            unit_value=int(row['unit_value'] or 0) if 'unit_value' in row.keys() else 0,
         )
+
+    @staticmethod
+    def _default_fish_unit_value(cursor: sqlite3.Cursor, fish_id: int, quality_level: int) -> int:
+        cursor.execute("SELECT base_value FROM fish WHERE fish_id = ?", (fish_id,))
+        row = cursor.fetchone()
+        if not row:
+            return 0
+        return calculate_fish_unit_value(int(row[0]), quality_level, 0.0)
 
     def _row_to_aquarium_upgrade(self, row: sqlite3.Row) -> Optional[AquariumUpgrade]:
         return None if not row else AquariumUpgrade(**row)
@@ -105,12 +116,17 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
     def get_fish_inventory(self, user_id: str) -> List[UserFishInventoryItem]:
         with self._connection_manager.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT user_id, fish_id, quality_level, quantity FROM user_fish_inventory WHERE user_id = ? AND quantity > 0", (user_id,))
+            cursor.execute("""
+                SELECT user_id, fish_id, quality_level, unit_value, quantity
+                FROM user_fish_inventory
+                WHERE user_id = ? AND quantity > 0
+                ORDER BY fish_id, quality_level, unit_value
+            """, (user_id,))
             return [self._row_to_fish_item(row) for row in cursor.fetchall()]
 
     def get_fish_inventory_value(self, user_id: str, rarity: Optional[int] = None) -> int:
         query = """
-            SELECT SUM(f.base_value * ufi.quantity * (1 + ufi.quality_level))
+            SELECT SUM(ufi.unit_value * ufi.quantity)
             FROM user_fish_inventory ufi
             JOIN fish f ON ufi.fish_id = f.fish_id
             WHERE ufi.user_id = ?
@@ -126,14 +142,26 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
             result = cursor.fetchone()
             return result[0] if result and result[0] is not None else 0
 
-    def add_fish_to_inventory(self, user_id: str, fish_id: int, quantity: int = 1, quality_level: int = 0) -> None:
+    def add_fish_to_inventory(
+        self,
+        user_id: str,
+        fish_id: int,
+        quantity: int = 1,
+        quality_level: int = 0,
+        unit_value: Optional[int] = None,
+    ) -> None:
         with self._connection_manager.get_connection() as conn:
             cursor = conn.cursor()
+            if quantity <= 0:
+                return
+            if unit_value is None:
+                unit_value = self._default_fish_unit_value(cursor, fish_id, quality_level)
             cursor.execute("""
-                INSERT INTO user_fish_inventory (user_id, fish_id, quality_level, quantity)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(user_id, fish_id, quality_level) DO UPDATE SET quantity = quantity + excluded.quantity
-            """, (user_id, fish_id, quality_level, quantity))
+                INSERT INTO user_fish_inventory (user_id, fish_id, quality_level, unit_value, quantity)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, fish_id, quality_level, unit_value)
+                DO UPDATE SET quantity = quantity + excluded.quantity
+            """, (user_id, fish_id, quality_level, int(unit_value), quantity))
             conn.commit()
 
     def clear_fish_inventory(self, user_id: str, rarity: Optional[int] = None) -> None:
@@ -162,12 +190,12 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
             cursor = conn.cursor()
             cursor.execute("BEGIN TRANSACTION")
             try:
-                # 查询所有数量大于1的鱼及其价值，包含品质信息
+                # 每个鱼种/品质总共保留一条，按单价最低的批次保留，其他批次全部出售。
                 cursor.execute("""
-                    SELECT ufi.fish_id, ufi.quantity, ufi.quality_level, f.base_value, f.name
+                    SELECT ufi.rowid, ufi.fish_id, ufi.quantity, ufi.quality_level, ufi.unit_value
                     FROM user_fish_inventory ufi
-                    JOIN fish f ON ufi.fish_id = f.fish_id
-                    WHERE ufi.user_id = ? AND ufi.quantity > 1
+                    WHERE ufi.user_id = ? AND ufi.quantity > 0
+                    ORDER BY ufi.fish_id, ufi.quality_level, ufi.unit_value, ufi.rowid
                 """, (user_id,))
 
                 items_to_sell = cursor.fetchall()
@@ -176,17 +204,23 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
                     conn.rollback()
                     return 0
 
+                kept_groups = set()
                 for item in items_to_sell:
-                    sell_qty = item["quantity"] - 1
-                    # 高品质鱼按双倍价值计算
-                    sold_value += sell_qty * item["base_value"] * (1 + item["quality_level"])
-
-                # 将所有数量大于1的鱼更新为1
-                cursor.execute("""
-                    UPDATE user_fish_inventory
-                    SET quantity = 1
-                    WHERE user_id = ? AND quantity > 1
-                """, (user_id,))
+                    group = (item["fish_id"], item["quality_level"])
+                    keep_qty = 1 if group not in kept_groups else 0
+                    kept_groups.add(group)
+                    sell_qty = max(0, item["quantity"] - keep_qty)
+                    sold_value += sell_qty * item["unit_value"]
+                    if keep_qty:
+                        cursor.execute(
+                            "UPDATE user_fish_inventory SET quantity = 1 WHERE rowid = ?",
+                            (item["rowid"],),
+                        )
+                    else:
+                        cursor.execute(
+                            "DELETE FROM user_fish_inventory WHERE rowid = ?",
+                            (item["rowid"],),
+                        )
 
                 conn.commit()
             except sqlite3.Error:
@@ -596,16 +630,47 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
             cursor.execute("DELETE FROM user_accessories WHERE accessory_instance_id = ?", (accessory_instance_id,))
             conn.commit()
             
-    def update_fish_quantity(self, user_id: str, fish_id: int, delta: int, quality_level: int = 0) -> None:
-        """更新用户鱼类库存中特定鱼的数量（可增可减），并确保数量不小于0。"""
+    def update_fish_quantity(
+        self,
+        user_id: str,
+        fish_id: int,
+        delta: int,
+        quality_level: int = 0,
+        unit_value: Optional[int] = None,
+    ) -> None:
+        """更新鱼塘数量；未指定单价时按单价升序从多个批次扣除。"""
+        if delta == 0:
+            return
+        if delta > 0:
+            self.add_fish_to_inventory(user_id, fish_id, delta, quality_level, unit_value)
+            return
+
+        remaining = -delta
         with self._connection_manager.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO user_fish_inventory (user_id, fish_id, quality_level, quantity)
-                VALUES (?, ?, ?, MAX(0, ?))
-                ON CONFLICT(user_id, fish_id, quality_level) DO UPDATE SET quantity = MAX(0, quantity + ?)
-            """, (user_id, fish_id, quality_level, delta, delta))
-            # 删除数量为0的行，保持数据整洁
+            if unit_value is not None:
+                cursor.execute("""
+                    UPDATE user_fish_inventory
+                    SET quantity = MAX(0, quantity - ?)
+                    WHERE user_id = ? AND fish_id = ? AND quality_level = ? AND unit_value = ?
+                """, (remaining, user_id, fish_id, quality_level, int(unit_value)))
+            else:
+                cursor.execute("""
+                    SELECT rowid, quantity
+                    FROM user_fish_inventory
+                    WHERE user_id = ? AND fish_id = ? AND quality_level = ? AND quantity > 0
+                    ORDER BY unit_value, rowid
+                """, (user_id, fish_id, quality_level))
+                for row in cursor.fetchall():
+                    if remaining <= 0:
+                        break
+                    deduct = min(remaining, row["quantity"])
+                    cursor.execute(
+                        "UPDATE user_fish_inventory SET quantity = quantity - ? WHERE rowid = ?",
+                        (deduct, row["rowid"]),
+                    )
+                    remaining -= deduct
+
             cursor.execute("DELETE FROM user_fish_inventory WHERE user_id = ? AND quantity <= 0", (user_id,))
             conn.commit()
 
@@ -908,16 +973,17 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
         with self._connection_manager.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT user_id, fish_id, quality_level, quantity, added_at 
+                SELECT user_id, fish_id, quality_level, unit_value, quantity, added_at
                 FROM user_aquarium 
                 WHERE user_id = ? AND quantity > 0
+                ORDER BY fish_id, quality_level, unit_value
             """, (user_id,))
             return [self._row_to_aquarium_item(row) for row in cursor.fetchall()]
 
     def get_aquarium_inventory_value(self, user_id: str, rarity: Optional[int] = None) -> int:
         """获取用户水族箱中鱼的总价值"""
         query = """
-            SELECT SUM(f.base_value * ua.quantity * (1 + ua.quality_level))
+            SELECT SUM(ua.unit_value * ua.quantity)
             FROM user_aquarium ua
             JOIN fish f ON ua.fish_id = f.fish_id
             WHERE ua.user_id = ?
@@ -933,48 +999,97 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
             result = cursor.fetchone()
             return result[0] if result and result[0] is not None else 0
 
-    def add_fish_to_aquarium(self, user_id: str, fish_id: int, quantity: int = 1, quality_level: int = 0) -> None:
+    def add_fish_to_aquarium(
+        self,
+        user_id: str,
+        fish_id: int,
+        quantity: int = 1,
+        quality_level: int = 0,
+        unit_value: Optional[int] = None,
+    ) -> None:
         """向用户水族箱添加鱼"""
         with self._connection_manager.get_connection() as conn:
             cursor = conn.cursor()
+            if quantity <= 0:
+                return
+            if unit_value is None:
+                unit_value = self._default_fish_unit_value(cursor, fish_id, quality_level)
             cursor.execute("""
-                INSERT INTO user_aquarium (user_id, fish_id, quality_level, quantity, added_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(user_id, fish_id, quality_level) DO UPDATE SET 
+                INSERT INTO user_aquarium (user_id, fish_id, quality_level, unit_value, quantity, added_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id, fish_id, quality_level, unit_value) DO UPDATE SET
                     quantity = quantity + excluded.quantity
-            """, (user_id, fish_id, quality_level, quantity))
+            """, (user_id, fish_id, quality_level, int(unit_value), quantity))
             conn.commit()
 
-    def remove_fish_from_aquarium(self, user_id: str, fish_id: int, quantity: int = 1, quality_level: int = 0) -> None:
+    def remove_fish_from_aquarium(
+        self,
+        user_id: str,
+        fish_id: int,
+        quantity: int = 1,
+        quality_level: int = 0,
+        unit_value: Optional[int] = None,
+    ) -> None:
         """从用户水族箱移除鱼
         Raises InsufficientFishQuantityError if not enough fish to remove.
         """
         with self._connection_manager.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE user_aquarium 
-                SET quantity = quantity - ?
-                WHERE user_id = ? AND fish_id = ? AND quality_level = ? AND quantity >= ?
-            """, (quantity, user_id, fish_id, quality_level, quantity))
-            
-            if cursor.rowcount == 0:
+            if unit_value is not None:
+                cursor.execute("""
+                    UPDATE user_aquarium
+                    SET quantity = quantity - ?
+                    WHERE user_id = ? AND fish_id = ? AND quality_level = ?
+                      AND unit_value = ? AND quantity >= ?
+                """, (quantity, user_id, fish_id, quality_level, int(unit_value), quantity))
+                removed = cursor.rowcount
+            else:
+                cursor.execute("""
+                    SELECT rowid, quantity
+                    FROM user_aquarium
+                    WHERE user_id = ? AND fish_id = ? AND quality_level = ? AND quantity > 0
+                    ORDER BY unit_value, rowid
+                """, (user_id, fish_id, quality_level))
+                rows = cursor.fetchall()
+                available = sum(row["quantity"] for row in rows)
+                removed = 1 if available >= quantity else 0
+                if removed:
+                    remaining = quantity
+                    for row in rows:
+                        if remaining <= 0:
+                            break
+                        deduct = min(remaining, row["quantity"])
+                        cursor.execute(
+                            "UPDATE user_aquarium SET quantity = quantity - ? WHERE rowid = ?",
+                            (deduct, row["rowid"]),
+                        )
+                        remaining -= deduct
+
+            if not removed:
                 raise InsufficientFishQuantityError(
                     f"用户 {user_id} 水族箱中没有足够的鱼类 {fish_id}（品质等级 {quality_level}）来移除 {quantity} 个"
                 )
             
             # 如果数量为0或负数，删除记录
             cursor.execute("""
-                DELETE FROM user_aquarium 
+                DELETE FROM user_aquarium
                 WHERE user_id = ? AND fish_id = ? AND quality_level = ? AND quantity <= 0
             """, (user_id, fish_id, quality_level))
             conn.commit()
 
-    def update_aquarium_fish_quantity(self, user_id: str, fish_id: int, delta: int, quality_level: int = 0) -> None:
+    def update_aquarium_fish_quantity(
+        self,
+        user_id: str,
+        fish_id: int,
+        delta: int,
+        quality_level: int = 0,
+        unit_value: Optional[int] = None,
+    ) -> None:
         """更新用户水族箱中鱼的数量"""
         if delta > 0:
-            self.add_fish_to_aquarium(user_id, fish_id, delta, quality_level)
+            self.add_fish_to_aquarium(user_id, fish_id, delta, quality_level, unit_value)
         elif delta < 0:
-            self.remove_fish_from_aquarium(user_id, fish_id, -delta, quality_level)
+            self.remove_fish_from_aquarium(user_id, fish_id, -delta, quality_level, unit_value)
 
     def clear_aquarium_inventory(self, user_id: str, rarity: Optional[int] = None) -> None:
         """清空用户水族箱"""
@@ -1064,9 +1179,10 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
             cursor = conn.cursor()
             cursor.execute("BEGIN TRANSACTION")
             try:
-                # 1. 获取鱼塘中特定品质鱼的数量
+                # 1. 获取鱼塘中特定品质鱼的总数量（库存现在可能拆成多个单价批次）
                 cursor.execute("""
-                    SELECT quantity FROM user_fish_inventory 
+                    SELECT COALESCE(SUM(quantity), 0) AS quantity
+                    FROM user_fish_inventory
                     WHERE user_id = ? AND fish_id = ? AND quality_level = ?
                 """, (user_id, fish_id, quality_level))
                 pond_row = cursor.fetchone()
@@ -1078,7 +1194,7 @@ class SqliteInventoryRepository(AbstractInventoryRepository):
                 if pond_count > 0:
                     deduct_from_pond = min(pond_count, remaining_qty)
                     if deduct_from_pond > 0:
-                        # 调用现有的 update_fish_quantity 方法来处理扣除和删除空记录
+                        # 未指定单价时按批次扣除，保持总数量正确。
                         self.update_fish_quantity(user_id, fish_id, -deduct_from_pond, quality_level)
                         remaining_qty -= deduct_from_pond
                 

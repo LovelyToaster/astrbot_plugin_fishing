@@ -454,7 +454,9 @@ class FishingService:
                 self.inventory_repo.update_fish_quantity(
                     user.user_id,
                     random_fish_stack.fish_id,
-                    -1
+                    -1,
+                    random_fish_stack.quality_level,
+                    random_fish_stack.unit_value,
                 )
 
         if fish_template.rarity >= 4:
@@ -469,7 +471,13 @@ class FishingService:
                 self.inventory_repo.update_fishing_zone(zone)
 
         # 6. 更新数据库
-        self.inventory_repo.add_fish_to_inventory(user.user_id, fish_template.fish_id, quantity=total_catches, quality_level=quality_level)
+        self.inventory_repo.add_fish_to_inventory(
+            user.user_id,
+            fish_template.fish_id,
+            quantity=total_catches,
+            quality_level=quality_level,
+            unit_value=final_unit_value,
+        )
 
         # 更新用户统计数据
         user.total_fishing_count += total_catches

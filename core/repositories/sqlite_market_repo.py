@@ -63,6 +63,7 @@ class SqliteMarketRepository(AbstractMarketRepository):
             market_id, user_id, seller_nickname, item_type, item_id, item_instance_id,
             item_name, item_description, quantity, price, listed_at_str, refine_level, is_anonymous, expires_at_str
         ) = row
+        unit_value = row[14] if len(row) > 14 else None
         
         return MarketListing(
             market_id=market_id,
@@ -79,6 +80,7 @@ class SqliteMarketRepository(AbstractMarketRepository):
             refine_level=refine_level,
             is_anonymous=bool(is_anonymous),
             expires_at=datetime.fromisoformat(expires_at_str) if expires_at_str else None,
+            unit_value=unit_value,
         )
 
 
@@ -95,6 +97,7 @@ class SqliteMarketRepository(AbstractMarketRepository):
             select_instance_id = "m.item_instance_id" if "item_instance_id" in cols else "NULL AS item_instance_id"
             select_is_anonymous = "m.is_anonymous" if "is_anonymous" in cols else "0 AS is_anonymous"
             select_quality_level = "m.quality_level" if "quality_level" in cols else "0 AS quality_level"
+            select_unit_value = "m.unit_value" if "unit_value" in cols else "NULL AS unit_value"
 
             query = f"""
                 SELECT
@@ -110,6 +113,7 @@ class SqliteMarketRepository(AbstractMarketRepository):
                     m.listed_at,
                     {select_is_anonymous},
                     {select_quality_level},
+                    {select_unit_value},
                     CASE
                         WHEN m.item_type = 'rod' THEN r.name
                         WHEN m.item_type = 'accessory' THEN a.name
@@ -159,6 +163,7 @@ class SqliteMarketRepository(AbstractMarketRepository):
             select_instance_id = "m.item_instance_id" if "item_instance_id" in cols else "NULL AS item_instance_id"
             select_is_anonymous = "m.is_anonymous" if "is_anonymous" in cols else "0 AS is_anonymous"
             select_quality_level = "m.quality_level" if "quality_level" in cols else "0 AS quality_level"
+            select_unit_value = "m.unit_value" if "unit_value" in cols else "NULL AS unit_value"
             
             # 构建WHERE条件
             where_conditions = []
@@ -222,6 +227,7 @@ class SqliteMarketRepository(AbstractMarketRepository):
                     m.listed_at,
                     {select_is_anonymous},
                     {select_quality_level},
+                    {select_unit_value},
                     CASE
                         WHEN m.item_type = 'rod' THEN r.name
                         WHEN m.item_type = 'accessory' THEN a.name
@@ -272,11 +278,11 @@ class SqliteMarketRepository(AbstractMarketRepository):
             cols = [row[1] for row in cursor.fetchall()]
             
             # 构建动态的INSERT语句
-            if "is_anonymous" in cols and "item_instance_id" in cols and "quality_level" in cols:
+            if "is_anonymous" in cols and "item_instance_id" in cols and "quality_level" in cols and "unit_value" in cols:
                 # 新版本：包含所有字段
                 cursor.execute("""
-                    INSERT INTO market (user_id, item_type, item_id, item_name, item_description, quantity, price, listed_at, refine_level, is_anonymous, item_instance_id, quality_level, expires_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO market (user_id, item_type, item_id, item_name, item_description, quantity, price, listed_at, refine_level, is_anonymous, item_instance_id, quality_level, unit_value, expires_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     listing.user_id,
                     listing.item_type,
@@ -290,6 +296,7 @@ class SqliteMarketRepository(AbstractMarketRepository):
                     listing.is_anonymous,
                     listing.item_instance_id,
                     getattr(listing, 'quality_level', 0),
+                    getattr(listing, 'unit_value', None),
                     listing.expires_at
                 ))
             elif "is_anonymous" in cols and "item_instance_id" in cols:

@@ -1035,11 +1035,33 @@ class GameMechanicsService:
             )
             return {"success": False, "message": "发生内部错误，无法识别被偷的鱼"}
 
-        # 4. 执行偷窃事务（保持品质属性）
-        self.inventory_repo.update_fish_quantity(victim_id, stolen_fish_item.fish_id, delta=-1, quality_level=stolen_fish_item.quality_level)
-        self.inventory_repo.add_fish_to_inventory(thief_id, stolen_fish_item.fish_id, quantity=1, quality_level=stolen_fish_item.quality_level)
+        # 4. 按被偷者在本次操作时的加成固化转移后的单价。
+        victim_coins_chance = get_user_coins_chance_by_repo(
+            self.inventory_repo, self.item_template_repo, victim_id
+        )
+        victim_actual_value = calculate_fish_unit_value(
+            stolen_fish_template.base_value,
+            stolen_fish_item.quality_level,
+            victim_coins_chance,
+        )
 
-        # 5. 更新偷窃者的CD时间
+        # 5. 执行偷窃事务（保持品质与结算单价）
+        self.inventory_repo.update_fish_quantity(
+            victim_id,
+            stolen_fish_item.fish_id,
+            delta=-1,
+            quality_level=stolen_fish_item.quality_level,
+            unit_value=stolen_fish_item.unit_value,
+        )
+        self.inventory_repo.add_fish_to_inventory(
+            thief_id,
+            stolen_fish_item.fish_id,
+            quantity=1,
+            quality_level=stolen_fish_item.quality_level,
+            unit_value=victim_actual_value,
+        )
+
+        # 6. 更新偷窃者的CD时间
         thief.last_steal_time = now
         self.user_repo.update(thief)
 
@@ -1106,41 +1128,31 @@ class GameMechanicsService:
                 # 刚破盾的情况（本次穿透成功减层至0），无需额外计数
                 pass
         # ========== 盾破计数结束（steal_fish）==========
-        # 6. 生成成功消息
-        # 获取双方装备金币加成
-        thief_coins_chance = get_user_coins_chance_by_repo(self.inventory_repo, self.item_template_repo, thief_id)
-        victim_coins_chance = get_user_coins_chance_by_repo(self.inventory_repo, self.item_template_repo, victim_id)
-
+        # 7. 生成成功消息。转移后的鱼沿用被偷者本次操作时的单价。
         # 构建品质信息
         quality_info = "（✨高品质）" if stolen_fish_item.quality_level == 1 else ""
-        thief_actual_value = calculate_fish_unit_value(
-            stolen_fish_template.base_value, stolen_fish_item.quality_level, thief_coins_chance
-        )
-        victim_actual_value = calculate_fish_unit_value(
-            stolen_fish_template.base_value, stolen_fish_item.quality_level, victim_coins_chance
-        )
 
-        # 写入偷鱼统计日志（记录偷窃者实际获得的价值）
+        # 写入偷鱼统计日志（记录转移鱼的固定结算价值）
         self._add_statistics_log(
             user_id=thief_id,
             target_id=victim_id,
             action_type="steal",
             success=True,
             fish_count=1,
-            coin_amount=thief_actual_value,
+            coin_amount=victim_actual_value,
             details={
                 "fish_id": stolen_fish_item.fish_id,
                 "fish_name": stolen_fish_template.name,
                 "rarity": stolen_fish_template.rarity,
                 "quality_level": stolen_fish_item.quality_level,
-                "value": thief_actual_value,
+                "value": victim_actual_value,
                 "victim_value": victim_actual_value,
             },
         )
 
         return {
             "success": True,
-            "message": f"✅ 成功从【{victim.nickname}】的鱼塘里偷到了一条{stolen_fish_template.rarity}★【{stolen_fish_template.name}】{quality_info}！价值 {thief_actual_value} 金币{shield_recovery_msg}",
+            "message": f"✅ 成功从【{victim.nickname}】的鱼塘里偷到了一条{stolen_fish_template.rarity}★【{stolen_fish_template.name}】{quality_info}！价值 {victim_actual_value} 金币{shield_recovery_msg}",
             "thief_nickname": thief.nickname or thief.user_id,
             "victim_notification": {
                 "stolen_fish_name": stolen_fish_template.name,
@@ -1640,10 +1652,10 @@ class GameMechanicsService:
         from collections import Counter
         stolen_fish_counts = Counter(final_stolen_fish)
 
-        # 9. 执行电鱼事务并计算双方总价值
-        # 获取双方装备金币加成
-        thief_coins_chance = get_user_coins_chance_by_repo(self.inventory_repo, self.item_template_repo, thief_id)
-        victim_coins_chance = get_user_coins_chance_by_repo(self.inventory_repo, self.item_template_repo, victim_id)
+        # 9. 执行电鱼事务：所有转移鱼按照被偷者本次操作时的加成固化单价。
+        victim_coins_chance = get_user_coins_chance_by_repo(
+            self.inventory_repo, self.item_template_repo, victim_id
+        )
 
         stolen_summary = []
         total_value_thief = 0
@@ -1651,7 +1663,6 @@ class GameMechanicsService:
 
         for (fish_id, quality_level), count in stolen_fish_counts.items():
             self.inventory_repo.update_fish_quantity(victim_id, fish_id, delta=-count, quality_level=quality_level)
-            self.inventory_repo.add_fish_to_inventory(thief_id, fish_id, quantity=count, quality_level=quality_level)
 
             template = fish_templates.get(fish_id)
             if template:
@@ -1659,11 +1670,18 @@ class GameMechanicsService:
                 name_str = f"【{q_label}{template.name}】" if q_label else f"【{template.name}】"
                 stolen_summary.append(f"{name_str}x{count}")
 
-                thief_unit_val = calculate_fish_unit_value(template.base_value, quality_level, thief_coins_chance)
-                total_value_thief += thief_unit_val * count
-
-                victim_unit_val = calculate_fish_unit_value(template.base_value, quality_level, victim_coins_chance)
-                total_value_victim += victim_unit_val * count
+                transfer_unit_val = calculate_fish_unit_value(
+                    template.base_value, quality_level, victim_coins_chance
+                )
+                self.inventory_repo.add_fish_to_inventory(
+                    thief_id,
+                    fish_id,
+                    quantity=count,
+                    quality_level=quality_level,
+                    unit_value=transfer_unit_val,
+                )
+                total_value_thief += transfer_unit_val * count
+                total_value_victim += transfer_unit_val * count
 
         # 10. 更新电鱼的CD时间并保存
         thief.last_electric_fish_time = now

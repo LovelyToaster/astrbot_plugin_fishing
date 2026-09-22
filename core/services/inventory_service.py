@@ -112,16 +112,13 @@ class InventoryService:
         获取用户的鱼塘信息（鱼类库存）。
         """
         inventory_items = self.inventory_repo.get_fish_inventory(user_id)
-        coins_chance = self.get_user_coins_chance(user_id)
-
         # 为了丰富信息，可以从模板仓储获取鱼的详细信息
         enriched_items = []
         for item in inventory_items:
             fish_template = self.item_template_repo.get_fish_by_id(item.fish_id)
             if fish_template:
-                # 计算实际价值（含品质翻倍与当前装备金币加成）
-                actual_value = self.calculate_fish_unit_value(
-                    fish_template.base_value, item.quality_level, coins_chance
+                actual_value = item.unit_value or self.calculate_fish_unit_value(
+                    fish_template.base_value, item.quality_level, 0.0
                 )
 
                 enriched_items.append({
@@ -302,20 +299,22 @@ class InventoryService:
         if not fish_inventory:
             return {"success": False, "message": "❌ 你没有可以卖出的鱼"}
         
-        coins_chance = self.get_user_coins_chance(user_id)
-
-        # 计算总价值（含品质与装备金币加成）和卖出鱼数
+        # 库存单价已经在鱼获得/转移时固化，出售时不再读取当前装备。
         total_value = 0
         total_fish_count = 0
         sold_details = {"普通": 0, "✨高品质": 0}
+        kept_groups = set()
 
         for item in fish_inventory:
             fish_template = self.item_template_repo.get_fish_by_id(item.fish_id)
             if fish_template:
-                sell_qty = max(0, item.quantity - 1) if keep_one else item.quantity
+                group = (item.fish_id, item.quality_level)
+                keep_qty = 1 if keep_one and group not in kept_groups else 0
+                kept_groups.add(group)
+                sell_qty = max(0, item.quantity - keep_qty)
                 if sell_qty > 0:
-                    unit_val = self.calculate_fish_unit_value(
-                        fish_template.base_value, item.quality_level, coins_chance
+                    unit_val = item.unit_value or self.calculate_fish_unit_value(
+                        fish_template.base_value, item.quality_level, 0.0
                     )
                     total_value += unit_val * sell_qty
                     total_fish_count += sell_qty
@@ -380,7 +379,6 @@ class InventoryService:
             return {"success": False, "message": "用户不存在"}
 
         fish_inventory = self.inventory_repo.get_fish_inventory(user_id)
-        coins_chance = self.get_user_coins_chance(user_id)
         total_value = 0
         total_fish_count = 0
         sold_details = {"普通": 0, "✨高品质": 0}
@@ -389,8 +387,8 @@ class InventoryService:
             fish_id = item.fish_id
             fish_info = self.item_template_repo.get_fish_by_id(fish_id)
             if fish_info and fish_info.rarity == rarity:
-                unit_val = self.calculate_fish_unit_value(
-                    fish_info.base_value, item.quality_level, coins_chance
+                unit_val = item.unit_value or self.calculate_fish_unit_value(
+                    fish_info.base_value, item.quality_level, 0.0
                 )
                 item_value = unit_val * item.quantity
                 total_value += item_value
@@ -463,8 +461,6 @@ class InventoryService:
         if not fish_inventory:
             return {"success": False, "message": "❌ 你的鱼塘是空的，没有任何鱼可以卖"}
 
-        coins_chance = self.get_user_coins_chance(user_id)
-
         # 3. 计算总价值并记录详情
         total_value = 0
         sold_fish_details = {}  # 用于记录每个稀有度卖出的数量和价值
@@ -472,8 +468,8 @@ class InventoryService:
         for item in fish_inventory:
             fish_template = self.item_template_repo.get_fish_by_id(item.fish_id)
             if fish_template and fish_template.rarity in unique_rarities:
-                unit_val = self.calculate_fish_unit_value(
-                    fish_template.base_value, item.quality_level, coins_chance
+                unit_val = item.unit_value or self.calculate_fish_unit_value(
+                    fish_template.base_value, item.quality_level, 0.0
                 )
                 value = unit_val * item.quantity
                 total_value += value
@@ -564,14 +560,13 @@ class InventoryService:
         }
 
         # 1. 卖出所有鱼类
-        coins_chance = self.get_user_coins_chance(user_id)
         fish_inventory = self.inventory_repo.get_fish_inventory(user_id)
         for item in fish_inventory:
             fish_id = item.fish_id
             fish_info = self.item_template_repo.get_fish_by_id(fish_id)
             if fish_info:
-                unit_val = self.calculate_fish_unit_value(
-                    fish_info.base_value, item.quality_level, coins_chance
+                unit_val = item.unit_value or self.calculate_fish_unit_value(
+                    fish_info.base_value, item.quality_level, 0.0
                 )
                 fish_value = unit_val * item.quantity
                 total_value += fish_value

@@ -839,15 +839,13 @@ class UserService:
                 return {"success": False, "message": "用户不存在"}
             
             # 获取鱼类库存
-            coins_chance = get_user_coins_chance_by_repo(self.inventory_repo, self.item_template_repo, user_id)
             fish_inventory = self.inventory_repo.get_fish_inventory(user_id)
             fish_data = []
             for item in fish_inventory:
                 fish_template = self.item_template_repo.get_fish_by_id(item.fish_id)
                 if fish_template:
-                    # 计算实际价值（含品质翻倍与装备金币加成）
-                    actual_value = calculate_fish_unit_value(
-                        fish_template.base_value, item.quality_level, coins_chance
+                    actual_value = item.unit_value or calculate_fish_unit_value(
+                        fish_template.base_value, item.quality_level, 0.0
                     )
                     fish_data.append({
                         "fish_id": item.fish_id,
@@ -981,7 +979,15 @@ class UserService:
                 fish_template = self.item_template_repo.get_fish_by_id(item_id)
                 if not fish_template:
                     return {"success": False, "message": "鱼类不存在"}
-                self.inventory_repo.add_fish_to_inventory(user_id, item_id, quantity, quality_level)
+                coins_chance = get_user_coins_chance_by_repo(
+                    self.inventory_repo, self.item_template_repo, user_id
+                )
+                unit_value = calculate_fish_unit_value(
+                    fish_template.base_value, quality_level, coins_chance
+                )
+                self.inventory_repo.add_fish_to_inventory(
+                    user_id, item_id, quantity, quality_level, unit_value
+                )
                 quality_label = "✨高品质" if quality_level == 1 else "普通"
                 return {"success": True, "message": f"成功添加 {quality_label}{fish_template.name} x{quantity}"}
                 
@@ -1045,16 +1051,22 @@ class UserService:
                     return {"success": False, "message": "鱼类不存在"}
                 
                 fish_inventory = self.inventory_repo.get_fish_inventory(user_id)
-                current_quantity = 0
-                for item in fish_inventory:
-                    if item.fish_id == item_id:
-                        current_quantity = item.quantity
-                        break
+                selected_item = next(
+                    (item for item in fish_inventory if item.fish_id == item_id and item.quality_level == 0),
+                    None,
+                )
+                current_quantity = selected_item.quantity if selected_item else 0
                 
                 if current_quantity < quantity:
                     return {"success": False, "message": f"库存不足，当前只有 {current_quantity} 个"}
                 
-                self.inventory_repo.update_fish_quantity(user_id, item_id, -quantity, 0)
+                self.inventory_repo.update_fish_quantity(
+                    user_id,
+                    item_id,
+                    -quantity,
+                    0,
+                    selected_item.unit_value,
+                )
                 return {"success": True, "message": f"成功移除 {fish_template.name} x{quantity}"}
                 
             elif item_type == "rod":

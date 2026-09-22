@@ -143,9 +143,8 @@ class FeatureExtractor:
                 COALESCE(u.coins, 0) AS target_coins,
                 (SELECT COALESCE(SUM(quantity), 0) FROM user_fish_inventory ufi
                  WHERE ufi.user_id = u.user_id) AS target_fish_count,
-                (SELECT COALESCE(SUM(ufi.quantity * f.base_value * (1 + COALESCE(ufi.quality_level, 0))), 0)
+                (SELECT COALESCE(SUM(ufi.quantity * ufi.unit_value), 0)
                  FROM user_fish_inventory ufi
-                 JOIN fish f ON f.fish_id = ufi.fish_id
                  WHERE ufi.user_id = u.user_id) AS target_fish_value,
                 (SELECT MAX(r.rarity) FROM user_rods ur
                  JOIN rods r ON ur.rod_id = r.rod_id

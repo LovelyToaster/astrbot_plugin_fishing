@@ -28,7 +28,7 @@ from ..domain.models import (
     UserCatEventRecord,
     UserBuff,
 )
-from ..utils import get_now
+from ..utils import get_now, calculate_fish_unit_value, get_user_coins_chance_by_repo
 
 
 class CatService:
@@ -161,7 +161,9 @@ class CatService:
         cat.last_feed_time = get_now()
         cat.exp += exp
 
-        self.inventory_repo.update_fish_quantity(user_id, fish_id, -1, user_fish.quality_level)
+        self.inventory_repo.update_fish_quantity(
+            user_id, fish_id, -1, user_fish.quality_level, user_fish.unit_value
+        )
 
         level_up, did_star_up_from_level, new_level = self._check_level_up(cat)
         if did_star_up_from_level or cat.star >= 10:
@@ -310,7 +312,13 @@ class CatService:
         elif reward_type == "fish" and reward_value:
             fish = self._roll_fish_by_zone(user_id)
             if fish:
-                self.inventory_repo.add_fish_to_inventory(user_id, fish.fish_id, quantity=1, quality_level=0)
+                coins_chance = get_user_coins_chance_by_repo(
+                    self.inventory_repo, self.item_template_repo, user_id
+                )
+                unit_value = calculate_fish_unit_value(fish.base_value, 0, coins_chance)
+                self.inventory_repo.add_fish_to_inventory(
+                    user_id, fish.fish_id, quantity=1, quality_level=0, unit_value=unit_value
+                )
                 reward_info["fish"] = {"fish_id": fish.fish_id, "name": fish.name, "rarity": fish.rarity}
             else:
                 logger.warning("无法获取鱼")
@@ -593,6 +601,7 @@ class CatService:
                     fish_by_rarity[rarity].append({
                         "fish_id": fish.fish_id,
                         "quality_level": fish.quality_level,
+                        "unit_value": fish.unit_value,
                         "name": fish_tpl.name,
                         "quantity": fish.quantity
                     })
@@ -662,7 +671,11 @@ class CatService:
                 self.cat_repo.update_cat_instance(cat)
 
                 self.inventory_repo.update_fish_quantity(
-                    user_id, fish_to_use["fish_id"], -1, fish_to_use["quality_level"]
+                    user_id,
+                    fish_to_use["fish_id"],
+                    -1,
+                    fish_to_use["quality_level"],
+                    fish_to_use["unit_value"],
                 )
                 fish_to_use["quantity"] -= 1
 
