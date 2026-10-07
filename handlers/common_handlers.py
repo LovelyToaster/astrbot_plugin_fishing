@@ -58,6 +58,7 @@ async def state(self: "FishingPlugin", event: AstrMessageEvent):
         user_id,
         self.bank_service,
         notification_repo=self.notification_repo,
+        hextech_service=self.hextech_service,
     )
 
     if not user_data:

@@ -1,4 +1,6 @@
 import os
+import math
+from ..core.utils import format_remaining_time
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -388,12 +390,7 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, avatar_conf
     # 右列第二行：偷鱼CD信息
     steal_cd = user_data.get('steal_cooldown_remaining', 0)
     if steal_cd > 0:
-        hours = steal_cd // 3600
-        minutes = (steal_cd % 3600) // 60
-        if hours > 0:
-            cd_text = f"偷鱼冷却: {hours}小时{minutes}分钟"
-        else:
-            cd_text = f"偷鱼冷却: {minutes}分钟"
+        cd_text = f"偷鱼冷却: {format_remaining_time(steal_cd)}"
         cd_color = text_muted
     else:
         cd_text = "准备好偷鱼了！"
@@ -403,8 +400,7 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, avatar_conf
     # 第三行左列: 电鱼CD
     ef_cd = user_data.get('electric_fish_cooldown_remaining', 0)
     if ef_cd > 0:
-        h, m = ef_cd // 3600, (ef_cd % 3600) // 60
-        ef_cd_text = f"电鱼冷却: {h}小时{m}分钟" if h > 0 else f"电鱼冷却: {m}分钟"
+        ef_cd_text = f"电鱼冷却: {format_remaining_time(ef_cd)}"
         ef_cd_color = text_muted
     else: 
         ef_cd_text = "准备好电鱼了！"
@@ -492,7 +488,7 @@ async def draw_state_image(user_data: Dict[str, Any], data_dir: str, avatar_conf
     return image
 
 
-def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo, buff_repo, game_config, user_id: str, bank_service=None, notification_repo=None) -> Optional[Dict[str, Any]]:
+def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo, buff_repo, game_config, user_id: str, bank_service=None, notification_repo=None, hextech_service=None) -> Optional[Dict[str, Any]]:
     """
     获取用户状态数据
     
@@ -509,6 +505,7 @@ def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo,
         包含用户状态信息的字典，如果用户不存在则返回None
     """
     from ..core.utils import get_now, get_today, calculate_fish_unit_value
+    from ..core.services.hextech_game_balance import steal_cooldown
     
     # 获取用户基本信息
     user = user_repo.get_by_id(user_id)
@@ -585,6 +582,8 @@ def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo,
     steal_cooldown_remaining = 0
     if user.last_steal_time:
         cooldown_seconds = game_config.get("steal", {}).get("cooldown_seconds", 14400)
+        card = hextech_service.get_selected_card(user_id) if hextech_service else None
+        cooldown_seconds, _ = steal_cooldown(cooldown_seconds, card)
         now = get_now()
         # 处理时区问题
         if user.last_steal_time.tzinfo is None and now.tzinfo is not None:
@@ -594,7 +593,7 @@ def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo,
         
         elapsed = (now - user.last_steal_time).total_seconds()
         if elapsed < cooldown_seconds:
-            steal_cooldown_remaining = int(cooldown_seconds - elapsed)
+            steal_cooldown_remaining = math.ceil(cooldown_seconds - elapsed)
 
     # 计算电鱼CD时间
     electric_fish_cooldown_remaining = 0
@@ -608,7 +607,7 @@ def get_user_state_data(user_repo, inventory_repo, item_template_repo, log_repo,
         
         elapsed = (now - user.last_electric_fish_time).total_seconds()
         if elapsed < cooldown_seconds:
-            electric_fish_cooldown_remaining = int(cooldown_seconds - elapsed)
+            electric_fish_cooldown_remaining = math.ceil(cooldown_seconds - elapsed)
     
     # 获取当前称号
     current_title = None

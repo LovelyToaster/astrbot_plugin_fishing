@@ -16,7 +16,7 @@ from ..repositories.abstract_repository import (
     AbstractUserBuffRepository,
 )
 from ..domain.models import WipeBombLog, User
-from ...core.utils import get_now, get_today, calculate_fish_unit_value, get_user_coins_chance_by_repo
+from ...core.utils import get_now, get_today, format_remaining_time, calculate_fish_unit_value, get_user_coins_chance_by_repo
 from .hextech_game_balance import (
     WIPE_RETURN_CAPS,
     budgeted_chance,
@@ -1052,7 +1052,7 @@ class GameMechanicsService:
                             "success": True, "status": "ongoing",
                             "message": (f"[CQ:at,qq={user_id}] ❌ 糟糕，挑战失败了！\n\n"
                                         f"但你拥有【{protection_item.name}】，可以抵消本次失败。\n"
-                                        f"⏱️ 请在60秒内选择：\n"
+                                        f"⏱️ 请在{config.get('timeout_seconds', 60)}秒内选择：\n"
                                         f"回复【继续】：消耗道具并【直接通关】本层\n"
                                         f"回复【放弃】：不消耗道具，接受失败并结束游戏")
                         }
@@ -1224,7 +1224,7 @@ class GameMechanicsService:
             now = now.replace(tzinfo=last_steal_time.tzinfo)
 
         if last_steal_time and (now - last_steal_time).total_seconds() < cooldown_seconds:
-            remaining = int(cooldown_seconds - (now - last_steal_time).total_seconds())
+            remaining = math.ceil(cooldown_seconds - (now - last_steal_time).total_seconds())
             self._add_statistics_log(
                 user_id=thief_id,
                 target_id=victim_id,
@@ -1232,7 +1232,7 @@ class GameMechanicsService:
                 success=False,
                 details={"reason": "cooldown", "remaining_seconds": remaining},
             )
-            return {"success": False, "message": f"偷鱼冷却中，请等待 {remaining // 60} 分钟后再试"}
+            return {"success": False, "message": f"偷鱼冷却中，请等待 {format_remaining_time(remaining)}后再试"}
 
         # ========== 守护海灵破盾机制（三段式）==========
         protection_buff = self.buff_repo.get_active_by_user_and_type(
@@ -1790,7 +1790,7 @@ class GameMechanicsService:
             now = now.replace(tzinfo=last_electric_fish_time.tzinfo)
     
         if last_electric_fish_time and (now - last_electric_fish_time).total_seconds() < cooldown_seconds:
-            remaining = int(cooldown_seconds - (now - last_electric_fish_time).total_seconds())
+            remaining = math.ceil(cooldown_seconds - (now - last_electric_fish_time).total_seconds())
             self._add_statistics_log(
                 user_id=thief_id,
                 target_id=victim_id,
@@ -1798,7 +1798,7 @@ class GameMechanicsService:
                 success=False,
                 details={"reason": "cooldown", "remaining_seconds": remaining},
             )
-            return {"success": False, "message": f"电鱼冷却中，请等待 {remaining // 60} 分钟后再试"}
+            return {"success": False, "message": f"电鱼冷却中，请等待 {format_remaining_time(remaining)}后再试"}
     
         # ========== 守护海灵破盾机制（三段式）==========
         notification_events = []

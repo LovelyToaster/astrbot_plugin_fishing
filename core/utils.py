@@ -1,4 +1,5 @@
 import random
+import math
 from datetime import datetime, date, timedelta, timezone
 from typing import List, Tuple, Any
 
@@ -10,6 +11,21 @@ def get_now() -> datetime:
 
 def get_today() -> date:
     return get_now().date()
+
+def format_remaining_time(seconds: float) -> str:
+    """向上取整剩余冷却，避免尚未到期时显示为零。"""
+    total = max(0, math.ceil(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours}小时")
+    if minutes:
+        parts.append(f"{minutes}分钟")
+    if seconds or not parts:
+        parts.append(f"{seconds}秒")
+    return "".join(parts)
+
 
 def get_last_reset_time(reset_hour: int = 0) -> datetime:
     """
