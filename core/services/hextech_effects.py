@@ -133,8 +133,14 @@ _EXPANSION_CATALOG = (
     ("P16", "阶梯庆典", "prismatic", "wheel", "命运之轮达到第三、第六或第十层后结算，领取最高档庆典奖励。"),
 )
 
+for _id, _name, _pool, _operation, _text in _EXPANSION_CATALOG:
+    EFFECTS[_id] = _entry(_id, _name, _pool, _text, EXPANSION_GROUPS[_operation])
+    EFFECTS[_id]["operation"] = _operation
 for _definition in EFFECTS.values():
     _definition.setdefault("operation", "fishing")
+
+EFFECTS["C33"] = _entry("C33", "海克斯福袋", "common", "随机获得额外海克斯，赠卡的额外强度为普通卡的25%。")
+EFFECTS["C33"]["operation"] = "bonus"
 
 
 EXPANSION_IDS = frozenset(effect_id for group in EXPANSION_GROUPS.values() for effect_id in group)

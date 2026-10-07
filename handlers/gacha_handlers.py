@@ -1,9 +1,34 @@
 from astrbot.api.event import filter, AstrMessageEvent
 from ..utils import parse_target_user_id, to_percentage, safe_datetime_handler
 from typing import TYPE_CHECKING
+from ..core.services.hextech_effects import EFFECTS
 
 if TYPE_CHECKING:
     from ..main import FishingPlugin
+
+
+def _reward_quantity_text(item):
+    quantity = int(item.get("quantity", 1) or 1)
+    return f" × {quantity}" if item.get("type") in ("bait", "item") and quantity > 1 else ""
+
+
+def _hextech_gacha_summary(result):
+    effect = result.get("hextech_effect") or {}
+    effect_id = effect.get("id")
+    definition = EFFECTS.get(effect_id, {})
+    name = definition.get("name", "海克斯")
+    refund = int(result.get("hextech_refund_coins", 0) or 0)
+    bonus = int(effect.get("bonus_coins_total", 0) or 0)
+    count = int(effect.get("triggered_count", 0) or 0)
+    if refund:
+        return f"\n✨ {name}：返还 {refund:,} 金币。"
+    if bonus:
+        return f"\n✨ {name}：额外获得 {bonus:,} 金币（已计入奖励）。"
+    if count:
+        return f"\n✨ {name}：本次触发 {count} 次。"
+    if effect_id == "G13" and effect.get("weight_multiplier", 1) > 1:
+        return f"\n✨ {name}已生效。"
+    return ""
 
 
 def _get_field(obj, key, default=None):
@@ -83,12 +108,13 @@ async def gacha(self: "FishingPlugin", event: AstrMessageEvent):
                 if item.get("type") == "coins":
                     message += f"⭐ {item['quantity']} 金币！\n"
                 else:
-                    message += f"{'⭐' * item.get('rarity', 1)} {item['name']}\n"
+                    message += f"{'⭐' * item.get('rarity', 1)} {item['name']}{_reward_quantity_text(item)}\n"
             pity = result.get("pity", 0)
             pity_threshold = result.get("pity_threshold", 0)
             if pity_threshold > 0:
                 remaining = max(0, pity_threshold - pity)
                 message += f"\n🎯 距离保底还有 {remaining} 抽"
+            message += _hextech_gacha_summary(result)
             yield event.plain_result(message)
         else:
             yield event.plain_result(f"❌ 抽卡失败：{result['message']}")
@@ -140,12 +166,13 @@ async def ten_gacha(self: "FishingPlugin", event: AstrMessageEvent):
                 if item.get("type") == "coins":
                     message += f"⭐ {item['quantity']} 金币！\n"
                 else:
-                    message += f"{'⭐' * item.get('rarity', 1)} {item['name']}\n"
+                    message += f"{'⭐' * item.get('rarity', 1)} {item['name']}{_reward_quantity_text(item)}\n"
             pity = result.get("pity", 0)
             pity_threshold = result.get("pity_threshold", 0)
             if pity_threshold > 0:
                 remaining = max(0, pity_threshold - pity)
                 message += f"\n🎯 距离保底还有 {remaining} 抽"
+            message += _hextech_gacha_summary(result)
             yield event.plain_result(message)
         else:
             yield event.plain_result(f"❌ 抽卡失败：{result['message']}")
@@ -194,11 +221,12 @@ async def multi_ten_gacha(self: "FishingPlugin", event: AstrMessageEvent, pool_i
         else:
             name = item['name']
             rarity = item.get('rarity', 1)
-            item_counts[name] = item_counts.get(name, 0) + 1
+            quantity = int(item.get("quantity", 1) or 1) if item.get("type") in ("bait", "item") else 1
+            item_counts[name] = item_counts.get(name, 0) + quantity
             r = rarity if rarity <= 10 else 10
             rarity_counts[r] = rarity_counts.get(r, 0) + 1
 
-    message = f"🎉 {times}次十连抽卡完成！共获得 {total_items} 件物品：\n\n"
+    message = f"🎉 {times}次十连抽卡完成！共获得 {total_items} 份奖励：\n\n"
     message += f"【💰 消耗统计】\n消耗{cost_type}：{total_cost:,}{cost_unit}\n\n"
 
     message += "【📊 稀有度统计】\n"
@@ -219,6 +247,7 @@ async def multi_ten_gacha(self: "FishingPlugin", event: AstrMessageEvent, pool_i
         remaining = max(0, pity_threshold - pity)
         message += f"\n🎯 距离保底还有 {remaining} 抽"
 
+    message += _hextech_gacha_summary(result)
     yield event.plain_result(message)
 
 
@@ -325,6 +354,10 @@ async def wipe_bomb(self: "FishingPlugin", event: AstrMessageEvent):
             else:
                 message += f"💥 你投入 {contribution} 金币，获得了 {multiplier_formatted} 倍奖励！\n 💰 奖励金额：{reward} 金币（亏损：- {abs(profit)})\n"
             message += f"剩余擦弹次数：{remaining_today} 次\n"
+            hextech_bonus = int(result.get("hextech_bonus", 0) or 0)
+            if hextech_bonus:
+                effect_name = EFFECTS.get(result.get("hextech_effect_id"), {}).get("name", "海克斯")
+                message += f"✨ {effect_name}：额外奖励 {hextech_bonus:,} 金币（已计入奖励金额）。\n"
 
             # 如果触发了抑制模式，添加通知信息
             if "suppression_notice" in result:

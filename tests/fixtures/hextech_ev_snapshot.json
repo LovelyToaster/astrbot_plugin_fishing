@@ -1,0 +1,2151 @@
+{
+  "captured_on": "2026-09-30",
+  "pools": [
+    {
+      "name": "稀有补给池",
+      "paid": true,
+      "entries": [
+        {
+          "item_type": "accessory",
+          "rarity": 2,
+          "weight": 35,
+          "reference_value": 400
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 2,
+          "weight": 35,
+          "reference_value": 400
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 2,
+          "weight": 35,
+          "reference_value": 400
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 2,
+          "weight": 35,
+          "reference_value": 400
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 2,
+          "weight": 35,
+          "reference_value": 400
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 12,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 12,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 12,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 12,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 12,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 12,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 12,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 3,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 3,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 3,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 3,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 3,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 3,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 3,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 2,
+          "weight": 60,
+          "reference_value": 160
+        },
+        {
+          "item_type": "bait",
+          "rarity": 2,
+          "weight": 60,
+          "reference_value": 400
+        },
+        {
+          "item_type": "bait",
+          "rarity": 2,
+          "weight": 60,
+          "reference_value": 240
+        },
+        {
+          "item_type": "bait",
+          "rarity": 3,
+          "weight": 25,
+          "reference_value": 500
+        },
+        {
+          "item_type": "bait",
+          "rarity": 3,
+          "weight": 25,
+          "reference_value": 400
+        },
+        {
+          "item_type": "bait",
+          "rarity": 3,
+          "weight": 25,
+          "reference_value": 1250
+        },
+        {
+          "item_type": "bait",
+          "rarity": 4,
+          "weight": 8,
+          "reference_value": 1500
+        },
+        {
+          "item_type": "bait",
+          "rarity": 4,
+          "weight": 8,
+          "reference_value": 2100
+        },
+        {
+          "item_type": "bait",
+          "rarity": 4,
+          "weight": 8,
+          "reference_value": 3000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 2,
+          "weight": 35,
+          "reference_value": 400
+        },
+        {
+          "item_type": "rod",
+          "rarity": 2,
+          "weight": 35,
+          "reference_value": 400
+        },
+        {
+          "item_type": "rod",
+          "rarity": 2,
+          "weight": 35,
+          "reference_value": 400
+        },
+        {
+          "item_type": "rod",
+          "rarity": 2,
+          "weight": 35,
+          "reference_value": 400
+        },
+        {
+          "item_type": "rod",
+          "rarity": 2,
+          "weight": 35,
+          "reference_value": 400
+        },
+        {
+          "item_type": "rod",
+          "rarity": 3,
+          "weight": 12,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "rod",
+          "rarity": 3,
+          "weight": 12,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "rod",
+          "rarity": 3,
+          "weight": 12,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "rod",
+          "rarity": 3,
+          "weight": 12,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "rod",
+          "rarity": 3,
+          "weight": 12,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "rod",
+          "rarity": 4,
+          "weight": 3,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 4,
+          "weight": 3,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 4,
+          "weight": 3,
+          "reference_value": 4000
+        }
+      ]
+    },
+    {
+      "name": "传说补给池",
+      "paid": true,
+      "entries": [
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 35,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 35,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 35,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 35,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 35,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 35,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 35,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 10,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 10,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 10,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 10,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 10,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 10,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 10,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 2,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 2,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 2,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 2,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 2,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 2,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 2,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 3,
+          "weight": 70,
+          "reference_value": 500
+        },
+        {
+          "item_type": "bait",
+          "rarity": 3,
+          "weight": 70,
+          "reference_value": 400
+        },
+        {
+          "item_type": "bait",
+          "rarity": 3,
+          "weight": 70,
+          "reference_value": 1250
+        },
+        {
+          "item_type": "bait",
+          "rarity": 4,
+          "weight": 20,
+          "reference_value": 1500
+        },
+        {
+          "item_type": "bait",
+          "rarity": 4,
+          "weight": 20,
+          "reference_value": 2100
+        },
+        {
+          "item_type": "bait",
+          "rarity": 4,
+          "weight": 20,
+          "reference_value": 3000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 5,
+          "weight": 6,
+          "reference_value": 2500
+        },
+        {
+          "item_type": "bait",
+          "rarity": 5,
+          "weight": 6,
+          "reference_value": 2500
+        },
+        {
+          "item_type": "bait",
+          "rarity": 5,
+          "weight": 6,
+          "reference_value": 3000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 5,
+          "weight": 6,
+          "reference_value": 3200
+        },
+        {
+          "item_type": "rod",
+          "rarity": 3,
+          "weight": 35,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "rod",
+          "rarity": 3,
+          "weight": 35,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "rod",
+          "rarity": 3,
+          "weight": 35,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "rod",
+          "rarity": 3,
+          "weight": 35,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "rod",
+          "rarity": 3,
+          "weight": 35,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "rod",
+          "rarity": 4,
+          "weight": 10,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 4,
+          "weight": 10,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 4,
+          "weight": 10,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 5,
+          "weight": 2,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 5,
+          "weight": 2,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 5,
+          "weight": 2,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 5,
+          "weight": 2,
+          "reference_value": 10000
+        }
+      ]
+    },
+    {
+      "name": "新手补给池",
+      "paid": true,
+      "entries": [
+        {
+          "item_type": "accessory",
+          "rarity": 2,
+          "weight": 15,
+          "reference_value": 400
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 2,
+          "weight": 15,
+          "reference_value": 400
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 2,
+          "weight": 15,
+          "reference_value": 400
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 2,
+          "weight": 15,
+          "reference_value": 400
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 2,
+          "weight": 15,
+          "reference_value": 400
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 2,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 2,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 2,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 2,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 2,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 2,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 3,
+          "weight": 2,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "bait",
+          "rarity": 1,
+          "weight": 180,
+          "reference_value": 50
+        },
+        {
+          "item_type": "bait",
+          "rarity": 1,
+          "weight": 180,
+          "reference_value": 80
+        },
+        {
+          "item_type": "bait",
+          "rarity": 1,
+          "weight": 180,
+          "reference_value": 80
+        },
+        {
+          "item_type": "bait",
+          "rarity": 2,
+          "weight": 30,
+          "reference_value": 160
+        },
+        {
+          "item_type": "bait",
+          "rarity": 2,
+          "weight": 30,
+          "reference_value": 400
+        },
+        {
+          "item_type": "bait",
+          "rarity": 2,
+          "weight": 30,
+          "reference_value": 240
+        },
+        {
+          "item_type": "bait",
+          "rarity": 3,
+          "weight": 5,
+          "reference_value": 500
+        },
+        {
+          "item_type": "bait",
+          "rarity": 3,
+          "weight": 5,
+          "reference_value": 400
+        },
+        {
+          "item_type": "bait",
+          "rarity": 3,
+          "weight": 5,
+          "reference_value": 1250
+        },
+        {
+          "item_type": "rod",
+          "rarity": 1,
+          "weight": 100,
+          "reference_value": 100
+        },
+        {
+          "item_type": "rod",
+          "rarity": 2,
+          "weight": 15,
+          "reference_value": 400
+        },
+        {
+          "item_type": "rod",
+          "rarity": 2,
+          "weight": 15,
+          "reference_value": 400
+        },
+        {
+          "item_type": "rod",
+          "rarity": 2,
+          "weight": 15,
+          "reference_value": 400
+        },
+        {
+          "item_type": "rod",
+          "rarity": 2,
+          "weight": 15,
+          "reference_value": 400
+        },
+        {
+          "item_type": "rod",
+          "rarity": 2,
+          "weight": 15,
+          "reference_value": 400
+        },
+        {
+          "item_type": "rod",
+          "rarity": 3,
+          "weight": 5,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "rod",
+          "rarity": 3,
+          "weight": 5,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "rod",
+          "rarity": 3,
+          "weight": 5,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "rod",
+          "rarity": 3,
+          "weight": 5,
+          "reference_value": 1200
+        },
+        {
+          "item_type": "rod",
+          "rarity": 3,
+          "weight": 5,
+          "reference_value": 1200
+        }
+      ]
+    },
+    {
+      "name": "道具补给池",
+      "paid": true,
+      "entries": [
+        {
+          "item_type": "item",
+          "rarity": 1,
+          "weight": 255,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 2,
+          "weight": 180,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 2,
+          "weight": 100,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 3,
+          "weight": 50,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 3,
+          "weight": 50,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 3,
+          "weight": 50,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 3,
+          "weight": 50,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 3,
+          "weight": 50,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 3,
+          "weight": 25,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 3,
+          "weight": 25,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 4,
+          "weight": 25,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 4,
+          "weight": 25,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 4,
+          "weight": 25,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 4,
+          "weight": 25,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 4,
+          "weight": 10,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 5,
+          "weight": 10,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 5,
+          "weight": 10,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 5,
+          "weight": 10,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 5,
+          "weight": 10,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 5,
+          "weight": 5,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 6,
+          "weight": 5,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 6,
+          "weight": 5,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 5,
+          "weight": 10,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 5,
+          "weight": 10,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 6,
+          "weight": 5,
+          "reference_value": null
+        }
+      ]
+    },
+    {
+      "name": "终极补给池",
+      "paid": true,
+      "entries": [
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 30,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 30,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 30,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 30,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 30,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 30,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 4,
+          "weight": 30,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 15,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 15,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 15,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 15,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 15,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 15,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 6,
+          "weight": 10,
+          "reference_value": 20000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 6,
+          "weight": 10,
+          "reference_value": 20000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 6,
+          "weight": 10,
+          "reference_value": 20000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 7,
+          "weight": 5,
+          "reference_value": 50000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 7,
+          "weight": 5,
+          "reference_value": 50000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 15,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 8,
+          "weight": 3,
+          "reference_value": 100000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 8,
+          "weight": 3,
+          "reference_value": 100000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 8,
+          "weight": 3,
+          "reference_value": 100000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 8,
+          "weight": 3,
+          "reference_value": 100000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 4,
+          "weight": 80,
+          "reference_value": 5000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 4,
+          "weight": 80,
+          "reference_value": 7000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 4,
+          "weight": 80,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 5,
+          "weight": 35,
+          "reference_value": 12500
+        },
+        {
+          "item_type": "bait",
+          "rarity": 5,
+          "weight": 35,
+          "reference_value": 12500
+        },
+        {
+          "item_type": "bait",
+          "rarity": 5,
+          "weight": 35,
+          "reference_value": 15000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 5,
+          "weight": 35,
+          "reference_value": 16000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 6,
+          "weight": 20,
+          "reference_value": 18000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 6,
+          "weight": 20,
+          "reference_value": 19500
+        },
+        {
+          "item_type": "bait",
+          "rarity": 6,
+          "weight": 20,
+          "reference_value": 21000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 7,
+          "weight": 10,
+          "reference_value": 30000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 7,
+          "weight": 10,
+          "reference_value": 40000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 4,
+          "weight": 30,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 4,
+          "weight": 30,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 4,
+          "weight": 30,
+          "reference_value": 4000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 5,
+          "weight": 15,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 5,
+          "weight": 15,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 5,
+          "weight": 15,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 5,
+          "weight": 15,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 6,
+          "weight": 10,
+          "reference_value": 20000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 6,
+          "weight": 10,
+          "reference_value": 20000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 6,
+          "weight": 10,
+          "reference_value": 20000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 7,
+          "weight": 5,
+          "reference_value": 50000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 7,
+          "weight": 5,
+          "reference_value": 50000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 8,
+          "weight": 3,
+          "reference_value": 100000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 8,
+          "weight": 3,
+          "reference_value": 100000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 8,
+          "weight": 3,
+          "reference_value": 100000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 8,
+          "weight": 3,
+          "reference_value": 100000
+        }
+      ]
+    },
+    {
+      "name": "签到装备补给池",
+      "paid": true,
+      "entries": [
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 50,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 50,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 50,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 50,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 50,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 50,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 5,
+          "weight": 50,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 6,
+          "weight": 17,
+          "reference_value": 20000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 6,
+          "weight": 17,
+          "reference_value": 20000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 6,
+          "weight": 17,
+          "reference_value": 20000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 7,
+          "weight": 9,
+          "reference_value": 50000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 7,
+          "weight": 9,
+          "reference_value": 50000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 8,
+          "weight": 5,
+          "reference_value": 100000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 8,
+          "weight": 5,
+          "reference_value": 100000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 8,
+          "weight": 5,
+          "reference_value": 100000
+        },
+        {
+          "item_type": "accessory",
+          "rarity": 8,
+          "weight": 5,
+          "reference_value": 100000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 5,
+          "weight": 50,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 5,
+          "weight": 50,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 5,
+          "weight": 50,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 5,
+          "weight": 50,
+          "reference_value": 10000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 6,
+          "weight": 17,
+          "reference_value": 20000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 6,
+          "weight": 17,
+          "reference_value": 20000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 6,
+          "weight": 17,
+          "reference_value": 20000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 7,
+          "weight": 9,
+          "reference_value": 50000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 7,
+          "weight": 9,
+          "reference_value": 50000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 8,
+          "weight": 5,
+          "reference_value": 100000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 8,
+          "weight": 5,
+          "reference_value": 100000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 8,
+          "weight": 5,
+          "reference_value": 100000
+        },
+        {
+          "item_type": "rod",
+          "rarity": 8,
+          "weight": 5,
+          "reference_value": 100000
+        }
+      ]
+    },
+    {
+      "name": "签到道具补给池",
+      "paid": true,
+      "entries": [
+        {
+          "item_type": "bait",
+          "rarity": 5,
+          "weight": 55,
+          "reference_value": 7500
+        },
+        {
+          "item_type": "bait",
+          "rarity": 5,
+          "weight": 55,
+          "reference_value": 12500
+        },
+        {
+          "item_type": "bait",
+          "rarity": 5,
+          "weight": 55,
+          "reference_value": 9000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 5,
+          "weight": 55,
+          "reference_value": 9600
+        },
+        {
+          "item_type": "bait",
+          "rarity": 6,
+          "weight": 28,
+          "reference_value": 12000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 6,
+          "weight": 28,
+          "reference_value": 13000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 6,
+          "weight": 28,
+          "reference_value": 21000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 7,
+          "weight": 12,
+          "reference_value": 15000
+        },
+        {
+          "item_type": "bait",
+          "rarity": 7,
+          "weight": 12,
+          "reference_value": 20000
+        },
+        {
+          "item_type": "item",
+          "rarity": 5,
+          "weight": 60,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 5,
+          "weight": 60,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 5,
+          "weight": 60,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 5,
+          "weight": 60,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 5,
+          "weight": 60,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 5,
+          "weight": 60,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 6,
+          "weight": 28,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 6,
+          "weight": 28,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 5,
+          "weight": 60,
+          "reference_value": null
+        },
+        {
+          "item_type": "item",
+          "rarity": 6,
+          "weight": 28,
+          "reference_value": null
+        }
+      ]
+    }
+  ],
+  "ponds": [
+    [
+      {
+        "rarity": 1,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 74
+      },
+      {
+        "rarity": 1,
+        "quality": 1,
+        "quantity": 2,
+        "transfer_value": 78
+      },
+      {
+        "rarity": 1,
+        "quality": 1,
+        "quantity": 2,
+        "transfer_value": 156
+      },
+      {
+        "rarity": 1,
+        "quality": 0,
+        "quantity": 3,
+        "transfer_value": 61
+      },
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 245
+      },
+      {
+        "rarity": 2,
+        "quality": 1,
+        "quantity": 2,
+        "transfer_value": 746
+      },
+      {
+        "rarity": 2,
+        "quality": 1,
+        "quantity": 3,
+        "transfer_value": 762
+      },
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 219
+      },
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 309
+      },
+      {
+        "rarity": 2,
+        "quality": 1,
+        "quantity": 2,
+        "transfer_value": 269
+      },
+      {
+        "rarity": 3,
+        "quality": 1,
+        "quantity": 3,
+        "transfer_value": 1383
+      },
+      {
+        "rarity": 3,
+        "quality": 1,
+        "quantity": 2,
+        "transfer_value": 1932
+      },
+      {
+        "rarity": 3,
+        "quality": 1,
+        "quantity": 2,
+        "transfer_value": 1302
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 3,
+        "transfer_value": 1406
+      },
+      {
+        "rarity": 3,
+        "quality": 1,
+        "quantity": 3,
+        "transfer_value": 2412
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 601
+      },
+      {
+        "rarity": 4,
+        "quality": 1,
+        "quantity": 3,
+        "transfer_value": 7613
+      },
+      {
+        "rarity": 4,
+        "quality": 0,
+        "quantity": 3,
+        "transfer_value": 6495
+      },
+      {
+        "rarity": 5,
+        "quality": 0,
+        "quantity": 3,
+        "transfer_value": 18486
+      },
+      {
+        "rarity": 5,
+        "quality": 1,
+        "quantity": 2,
+        "transfer_value": 26904
+      },
+      {
+        "rarity": 5,
+        "quality": 1,
+        "quantity": 2,
+        "transfer_value": 38064
+      },
+      {
+        "rarity": 5,
+        "quality": 0,
+        "quantity": 5,
+        "transfer_value": 13970
+      },
+      {
+        "rarity": 5,
+        "quality": 1,
+        "quantity": 2,
+        "transfer_value": 31762
+      },
+      {
+        "rarity": 6,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 109200
+      },
+      {
+        "rarity": 6,
+        "quality": 1,
+        "quantity": 2,
+        "transfer_value": 152880
+      }
+    ],
+    [
+      {
+        "rarity": 1,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 75
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 3,
+        "transfer_value": 1423
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 1406
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 1206
+      },
+      {
+        "rarity": 4,
+        "quality": 1,
+        "quantity": 2,
+        "transfer_value": 12964
+      },
+      {
+        "rarity": 4,
+        "quality": 0,
+        "quantity": 4,
+        "transfer_value": 6518
+      },
+      {
+        "rarity": 4,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 6495
+      },
+      {
+        "rarity": 3,
+        "quality": 1,
+        "quantity": 3,
+        "transfer_value": 2209
+      },
+      {
+        "rarity": 4,
+        "quality": 1,
+        "quantity": 2,
+        "transfer_value": 6499
+      }
+    ],
+    [
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 339
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 796
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 867
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 3,
+        "transfer_value": 1195
+      },
+      {
+        "rarity": 5,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 25678
+      },
+      {
+        "rarity": 4,
+        "quality": 0,
+        "quantity": 3,
+        "transfer_value": 3219
+      }
+    ],
+    [
+      {
+        "rarity": 1,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 59
+      },
+      {
+        "rarity": 1,
+        "quality": 0,
+        "quantity": 1,
+        "transfer_value": 45
+      },
+      {
+        "rarity": 1,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 59
+      },
+      {
+        "rarity": 1,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 72
+      },
+      {
+        "rarity": 1,
+        "quality": 1,
+        "quantity": 2,
+        "transfer_value": 129
+      },
+      {
+        "rarity": 1,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 44
+      },
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 236
+      },
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 239
+      },
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 3,
+        "transfer_value": 311
+      },
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 344
+      },
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 4,
+        "transfer_value": 366
+      },
+      {
+        "rarity": 2,
+        "quality": 1,
+        "quantity": 1,
+        "transfer_value": 312
+      },
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 317
+      },
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 1,
+        "transfer_value": 294
+      },
+      {
+        "rarity": 2,
+        "quality": 1,
+        "quantity": 3,
+        "transfer_value": 519
+      },
+      {
+        "rarity": 2,
+        "quality": 1,
+        "quantity": 2,
+        "transfer_value": 528
+      },
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 6,
+        "transfer_value": 318
+      },
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 129
+      },
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 1,
+        "transfer_value": 348
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 3,
+        "transfer_value": 665
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 743
+      },
+      {
+        "rarity": 3,
+        "quality": 1,
+        "quantity": 3,
+        "transfer_value": 1485
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 4,
+        "transfer_value": 773
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 929
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 1,
+        "transfer_value": 1344
+      },
+      {
+        "rarity": 3,
+        "quality": 1,
+        "quantity": 2,
+        "transfer_value": 2688
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 1,
+        "transfer_value": 1415
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 4,
+        "transfer_value": 830
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 1,
+        "transfer_value": 918
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 962
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 1,
+        "transfer_value": 1352
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 1253
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 4,
+        "transfer_value": 842
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 1368
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 1,
+        "transfer_value": 1352
+      },
+      {
+        "rarity": 3,
+        "quality": 1,
+        "quantity": 3,
+        "transfer_value": 2703
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 1160
+      },
+      {
+        "rarity": 3,
+        "quality": 1,
+        "quantity": 1,
+        "transfer_value": 2319
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 8,
+        "transfer_value": 1218
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 8,
+        "transfer_value": 578
+      },
+      {
+        "rarity": 4,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 4002
+      },
+      {
+        "rarity": 4,
+        "quality": 0,
+        "quantity": 3,
+        "transfer_value": 4073
+      },
+      {
+        "rarity": 4,
+        "quality": 0,
+        "quantity": 3,
+        "transfer_value": 5945
+      },
+      {
+        "rarity": 4,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 4973
+      },
+      {
+        "rarity": 4,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 2850
+      },
+      {
+        "rarity": 4,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 4190
+      },
+      {
+        "rarity": 5,
+        "quality": 0,
+        "quantity": 3,
+        "transfer_value": 22770
+      },
+      {
+        "rarity": 5,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 23400
+      },
+      {
+        "rarity": 5,
+        "quality": 0,
+        "quantity": 4,
+        "transfer_value": 11907
+      },
+      {
+        "rarity": 5,
+        "quality": 1,
+        "quantity": 3,
+        "transfer_value": 36600
+      },
+      {
+        "rarity": 5,
+        "quality": 0,
+        "quantity": 3,
+        "transfer_value": 13433
+      },
+      {
+        "rarity": 5,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 25680
+      },
+      {
+        "rarity": 7,
+        "quality": 0,
+        "quantity": 1,
+        "transfer_value": 135030
+      },
+      {
+        "rarity": 1,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 23
+      },
+      {
+        "rarity": 1,
+        "quality": 0,
+        "quantity": 4,
+        "transfer_value": 30
+      },
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 224
+      },
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 270
+      },
+      {
+        "rarity": 2,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 221
+      },
+      {
+        "rarity": 3,
+        "quality": 1,
+        "quantity": 3,
+        "transfer_value": 1443
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 3,
+        "transfer_value": 941
+      },
+      {
+        "rarity": 3,
+        "quality": 1,
+        "quantity": 2,
+        "transfer_value": 1881
+      },
+      {
+        "rarity": 3,
+        "quality": 1,
+        "quantity": 1,
+        "transfer_value": 2277
+      },
+      {
+        "rarity": 3,
+        "quality": 0,
+        "quantity": 4,
+        "transfer_value": 1062
+      },
+      {
+        "rarity": 4,
+        "quality": 1,
+        "quantity": 3,
+        "transfer_value": 8634
+      },
+      {
+        "rarity": 5,
+        "quality": 0,
+        "quantity": 1,
+        "transfer_value": 15720
+      },
+      {
+        "rarity": 5,
+        "quality": 0,
+        "quantity": 3,
+        "transfer_value": 22650
+      },
+      {
+        "rarity": 6,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 88170
+      },
+      {
+        "rarity": 7,
+        "quality": 1,
+        "quantity": 1,
+        "transfer_value": 532500
+      },
+      {
+        "rarity": 7,
+        "quality": 0,
+        "quantity": 2,
+        "transfer_value": 328800
+      }
+    ]
+  ]
+}

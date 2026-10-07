@@ -1,7 +1,9 @@
 import requests
 import random
 import json
-from typing import Dict, Any, Optional, TYPE_CHECKING
+import math
+from collections import Counter
+from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor
 from astrbot.api import logger
 
@@ -15,6 +17,25 @@ from ..repositories.abstract_repository import (
 )
 from ..domain.models import WipeBombLog, User
 from ...core.utils import get_now, get_today, calculate_fish_unit_value, get_user_coins_chance_by_repo
+from .hextech_game_balance import (
+    WIPE_RETURN_CAPS,
+    budgeted_chance,
+    clamp as clamp_hextech_value,
+    effect_params as get_hextech_effect_params,
+    ev_budget as get_hextech_ev_budget,
+    expected_best_value,
+    expected_conditional_reroll_gain,
+    expected_electric_success_values,
+    expected_wipe_base_payout_ratio,
+    expected_wipe_fill_bonus,
+    expected_wipe_interval_best_bonus,
+    expected_wipe_loss_ratio,
+    expected_wipe_profit_bonus,
+    expected_wipe_reroll_bonus,
+    first_effect as get_first_hextech_effect,
+    valid_card as is_v3_hextech_card,
+    steal_cooldown,
+)
 
 if TYPE_CHECKING:
     from ..repositories.sqlite_user_repo import SqliteUserRepository
@@ -92,12 +113,93 @@ class GameMechanicsService:
         self.buff_repo = buff_repo
         self.config = config
         self.statistics_repo = statistics_repo
+        # Wired by the composition root when daily Hextech is enabled.
+        self.hextech_service = None
         # 服务器级别的抑制状态
         self._server_suppressed = False
         self._last_suppression_date = None
         self.thread_pool = ThreadPoolExecutor(max_workers=5)
         # 命运之轮：跨回合补救期状态缓存 (user_id -> bool)
         self._wof_pending_protection = {}
+
+    def _get_selected_hextech_card(self, actor_id: str) -> Optional[Dict[str, Any]]:
+        """Read only the selected v3 card; legacy daily cards stay inert."""
+        service = getattr(self, "hextech_service", None)
+        if service is None:
+            return None
+        try:
+            card = service.get_selected_card(str(actor_id))
+        except Exception as exc:
+            logger.warning(f"读取海克斯卡失败，继续原游戏结算: actor={actor_id}, error={exc}")
+            return None
+        return card if is_v3_hextech_card(card) else None
+
+    @staticmethod
+    def _hextech_chance_ceiling(params: Dict[str, Any]) -> float:
+        # A missing chance must not turn an incomplete catalog entry into a
+        # guaranteed proc.  Catalog v3 stores chance on every random effect.
+        return clamp_hextech_value(params.get("chance", 0.0))
+
+    @staticmethod
+    def _hextech_budget(card: Optional[Dict[str, Any]], params: Dict[str, Any]) -> float:
+        return get_hextech_ev_budget(card, params) if card else 0.0
+
+    @staticmethod
+    def _log_hextech_change(action: str, actor_id: str, effect_id: str,
+                            details: Dict[str, Any]) -> None:
+        logger.info(
+            f"海克斯游戏效果结算: action={action} actor={actor_id} effect={effect_id} "
+            f"details={json.dumps(details, ensure_ascii=False, sort_keys=True)}"
+        )
+
+    def _get_wof_hextech_card(self, user: User) -> Optional[Dict[str, Any]]:
+        """Load the immutable card snapshot attached to this WOF round."""
+        snapshot = getattr(user, "wof_hextech_snapshot", None)
+        if not snapshot:
+            return None
+        if isinstance(snapshot, dict):
+            card = snapshot
+        else:
+            try:
+                card = json.loads(snapshot)
+            except (TypeError, json.JSONDecodeError):
+                return None
+        return card if is_v3_hextech_card(card) else None
+
+    @staticmethod
+    def _set_wof_hextech_snapshot(user: User, card: Optional[Dict[str, Any]]) -> None:
+        # Store {} when the game starts without a card.  A nullable column is
+        # reserved for legacy in-progress rounds created before this feature.
+        user.wof_hextech_snapshot = json.dumps(card or {}, ensure_ascii=False, separators=(",", ":"))
+
+    @staticmethod
+    def _social_fish_unit_value(item: Any, template: Any, coins_chance: float) -> int:
+        """Transfer the pond's saved price, including its original Hextech bonus."""
+        return calculate_fish_unit_value(template.base_value, item.quality_level, coins_chance) if template else 0
+
+    @staticmethod
+    def _electric_fish_population(
+        victim_inventory: list,
+        fish_templates: Dict[int, Any],
+        victim_coins_chance: float,
+    ) -> Tuple[list, Dict[Tuple[int, int, int], float]]:
+        population = []
+        unit_values: Dict[Tuple[int, int, int], float] = {}
+        for item in victim_inventory:
+            count = max(0, int(getattr(item, "quantity", 0) or 0))
+            if not count:
+                continue
+            fish_key = (int(item.fish_id), int(item.quality_level), int(getattr(item, "unit_value", 0) or 0))
+            template = fish_templates.get(item.fish_id)
+            if template:
+                value = GameMechanicsService._social_fish_unit_value(item, template, victim_coins_chance)
+                is_high = getattr(template, "rarity", 0) >= 5
+            else:
+                value = 0
+                is_high = False
+            unit_values[fish_key] = float(value)
+            population.append((count, float(value), is_high))
+        return population, unit_values
 
     def _add_statistics_log(
         self,
@@ -396,6 +498,169 @@ class GameMechanicsService:
 
         # 6. 计算最终金额并执行事务
         reward_amount = int(contribution_amount * reward_multiplier)
+        raw_reward_amount = reward_amount
+        hextech_bonus = 0
+        hextech_effect_id = None
+        # A forecast is treated as locked knowledge.  Disable every bonus on
+        # that play so it cannot be combined with a predicted interval.
+        if not forecast_info:
+            card = self._get_selected_hextech_card(user_id)
+            wipe_effect = get_first_hextech_effect(
+                card, ("C29", "C30", "S15", "G14", "G15", "P14")
+            )
+            if wipe_effect:
+                hextech_effect_id = wipe_effect.get("id")
+                params = get_hextech_effect_params(wipe_effect)
+                tier_return_cap = WIPE_RETURN_CAPS.get(card.get("tier"), 1.01)
+                return_cap = clamp_hextech_value(
+                    params.get("return_cap", tier_return_cap),
+                    1.0,
+                    tier_return_cap,
+                )
+                base_return = expected_wipe_base_payout_ratio(ranges)
+                # The continuous payout integral is an upper bound for the
+                # integer payout; reserve one coin for per-play floor rounding.
+                remaining_ev = max(0.0, contribution_amount * (return_cap - base_return) - 1.0)
+                remaining_ev *= clamp_hextech_value(params.get("ev_scale", 1.0))
+                configured_chance = self._hextech_chance_ceiling(params)
+                chance = 0.0
+
+                if wipe_effect.get("id") in ("C29", "P14"):
+                    nominal_cap = min(
+                        contribution_amount * clamp_hextech_value(params.get("fraction", 0.20), 0.0, 0.20),
+                        float(params.get("bonus_cap", 20000) or 20000),
+                        20000.0,
+                    )
+                    if wipe_effect.get("id") == "C29":
+                        per_chance_ev = expected_wipe_reroll_bonus(
+                            contribution_amount, ranges, 1.0, nominal_cap
+                        )
+                        chance = budgeted_chance(
+                            1.0, per_chance_ev, remaining_ev, configured_chance
+                        )
+                    else:
+                        # P14 always tries again below 0.5x.  Calibrate its
+                        # per-play extra cap against the remaining EV allowance.
+                        lower_cap, upper_cap = 0.0, max(0.0, nominal_cap)
+                        for _ in range(36):
+                            middle_cap = (lower_cap + upper_cap) / 2.0
+                            expected_bonus = expected_wipe_reroll_bonus(
+                                contribution_amount, ranges, 1.0, middle_cap
+                            )
+                            if expected_bonus <= remaining_ev:
+                                lower_cap = middle_cap
+                            else:
+                                upper_cap = middle_cap
+                        nominal_cap = lower_cap
+                        chance = 1.0
+
+                    if reward_multiplier < 0.5 and chance > 0 and random.random() < chance:
+                        reroll_range = weighted_random_choice(ranges)
+                        reroll_multiplier = random.uniform(reroll_range[0], reroll_range[1])
+                        if reroll_multiplier > reward_multiplier:
+                            reroll_reward = int(contribution_amount * reroll_multiplier)
+                            hextech_bonus = min(
+                                max(0, reroll_reward - raw_reward_amount),
+                                max(0, int(nominal_cap)),
+                            )
+
+                elif wipe_effect.get("id") == "C30":
+                    loss_ratio = expected_wipe_loss_ratio(ranges)
+                    requested_fraction = clamp_hextech_value(params.get("fraction", 0.0))
+                    try:
+                        bonus_cap = max(0.0, float(params.get("bonus_cap", float("inf"))))
+                    except (TypeError, ValueError):
+                        bonus_cap = float("inf")
+                    per_fraction_ev = contribution_amount * loss_ratio
+                    allowed_fraction = (
+                        remaining_ev / per_fraction_ev if per_fraction_ev > 0 else 0.0
+                    )
+                    fraction = min(requested_fraction, allowed_fraction)
+                    if math.isfinite(bonus_cap) and per_fraction_ev > 0:
+                        # The cap only reduces EV, so no additional adjustment is needed.
+                        pass
+                    if reward_amount < contribution_amount and fraction > 0:
+                        hextech_bonus = min(
+                            int((contribution_amount - raw_reward_amount) * fraction),
+                            int(bonus_cap) if math.isfinite(bonus_cap)
+                            else max(0, contribution_amount - raw_reward_amount),
+                        )
+
+                elif wipe_effect.get("id") == "S15":
+                    per_chance_ev = expected_wipe_fill_bonus(
+                        contribution_amount, ranges, 1.0
+                    )
+                    chance = budgeted_chance(
+                        1.0, per_chance_ev, remaining_ev, configured_chance
+                    )
+                    if 0.8 <= reward_multiplier < 1.0 and chance > 0 and random.random() < chance:
+                        hextech_bonus = max(0, contribution_amount - raw_reward_amount)
+
+                elif wipe_effect.get("id") == "G14":
+                    requested_fraction = clamp_hextech_value(params.get("fraction", 0.0))
+                    price_fraction = clamp_hextech_value(params.get("price_fraction", 0.10), 0.0, 1.0)
+                    bonus_cap = min(
+                        contribution_amount * price_fraction,
+                        float(params.get("bonus_cap", 20000) or 20000),
+                        20000.0,
+                    )
+                    lower_fraction, upper_fraction = 0.0, requested_fraction
+                    for _ in range(36):
+                        middle_fraction = (lower_fraction + upper_fraction) / 2.0
+                        expected_bonus = expected_wipe_profit_bonus(
+                            contribution_amount, ranges, middle_fraction, bonus_cap
+                        )
+                        if expected_bonus <= remaining_ev:
+                            lower_fraction = middle_fraction
+                        else:
+                            upper_fraction = middle_fraction
+                    fraction = lower_fraction
+                    if reward_multiplier > 1.0 and fraction > 0:
+                        hextech_bonus = min(
+                            int(max(0, reward_amount - contribution_amount) * fraction),
+                            int(bonus_cap),
+                        )
+
+                elif wipe_effect.get("id") == "G15":
+                    per_chance_ev = expected_wipe_interval_best_bonus(
+                        contribution_amount, ranges, 1.0
+                    )
+                    chance = budgeted_chance(
+                        1.0, per_chance_ev, remaining_ev, configured_chance
+                    )
+                    if (
+                        reward_multiplier >= chosen_range[0]
+                        and reward_multiplier <= chosen_range[1]
+                        and chance > 0
+                        and random.random() < chance
+                    ):
+                        reroll_multiplier = random.uniform(chosen_range[0], chosen_range[1])
+                        if reroll_multiplier > reward_multiplier:
+                            hextech_bonus = max(
+                                0,
+                                int(contribution_amount * reroll_multiplier) - raw_reward_amount,
+                            )
+
+                # Apply the stored (possibly gift-scaled) cap to every effect;
+                # the server's 20,000 coin ceiling is still the upper bound.
+                absolute_cap = int(clamp_hextech_value(params.get("bonus_cap", 20000), 0.0, 20000.0))
+                hextech_bonus = min(max(0, hextech_bonus), absolute_cap)
+                if hextech_bonus > 0:
+                    reward_amount += hextech_bonus
+                    self._log_hextech_change(
+                        "wipe_bomb",
+                        user_id,
+                        hextech_effect_id,
+                        {
+                            "raw_multiplier": reward_multiplier,
+                            "raw_reward": raw_reward_amount,
+                            "bonus": hextech_bonus,
+                            "effective_chance": chance,
+                            "return_cap": return_cap,
+                            "suppressed_table": suppressed,
+                        },
+                    )
+
         profit = reward_amount - contribution_amount
 
         # 检查是否触发服务器级别抑制（开出≥15x高倍率）
@@ -435,6 +700,8 @@ class GameMechanicsService:
                 "contribution_amount": contribution_amount,
                 "reward_multiplier": reward_multiplier,
                 "reward_amount": reward_amount,
+                "raw_reward_amount": raw_reward_amount,
+                "hextech_bonus": hextech_bonus,
                 "profit": profit,
                 "timestamp": log_entry.timestamp.isoformat()
             }
@@ -455,6 +722,9 @@ class GameMechanicsService:
             "contribution": contribution_amount,
             "multiplier": reward_multiplier,
             "reward": reward_amount,
+            "raw_reward": raw_reward_amount,
+            "hextech_bonus": hextech_bonus,
+            "hextech_effect_id": hextech_effect_id,
             "profit": profit,
             # 使用 user 对象中的新计数值来计算剩余次数
             "remaining_today": total_max_attempts - user.wipe_bomb_attempts_today,
@@ -477,6 +747,7 @@ class GameMechanicsService:
         user.last_wof_play_time = get_now()
         user.wof_last_action_time = None
         user.wof_used_protection = False  # 重置保护道具使用状态
+        user.wof_hextech_snapshot = None
         
         # 清除内存标识
         if user.user_id in self._wof_pending_protection:
@@ -491,6 +762,95 @@ class GameMechanicsService:
 
         self.user_repo.update(user)
 
+    def _wof_failure_refund(self, user: User) -> Tuple[int, Optional[str], Dict[str, Any]]:
+        card = self._get_wof_hextech_card(user)
+        effect = get_first_hextech_effect(card, ("C31", "S16", "P15"))
+        if not effect:
+            return 0, None, {}
+        effect_id = effect.get("id")
+        params = get_hextech_effect_params(effect)
+        entry_fee = max(0, int(getattr(user, "wof_entry_fee", 0) or 0))
+        if effect_id in ("C31", "P15") and int(getattr(user, "wof_current_level", 0) or 0) < 3:
+            return 0, effect_id, {"eligible": False, "completed_levels": getattr(user, "wof_current_level", 0)}
+
+        fraction = clamp_hextech_value(params.get("fraction", 0.0), 0.0, 0.30)
+        chance = self._hextech_chance_ceiling(params)
+        if effect_id == "S16":
+            # The chance times refund fraction stays within the card's tier EV
+            # budget, including malformed or over-budget snapshots.
+            budget = self._hextech_budget(card, params)
+            chance = min(chance, budget / fraction) if fraction > 0 else 0.0
+        triggered = chance > 0 and random.random() < chance
+        amount = int(entry_fee * fraction) if triggered else 0
+        details = {
+            "chance": chance,
+            "fraction": fraction,
+            "refund": amount,
+            "completed_levels": int(getattr(user, "wof_current_level", 0) or 0),
+        }
+        if amount > 0:
+            self._log_hextech_change("wheel_of_fate_failure", user.user_id, effect_id, details)
+        return amount, effect_id, details
+
+    def _wof_success_bonus(
+        self, user: User, base_prize: int, *, normal_settlement: bool
+    ) -> Tuple[int, Optional[str], Dict[str, Any]]:
+        if not normal_settlement:
+            return 0, None, {}
+        card = self._get_wof_hextech_card(user)
+        effect = get_first_hextech_effect(card, ("C32", "G16", "P16"))
+        if not effect:
+            return 0, None, {}
+
+        effect_id = effect.get("id")
+        params = get_hextech_effect_params(effect)
+        entry_fee = max(0, int(getattr(user, "wof_entry_fee", 0) or 0))
+        prize = max(0, int(base_prize or 0))
+        profit = max(0, prize - entry_fee)
+        fraction = clamp_hextech_value(params.get("fraction", 0.0), 0.0, 1.0)
+        cap_fraction = clamp_hextech_value(params.get("bonus_cap", 0.0), 0.0, 0.30)
+        bonus = 0
+        params_detail = {"fraction": fraction, "bonus_cap": cap_fraction}
+
+        if effect_id == "C32" and profit > 0:
+            bonus = min(int(profit * fraction), int(entry_fee * cap_fraction))
+        elif effect_id == "G16" and int(getattr(user, "wof_current_level", 0) or 0) >= 5 and profit > 0:
+            bonus = min(int(profit * fraction), int(entry_fee * cap_fraction))
+        elif effect_id == "P16":
+            milestones = params.get("milestones")
+            if not isinstance(milestones, dict):
+                milestones = {"3": 0.10, "6": 0.20, "10": 0.30}
+            completed = int(getattr(user, "wof_current_level", 0) or 0)
+            eligible = []
+            for raw_level, raw_fraction in milestones.items():
+                try:
+                    level = int(raw_level)
+                    refund_fraction = clamp_hextech_value(raw_fraction, 0.0, 0.30)
+                except (TypeError, ValueError):
+                    continue
+                if level <= completed:
+                    eligible.append((level, refund_fraction))
+            if eligible:
+                level, refund_fraction = max(eligible, key=lambda row: row[0])
+                bonus = int(entry_fee * refund_fraction)
+                params_detail = {"milestone": level, "fraction": refund_fraction}
+            else:
+                params_detail = {"milestone": None, "fraction": 0.0}
+        else:
+            params_detail = {"fraction": fraction, "bonus_cap": cap_fraction}
+
+        bonus = min(max(0, bonus), int(entry_fee * 0.30))
+        details = {
+            "base_prize": prize,
+            "profit": profit,
+            "bonus": bonus,
+            "completed_levels": int(getattr(user, "wof_current_level", 0) or 0),
+            **params_detail,
+        }
+        if bonus > 0:
+            self._log_hextech_change("wheel_of_fate_settlement", user.user_id, effect_id, details)
+        return bonus, effect_id, details
+
     def handle_wof_timeout(self, user_id: str) -> Dict[str, Any] | None:
         """检查并处理指定用户的游戏超时。如果处理了超时，返回一个结果字典。"""
         user = self.user_repo.get_by_id(user_id)
@@ -504,16 +864,34 @@ class GameMechanicsService:
         if (now - user.wof_last_action_time).total_seconds() > timeout_seconds:
             is_awaiting = self._wof_pending_protection.get(user_id, False)
             prize = user.wof_current_prize if not is_awaiting else 0
-            self._reset_wof_state(user, cash_out_prize=prize)
+            if is_awaiting:
+                extra, effect_id, effect_details = self._wof_failure_refund(user)
+            else:
+                extra, effect_id, effect_details = self._wof_success_bonus(
+                    user, prize, normal_settlement=True
+                )
+            self._reset_wof_state(user, cash_out_prize=prize + extra)
             
             if is_awaiting:
                 message = f"[CQ:at,qq={user_id}] ⏰ 由于你超时未做出补救决定，挑战已宣告失败！你失去了一切奖金。"
+                if extra > 0:
+                    message += f"\n🎴 海克斯返还 {extra} 金币。"
             else:
                 message = f"[CQ:at,qq={user_id}] ⏰ 你的操作已超时，系统已自动为你结算当前奖金 {prize} 金币。"
+                if extra > 0:
+                    message += f"\n🎴 海克斯额外结算 {extra} 金币。"
                 
             logger.info(f"用户 {user_id} 命运之轮超时，自动结算 {prize} 金币。 (补救期缓存: {is_awaiting})")
             
-            return {"success": True, "status": "timed_out", "message": message}
+            return {
+                "success": True,
+                "status": "timed_out",
+                "message": message,
+                "base_prize": prize,
+                "hextech_bonus": extra,
+                "hextech_effect_id": effect_id,
+                "hextech_details": effect_details,
+            }
         return None
 
     def start_wheel_of_fate(self, user_id: str, entry_fee: int) -> Dict[str, Any]:
@@ -567,6 +945,7 @@ class GameMechanicsService:
         user.wof_current_prize = entry_fee
         user.wof_entry_fee = entry_fee
         user.wof_last_action_time = now
+        self._set_wof_hextech_snapshot(user, self._get_selected_hextech_card(user_id))
         
         # [新功能] 游戏次数加一
         user.wof_plays_today += 1
@@ -667,7 +1046,7 @@ class GameMechanicsService:
                     if inventory.get(protection_item.item_id, 0) > 0:
                         # 触发询问状态，写入服务级内存缓存
                         self._wof_pending_protection[user.user_id] = True
-                        user.wof_last_action_time = get_now() # 刷新超时 60s
+                        user.wof_last_action_time = get_now()  # 重新开始配置的选择超时窗口
                         self.user_repo.update(user)
                         return {
                             "success": True, "status": "ongoing",
@@ -712,11 +1091,17 @@ class GameMechanicsService:
         else:
             # --- 5. 彻底失败逻辑 (无道具或已用过) ---
             lost_amount = user.wof_entry_fee
-            self._reset_wof_state(user)
+            refund, effect_id, effect_details = self._wof_failure_refund(user)
+            self._reset_wof_state(user, cash_out_prize=refund)
+            refund_message = f"\n🎴 海克斯返还 {refund} 金币。" if refund > 0 else ""
             return {
                 "success": True, "status": "lost",
                 "message": (f"[CQ:at,qq={user_id}] 💥 湮灭！ "
-                            f"你在通往第 {user.wof_current_level + 1} 层的路上失败了，失去了入场的 {lost_amount} 金币..."),
+                            f"你在通往第 {user.wof_current_level + 1} 层的路上失败了，失去了入场的 {lost_amount} 金币..."
+                            f"{refund_message}"),
+                "hextech_bonus": refund,
+                "hextech_effect_id": effect_id,
+                "hextech_details": effect_details,
             }
 
     def cash_out_wheel_of_fate(self, user_id: str, is_final_win: bool = False) -> Dict[str, Any]:
@@ -732,8 +1117,13 @@ class GameMechanicsService:
         is_awaiting = self._wof_pending_protection.get(user_id, False)
         prize = user.wof_current_prize if not is_awaiting else 0
         entry = user.wof_entry_fee
-        
-        self._reset_wof_state(user, cash_out_prize=prize)
+        if is_awaiting:
+            extra, effect_id, effect_details = self._wof_failure_refund(user)
+        else:
+            extra, effect_id, effect_details = self._wof_success_bonus(
+                user, prize, normal_settlement=True
+            )
+        self._reset_wof_state(user, cash_out_prize=prize + extra)
 
         if is_final_win:
             message = (f"🏆 [CQ:at,qq={user_id}] 命运的宠儿诞生了！ "
@@ -744,8 +1134,19 @@ class GameMechanicsService:
         else:
             message = (f"✅ [CQ:at,qq={user_id}] 明智的选择！ "
                        f"你成功将 {prize} 金币带回了家，本次游戏净赚 {prize - entry} 金币。")
-        
-        return {"success": True, "status": "cashed_out" if not is_awaiting else "failed", "message": message}
+        if extra > 0:
+            word = "返还" if is_awaiting else "额外结算"
+            message += f"\n🎴 海克斯{word} {extra} 金币。"
+
+        return {
+            "success": True,
+            "status": "cashed_out" if not is_awaiting else "failed",
+            "message": message,
+            "base_prize": prize,
+            "hextech_bonus": extra,
+            "hextech_effect_id": effect_id,
+            "hextech_details": effect_details,
+        }
 
     # ============================================================
     # ================== 新增功能：命运之轮 结束 ==================
@@ -807,6 +1208,13 @@ class GameMechanicsService:
         # 0. 首先检查偷窃CD
         cooldown_seconds = self.config.get("steal", {}).get("cooldown_seconds", 14400) # 默认4小时
         now = get_now()
+        steal_card = self._get_selected_hextech_card(thief_id)
+        steal_effect = get_first_hextech_effect(
+            steal_card, ("C21", "C22", "C23", "S11", "G11", "P11")
+        )
+        steal_effect_id = steal_effect.get("id") if steal_effect else None
+        steal_params = get_hextech_effect_params(steal_effect)
+        cooldown_seconds, cooldown_reduction = steal_cooldown(cooldown_seconds, steal_card)
 
         # 修复时区问题
         last_steal_time = thief.last_steal_time
@@ -1019,7 +1427,93 @@ class GameMechanicsService:
             return {"success": False, "message": f"目标用户【{victim.nickname}】的鱼塘是空的！"}
 
         # 3. 随机选择一条鱼偷取
-        stolen_fish_item = random.choice(victim_inventory)
+        victim_coins_chance = get_user_coins_chance_by_repo(
+            self.inventory_repo, self.item_template_repo, victim_id
+        )
+        steal_values = []
+        steal_templates = []
+        for inventory_item in victim_inventory:
+            template = self.item_template_repo.get_fish_by_id(inventory_item.fish_id)
+            steal_templates.append(template)
+            if template:
+                value = self._social_fish_unit_value(inventory_item, template, victim_coins_chance)
+            else:
+                value = 0
+            steal_values.append(float(value))
+
+        base_value_ev = sum(steal_values) / len(steal_values)
+        configured_chance = self._hextech_chance_ceiling(steal_params)
+        budget = self._hextech_budget(steal_card, steal_params)
+        effective_chance = 0.0
+        target_indexes = []
+        ev_gain_per_trigger = 0.0
+        if steal_effect_id == "C21":
+            ev_gain_per_trigger = expected_best_value(steal_values, 2) - base_value_ev
+        elif steal_effect_id == "C22":
+            upgraded_values = []
+            for inventory_item, template, base_value in zip(
+                victim_inventory, steal_templates, steal_values
+            ):
+                if template and int(inventory_item.quality_level) == 0:
+                    upgraded_values.append(base_value * 2)
+                else:
+                    upgraded_values.append(base_value)
+            ev_gain_per_trigger = sum(
+                max(0.0, upgraded - base)
+                for upgraded, base in zip(upgraded_values, steal_values)
+            ) / len(steal_values)
+        elif steal_effect_id == "S11":
+            ranked_indexes = sorted(range(len(steal_values)), key=lambda index: steal_values[index])
+            target_indexes = ranked_indexes[:max(1, int(math.ceil(len(ranked_indexes) * 0.25)))]
+            ev_gain_per_trigger = expected_conditional_reroll_gain(steal_values, target_indexes)
+        elif steal_effect_id == "G11":
+            ev_gain_per_trigger = expected_best_value(steal_values, 3) - base_value_ev
+        elif steal_effect_id == "P11":
+            rarities = [getattr(template, "rarity", 0) if template else 0 for template in steal_templates]
+            highest_rarity = max(rarities or [0])
+            target_indexes = [index for index, rarity in enumerate(rarities) if rarity == highest_rarity]
+            if target_indexes:
+                target_mean = sum(steal_values[index] for index in target_indexes) / len(target_indexes)
+                ev_gain_per_trigger = target_mean - base_value_ev
+
+        if steal_effect_id in ("C21", "C22", "S11", "G11", "P11"):
+            effective_chance = budgeted_chance(
+                base_value_ev,
+                max(0.0, ev_gain_per_trigger),
+                budget,
+                configured_chance,
+            )
+
+        selected_index = victim_inventory.index(random.choice(victim_inventory))
+        baseline_selected_value = steal_values[selected_index]
+        upgraded_steal = False
+        if steal_effect_id == "C21" and effective_chance > 0 and random.random() < effective_chance:
+            candidate = victim_inventory.index(random.choice(victim_inventory))
+            if steal_values[candidate] > steal_values[selected_index]:
+                selected_index = candidate
+        elif steal_effect_id == "C22" and effective_chance > 0 and random.random() < effective_chance:
+            selected_item = victim_inventory[selected_index]
+            selected_template = steal_templates[selected_index]
+            if selected_template and int(selected_item.quality_level) == 0:
+                upgraded_value = steal_values[selected_index] * 2
+                if upgraded_value > steal_values[selected_index]:
+                    # Keep the original inventory key for removal and store the
+                    # upgraded quality only for the thief's received fish.
+                    upgraded_steal = True
+
+        if steal_effect_id == "S11" and selected_index in target_indexes and effective_chance > 0 and random.random() < effective_chance:
+            candidate = victim_inventory.index(random.choice(victim_inventory))
+            if steal_values[candidate] > steal_values[selected_index]:
+                selected_index = candidate
+        elif steal_effect_id == "G11" and effective_chance > 0 and random.random() < effective_chance:
+            for _ in range(2):
+                candidate = victim_inventory.index(random.choice(victim_inventory))
+                if steal_values[candidate] > steal_values[selected_index]:
+                    selected_index = candidate
+        elif steal_effect_id == "P11" and target_indexes and effective_chance > 0 and random.random() < effective_chance:
+            selected_index = random.choice(target_indexes)
+
+        stolen_fish_item = victim_inventory[selected_index]
         stolen_fish_template = self.item_template_repo.get_fish_by_id(stolen_fish_item.fish_id)
 
         if not stolen_fish_template:
@@ -1035,15 +1529,9 @@ class GameMechanicsService:
             )
             return {"success": False, "message": "发生内部错误，无法识别被偷的鱼"}
 
-        # 4. 按被偷者在本次操作时的加成固化转移后的单价。
-        victim_coins_chance = get_user_coins_chance_by_repo(
-            self.inventory_repo, self.item_template_repo, victim_id
-        )
-        victim_actual_value = calculate_fish_unit_value(
-            stolen_fish_template.base_value,
-            stolen_fish_item.quality_level,
-            victim_coins_chance,
-        )
+        # 4. 保留鱼塘已保存的单价。操作者的品质升级只增加接收价值。
+        victim_loss_value = int(steal_values[selected_index])
+        transfer_value = victim_loss_value * (2 if upgraded_steal else 1)
 
         # 5. 执行偷窃事务（保持品质与结算单价）
         self.inventory_repo.update_fish_quantity(
@@ -1057,8 +1545,8 @@ class GameMechanicsService:
             thief_id,
             stolen_fish_item.fish_id,
             quantity=1,
-            quality_level=stolen_fish_item.quality_level,
-            unit_value=victim_actual_value,
+            quality_level=1 if upgraded_steal else stolen_fish_item.quality_level,
+            unit_value=transfer_value,
         )
 
         # 6. 更新偷窃者的CD时间
@@ -1128,9 +1616,20 @@ class GameMechanicsService:
                 # 刚破盾的情况（本次穿透成功减层至0），无需额外计数
                 pass
         # ========== 盾破计数结束（steal_fish）==========
-        # 7. 生成成功消息。转移后的鱼沿用被偷者本次操作时的单价。
+        # 7. 生成成功消息。转移后的鱼保留原入塘单价。
         # 构建品质信息
-        quality_info = "（✨高品质）" if stolen_fish_item.quality_level == 1 else ""
+        delivered_quality = 1 if upgraded_steal else stolen_fish_item.quality_level
+        quality_info = "（✨高品质）" if delivered_quality == 1 else ""
+        actual_hextech_value_gain = max(0, transfer_value - baseline_selected_value)
+        hextech_message = ""
+        if steal_effect_id == "C23" and cooldown_reduction > 0:
+            hextech_message = f"\n🎴 海克斯缩短偷鱼冷却 {cooldown_reduction * 100:.1f}%（{cooldown_seconds} 秒）。"
+        elif actual_hextech_value_gain > 0:
+            hextech_message = (
+                f"\n🎴 海克斯择优生效，转移价值增加 {actual_hextech_value_gain} 金币。"
+                if not upgraded_steal else
+                f"\n🎴 海克斯将这条鱼提升为高品质，增加 {actual_hextech_value_gain} 金币价值。"
+            )
 
         # 写入偷鱼统计日志（记录转移鱼的固定结算价值）
         self._add_statistics_log(
@@ -1139,27 +1638,55 @@ class GameMechanicsService:
             action_type="steal",
             success=True,
             fish_count=1,
-            coin_amount=victim_actual_value,
+            coin_amount=transfer_value,
             details={
                 "fish_id": stolen_fish_item.fish_id,
                 "fish_name": stolen_fish_template.name,
                 "rarity": stolen_fish_template.rarity,
-                "quality_level": stolen_fish_item.quality_level,
-                "value": victim_actual_value,
-                "victim_value": victim_actual_value,
+                "quality_level": delivered_quality,
+                "value": transfer_value,
+                "victim_value": victim_loss_value,
+                "hextech_effect_id": steal_effect_id,
+                "hextech_effect": {
+                    "chance": effective_chance,
+                    "cooldown_reduction": cooldown_reduction,
+                    "expected_gain_per_trigger": ev_gain_per_trigger,
+                    "delivered_quality_upgrade": upgraded_steal,
+                    "actual_value_gain": actual_hextech_value_gain,
+                } if steal_effect_id else None,
             },
         )
 
+        if steal_effect_id:
+            self._log_hextech_change(
+                "steal_fish",
+                thief_id,
+                steal_effect_id,
+                {
+                    "effective_chance": effective_chance,
+                    "expected_gain_per_trigger": ev_gain_per_trigger,
+                    "cooldown_reduction": cooldown_reduction,
+                    "cooldown_seconds": cooldown_seconds,
+                    "fish_id": stolen_fish_item.fish_id,
+                    "delivered_quality": delivered_quality,
+                    "transfer_value": transfer_value,
+                    "actual_value_gain": actual_hextech_value_gain,
+                },
+            )
+
         return {
             "success": True,
-            "message": f"✅ 成功从【{victim.nickname}】的鱼塘里偷到了一条{stolen_fish_template.rarity}★【{stolen_fish_template.name}】{quality_info}！价值 {victim_actual_value} 金币{shield_recovery_msg}",
+            "message": f"✅ 成功从【{victim.nickname}】的鱼塘里偷到了一条{stolen_fish_template.rarity}★【{stolen_fish_template.name}】{quality_info}！价值 {transfer_value} 金币{shield_recovery_msg}{hextech_message}",
             "thief_nickname": thief.nickname or thief.user_id,
             "victim_notification": {
                 "stolen_fish_name": stolen_fish_template.name,
                 "rarity": stolen_fish_template.rarity,
                 "quality_level": stolen_fish_item.quality_level,
-                "value": victim_actual_value,
+                "value": victim_loss_value,
             },
+            "hextech_effect_id": steal_effect_id,
+            "hextech_effect_chance": effective_chance,
+            "hextech_bonus_value": actual_hextech_value_gain,
             "notification_events": notification_events,
         }
 
@@ -1474,6 +2001,11 @@ class GameMechanicsService:
             )
             return {"success": False, "message": f"目标用户【{victim.nickname}】的鱼塘里鱼太少了（{total_fish_count}/100），电不到什么好东西，还是放过他吧。"}
 
+        fish_templates = None
+        victim_coins_chance = None
+        electric_population = []
+        electric_unit_values = {}
+
         # 3. 计算成功率并进行判定
         # 道具只在通过所有前置检查、即将进行有效随机判定时消耗。
         try:
@@ -1496,15 +2028,116 @@ class GameMechanicsService:
             if boost["consumed"]
             else ""
         )
+
+        electric_card = self._get_selected_hextech_card(thief_id)
+        electric_effect = get_first_hextech_effect(
+            electric_card, ("C24", "C25", "C26", "S12", "G12", "P12")
+        )
+        electric_effect_id = electric_effect.get("id") if electric_effect else None
+        electric_params = get_hextech_effect_params(electric_effect)
+        electric_budget = self._hextech_budget(electric_card, electric_params)
+        electric_chance = self._hextech_chance_ceiling(electric_params)
+        electric_boost_multiplier = boost["fish_count_multiplier"] if boost["consumed"] else 1.0
+        if electric_effect_id:
+            fish_templates = {
+                item.fish_id: self.item_template_repo.get_fish_by_id(item.fish_id)
+                for item in victim_inventory
+            }
+            victim_coins_chance = get_user_coins_chance_by_repo(
+                self.inventory_repo, self.item_template_repo, victim_id
+            )
+            electric_population, electric_unit_values = self._electric_fish_population(
+                victim_inventory, fish_templates, victim_coins_chance
+            )
+            expected_by_quality = expected_electric_success_values(
+                electric_population, total_fish_count, electric_boost_multiplier
+            )
+        else:
+            expected_by_quality = {"great": 0.0, "normal": 0.0, "small": 0.0}
+        expected_success_value = (
+            0.3 * expected_by_quality["great"]
+            + 0.4 * expected_by_quality["normal"]
+            + 0.3 * expected_by_quality["small"]
+        )
+        electric_config = self.config.get("electric_fish", {})
+        try:
+            max_penalty_rate = max(0.0, float(electric_config.get("failure_penalty_max_rate", 0.5)))
+        except (TypeError, ValueError):
+            max_penalty_rate = 0.5
+        expected_failure_penalty = max(0, thief.coins) * max_penalty_rate / 2.0
+        electric_absolute_flow = (
+            final_success_rate * expected_success_value
+            + (1.0 - final_success_rate) * expected_failure_penalty
+        )
+
+        electric_proc_chance = 0.0
+        electric_effect_fraction = 0.0
+        electric_bonus_chance = 0.0
+        if electric_effect_id == "C24":
+            retry_gain_per_proc = (
+                (1.0 - final_success_rate)
+                * final_success_rate
+                * (expected_success_value + expected_failure_penalty)
+            )
+            electric_proc_chance = budgeted_chance(
+                electric_absolute_flow,
+                retry_gain_per_proc,
+                electric_budget,
+                electric_chance,
+            )
+        elif electric_effect_id == "C25":
+            requested_fraction = clamp_hextech_value(electric_params.get("fraction", 0.0))
+            expected_penalty_flow = (1.0 - final_success_rate) * expected_failure_penalty
+            allowed_fraction = (
+                electric_budget * electric_absolute_flow / expected_penalty_flow
+                if expected_penalty_flow > 0 else 0.0
+            )
+            electric_effect_fraction = min(requested_fraction, allowed_fraction)
+        elif electric_effect_id == "C26":
+            electric_bonus_chance = electric_chance
+            requested_fraction = clamp_hextech_value(
+                electric_params.get("fraction", electric_params.get("price_fraction", 0.0))
+            )
+            expected_reward_flow = final_success_rate * expected_success_value
+            allowed_fraction = (
+                electric_budget * electric_absolute_flow / expected_reward_flow
+                if expected_reward_flow > 0 else 0.0
+            )
+            electric_effect_fraction = min(requested_fraction, allowed_fraction)
+        elif electric_effect_id in ("S12", "P12"):
+            if electric_effect_id == "S12":
+                gain_per_proc = (
+                    final_success_rate * 0.3
+                    * max(0.0, expected_by_quality["normal"] - expected_by_quality["small"])
+                )
+            else:
+                gain_per_proc = final_success_rate * (
+                    0.3 * max(0.0, expected_by_quality["normal"] - expected_by_quality["small"])
+                    + 0.4 * max(0.0, expected_by_quality["great"] - expected_by_quality["normal"])
+                )
+            electric_proc_chance = budgeted_chance(
+                electric_absolute_flow, gain_per_proc, electric_budget, electric_chance
+            )
         
         # 进行随机判定
         roll = random.random()
+        electric_hextech_retry = False
+        electric_hextech_retry_attempted = False
+        if (
+            electric_effect_id == "C24"
+            and (final_success_rate <= 0.0 or roll > final_success_rate)
+            and electric_proc_chance > 0
+            and random.random() < electric_proc_chance
+        ):
+            electric_hextech_retry_attempted = True
+            retry_roll = random.random()
+            if retry_roll <= final_success_rate:
+                roll = retry_roll
+                electric_hextech_retry = True
         
         # 失败处理
         if final_success_rate <= 0.0 or roll > final_success_rate:
             # 使用正态分布计算天罚百分比（0-max_rate之间）
-            max_penalty_rate = self.config.get("electric_fish", {}).get("failure_penalty_max_rate", 0.5)
-            
             # 正态分布，均值在中间（max_rate/2），标准差使得95%的值在0到max_rate之间
             mean = max_penalty_rate / 2
             std_dev = max_penalty_rate / 4  # 约95%的值在[0, max_rate]之间
@@ -1514,7 +2147,14 @@ class GameMechanicsService:
             penalty_rate = max(0.0, min(max_penalty_rate, penalty_rate))
             
             # 计算实际扣除的金币
-            penalty_coins = int(thief.coins * penalty_rate)
+            raw_penalty_coins = int(thief.coins * penalty_rate)
+            penalty_reduction = 0
+            if electric_effect_id == "C25" and electric_effect_fraction > 0:
+                penalty_reduction = min(
+                    raw_penalty_coins,
+                    int(raw_penalty_coins * electric_effect_fraction),
+                )
+            penalty_coins = raw_penalty_coins - penalty_reduction
             
             thief.coins -= penalty_coins
             thief.last_electric_fish_time = now  # 失败也要更新CD
@@ -1548,17 +2188,53 @@ class GameMechanicsService:
                     "fish_count_multiplier": boost["fish_count_multiplier"],
                     "boost_consumed": boost["consumed"],
                     "success_rate": final_success_rate,
+                    "hextech_effect_id": electric_effect_id,
+                    "hextech_retry_attempted": electric_hextech_retry_attempted,
+                    "hextech_retry_saved": electric_hextech_retry,
+                    "hextech_penalty_reduction": penalty_reduction,
+                    "hextech_effect_chance": electric_proc_chance,
+                    "hextech_effect_fraction": electric_effect_fraction,
                 },
             )
+
+            if electric_effect_id and (electric_hextech_retry or penalty_reduction > 0):
+                self._log_hextech_change(
+                    "electric_fish",
+                    thief_id,
+                    electric_effect_id,
+                    {
+                        "retry_attempted": electric_hextech_retry_attempted,
+                        "retry_saved": electric_hextech_retry,
+                        "retry_chance": electric_proc_chance,
+                        "raw_penalty": raw_penalty_coins,
+                        "penalty_reduction": penalty_reduction,
+                        "final_penalty": penalty_coins,
+                        "fraction": electric_effect_fraction,
+                    },
+                )
 
             return {
                 "success": False,
                 "message": f"❌ 电鱼失败！{severity}降临，雷电击中了你，损失了 {penalty_coins} 金币（{penalty_rate*100:.1f}%）！\n💡 本次成功率为 {final_success_rate*100:.1f}%{boost_message}"
+                + (f"\n🎴 海克斯重新判定后仍失败。" if electric_hextech_retry_attempted else "")
+                + (f"\n🎴 海克斯减免天罚 {penalty_reduction} 金币。" if penalty_reduction > 0 else ""),
+                "hextech_effect_id": electric_effect_id,
+                "hextech_retry_saved": electric_hextech_retry,
+                "hextech_penalty_reduction": penalty_reduction,
+                "hextech_effect_chance": electric_proc_chance,
             }
 
         # 4. 成功了！根据成功度（roll值）决定收益档次
         # roll越接近0表示越幸运，获得的收益越高
         success_quality = roll / final_success_rate  # 归一化到0-1之间
+        electric_hextech_grade_upgraded = False
+        if electric_effect_id in ("S12", "P12") and electric_proc_chance > 0:
+            if (
+                (electric_effect_id == "S12" and success_quality > 0.7)
+                or (electric_effect_id == "P12" and success_quality > 0.3)
+            ) and random.random() < electric_proc_chance:
+                success_quality = 0.5 if success_quality > 0.7 else 0.15
+                electric_hextech_grade_upgraded = True
         
         # 分段式收益：
         # - 大成功（0-0.3）：15%-20%的鱼
@@ -1577,14 +2253,19 @@ class GameMechanicsService:
             success_type = "🔹小成功"
             multiplier_range = (0.05, 0.10)
         
-        # 5. 准备数据：获取鱼模板并将鱼塘扁平化（保留品质属性）
-        fish_templates = {
-            item.fish_id: self.item_template_repo.get_fish_by_id(item.fish_id)
-            for item in victim_inventory
-        }
+        # 5. 准备抽取数据。无海克斯卡时保持原有成功结算的读取路径。
+        if fish_templates is None:
+            fish_templates = {
+                item.fish_id: self.item_template_repo.get_fish_by_id(item.fish_id)
+                for item in victim_inventory
+            }
+        if victim_coins_chance is None:
+            victim_coins_chance = get_user_coins_chance_by_repo(
+                self.inventory_repo, self.item_template_repo, victim_id
+            )
         all_fish_in_pond = []
         for item in victim_inventory:
-            all_fish_in_pond.extend([(item.fish_id, item.quality_level)] * item.quantity)
+            all_fish_in_pond.extend([(item.fish_id, item.quality_level, int(getattr(item, "unit_value", 0) or 0))] * item.quantity)
 
         # 6. 决定偷取数量并进行初次完全随机抽样
         num_to_steal = 0
@@ -1614,7 +2295,7 @@ class GameMechanicsService:
         high_rarity_caught = []
         low_rarity_caught = []
         for fish_tuple in initial_catch:
-            fish_id, q_level = fish_tuple
+            fish_id, q_level, _unit_value = fish_tuple
             template = fish_templates.get(fish_id)
             if template and template.rarity >= 5:
                 high_rarity_caught.append(fish_tuple)
@@ -1631,7 +2312,6 @@ class GameMechanicsService:
 
             num_to_replace = len(high_rarity_caught)
 
-            from collections import Counter
             pond_counts = Counter(all_fish_in_pond)
             initial_catch_counts = Counter(initial_catch)
             pond_counts.subtract(initial_catch_counts)
@@ -1648,21 +2328,66 @@ class GameMechanicsService:
                 replacements = random.sample(replacement_pool, num_can_replace)
                 final_stolen_fish.extend(replacements)
 
-        # 8. 统计最终偷到的鱼：以 (fish_id, quality_level) 聚合计数
-        from collections import Counter
-        stolen_fish_counts = Counter(final_stolen_fish)
+        # G12只替换一条鱼，不增加数量；候选来自目标鱼塘的剩余库存，
+        # 且最终批次仍遵守每批最多一条5星及以上鱼。
+        g12_bonus_value = 0.0
+        if electric_effect_id == "G12" and final_stolen_fish:
+            current_counts = Counter(final_stolen_fish)
+            remaining_counts = Counter(all_fish_in_pond)
+            remaining_counts.subtract(current_counts)
+            caught_high_count = sum(
+                count for (fish_id, _quality, _unit_value), count in current_counts.items()
+                if fish_templates.get(fish_id)
+                and getattr(fish_templates[fish_id], "rarity", 0) >= 5
+            )
+            candidates = []
+            for fish_tuple, count in remaining_counts.items():
+                if count <= 0:
+                    continue
+                template = fish_templates.get(fish_tuple[0])
+                is_high = bool(template and getattr(template, "rarity", 0) >= 5)
+                if caught_high_count >= 1 and is_high:
+                    continue
+                candidates.extend([fish_tuple] * count)
+            actual_values = list(electric_unit_values.values())
+            if candidates and actual_values:
+                minimum_value = min(
+                    electric_unit_values.get(fish_tuple, 0.0)
+                    for fish_tuple in final_stolen_fish
+                )
+                maximum_pool_value = max(actual_values)
+                maximum_gain = max(0.0, maximum_pool_value - min(actual_values))
+                g12_proc_chance = budgeted_chance(
+                    electric_absolute_flow,
+                    final_success_rate * maximum_gain,
+                    electric_budget,
+                    electric_chance,
+                )
+                if g12_proc_chance > 0 and random.random() < g12_proc_chance:
+                    replacement = random.choice(candidates)
+                    replacement_value = electric_unit_values.get(replacement, 0.0)
+                    if replacement_value > minimum_value:
+                        cheapest_index = min(
+                            range(len(final_stolen_fish)),
+                            key=lambda index: electric_unit_values.get(final_stolen_fish[index], 0.0),
+                        )
+                        old_fish = final_stolen_fish[cheapest_index]
+                        final_stolen_fish[cheapest_index] = replacement
+                        g12_bonus_value = replacement_value - electric_unit_values.get(old_fish, 0.0)
+            else:
+                g12_proc_chance = 0.0
+        else:
+            g12_proc_chance = 0.0
 
-        # 9. 执行电鱼事务：所有转移鱼按照被偷者本次操作时的加成固化单价。
-        victim_coins_chance = get_user_coins_chance_by_repo(
-            self.inventory_repo, self.item_template_repo, victim_id
-        )
+        # 6. 按鱼种、品质、原入塘单价聚合，避免混淆不同价格的库存。
+        stolen_fish_counts = Counter(final_stolen_fish)
 
         stolen_summary = []
         total_value_thief = 0
         total_value_victim = 0
 
-        for (fish_id, quality_level), count in stolen_fish_counts.items():
-            self.inventory_repo.update_fish_quantity(victim_id, fish_id, delta=-count, quality_level=quality_level)
+        for (fish_id, quality_level, stored_unit_value), count in stolen_fish_counts.items():
+            self.inventory_repo.update_fish_quantity(victim_id, fish_id, delta=-count, quality_level=quality_level, unit_value=stored_unit_value)
 
             template = fish_templates.get(fish_id)
             if template:
@@ -1682,6 +2407,20 @@ class GameMechanicsService:
                 )
                 total_value_thief += transfer_unit_val * count
                 total_value_victim += transfer_unit_val * count
+
+        electric_bonus_coins = 0
+        if (
+            electric_effect_id == "C26"
+            and electric_effect_fraction > 0
+            and electric_bonus_chance > 0
+            and random.random() < electric_bonus_chance
+        ):
+            bonus_cap = max(0, int(electric_params.get("bonus_cap", 0) or 0))
+            electric_bonus_coins = min(
+                int(total_value_thief * electric_effect_fraction), bonus_cap
+            )
+            if electric_bonus_coins > 0:
+                thief.coins += electric_bonus_coins
 
         # 10. 更新电鱼的CD时间并保存
         thief.last_electric_fish_time = now
@@ -1750,14 +2489,60 @@ class GameMechanicsService:
                 "fish_count_multiplier": boost["fish_count_multiplier"],
                 "boost_consumed": boost["consumed"],
                 "success_rate": final_success_rate,
+                "hextech_effect_id": electric_effect_id,
+                "hextech_retry_saved": electric_hextech_retry,
+                "hextech_grade_upgraded": electric_hextech_grade_upgraded,
+                "hextech_effect_chance": electric_proc_chance if electric_effect_id != "G12" else g12_proc_chance,
+                "hextech_effect_fraction": electric_effect_fraction,
+                "hextech_bonus_chance": electric_bonus_chance,
+                "hextech_bonus_coins": electric_bonus_coins,
+                "hextech_value_gain": g12_bonus_value,
             },
         )
 
+        electric_hextech_messages = []
+        if electric_hextech_retry:
+            electric_hextech_messages.append("失败判定后重判成功")
+        if electric_hextech_grade_upgraded:
+            electric_hextech_messages.append("成功档次提升")
+        if g12_bonus_value > 0:
+            electric_hextech_messages.append(f"择优换鱼，渔获价值增加 {int(g12_bonus_value)} 金币")
+        if electric_bonus_coins > 0:
+            electric_hextech_messages.append(f"系统赏金 {electric_bonus_coins} 金币")
+        electric_hextech_message = (
+            "\n🎴 海克斯生效：" + "；".join(electric_hextech_messages) + "。"
+            if electric_hextech_messages else ""
+        )
+        if electric_effect_id and electric_hextech_messages:
+            self._log_hextech_change(
+                "electric_fish",
+                thief_id,
+                electric_effect_id,
+                {
+                    "retry_saved": electric_hextech_retry,
+                    "grade_upgraded": electric_hextech_grade_upgraded,
+                    "effective_chance": electric_proc_chance if electric_effect_id != "G12" else g12_proc_chance,
+                    "value_gain": g12_bonus_value,
+                    "bonus_coins": electric_bonus_coins,
+                    "bonus_chance": electric_bonus_chance,
+                    "success_value_ev": expected_success_value,
+                    "absolute_flow": electric_absolute_flow,
+                },
+            )
+
         return {
             "success": True,
-            "message": f"{success_type}！成功对【{victim.nickname}】的鱼塘进行了电击，捕获了{actual_stolen_count}条鱼（占其总数的{steal_percentage:.1f}%），总价值 {total_value_thief} 金币！\n分别是：{stolen_details}。\n💡 本次成功率为 {final_success_rate*100:.1f}%{boost_message}{shield_recovery_msg}",
+            "message": f"{success_type}！成功对【{victim.nickname}】的鱼塘进行了电击，捕获了{actual_stolen_count}条鱼（占其总数的{steal_percentage:.1f}%），总价值 {total_value_thief} 金币！\n分别是：{stolen_details}。\n💡 本次成功率为 {final_success_rate*100:.1f}%{boost_message}{shield_recovery_msg}{electric_hextech_message}",
             "thief_nickname": thief.nickname or thief.user_id,
             "thief_total_value": total_value_thief,
+            "hextech_effect_id": electric_effect_id,
+            "hextech_retry_saved": electric_hextech_retry,
+            "hextech_retry_attempted": electric_hextech_retry_attempted,
+            "hextech_grade_upgraded": electric_hextech_grade_upgraded,
+            "hextech_effect_chance": electric_proc_chance if electric_effect_id != "G12" else g12_proc_chance,
+            "hextech_value_gain": g12_bonus_value,
+            "hextech_bonus_coins": electric_bonus_coins,
+            "hextech_bonus_chance": electric_bonus_chance,
             "victim_notification": {
                 "stolen_count": actual_stolen_count,
                 "stolen_summary": stolen_summary,

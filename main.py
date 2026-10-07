@@ -386,6 +386,8 @@ class FishingPlugin(Star):
             daily_reset_hour=self.game_config.get("daily_reset_hour", 0),
         )
         self.fishing_service.hextech_service = self.hextech_service
+        self.game_mechanics_service.hextech_service = self.hextech_service
+        self.gacha_service.hextech_service = self.hextech_service
         self.gacha_service.game_config = self.game_config
         
         # 导入并初始化展示柜服务

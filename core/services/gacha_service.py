@@ -1,4 +1,5 @@
 import random
+import math
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone, timedelta
 
@@ -14,16 +15,46 @@ from ..repositories.abstract_repository import (
 )
 from ..domain.models import GachaPool, GachaPoolItem, GachaRecord, UserGachaPity
 from ..utils import get_now
+from .hextech_gacha_balance import (
+    GACHA_HEXTECH_IDS,
+    TIER_EV_BUDGETS,
+    configured_reward_value,
+    expected_cycle_value,
+    max_bonus_chance_for_value_budget,
+    max_chance_for_budget,
+    max_coin_refund_fraction,
+    max_quantity_bonus_chance,
+    max_weight_multiplier_for_budget,
+    quantity_bonus,
+)
 
 
-def _perform_single_weighted_draw(pool: GachaPool) -> GachaPoolItem:
+def _perform_single_weighted_draw(
+    pool: GachaPool,
+    weight_multiplier: float = 1.0,
+    max_rarity: int = 0,
+    rarity_of=None,
+) -> GachaPoolItem:
     """执行一次加权随机抽奖。"""
-    total_weight = sum(item.weight for item in pool.items)
+    def adjusted_weight(item):
+        weight = max(0.0, float(getattr(item, "weight", 0) or 0))
+        if (
+            weight_multiplier > 1.0 and max_rarity > 0
+            and getattr(item, "item_type", None) != "coins"
+            and rarity_of is not None and rarity_of(item) >= max_rarity
+        ):
+            weight *= weight_multiplier
+        return weight
+
+    weights = [adjusted_weight(item) for item in pool.items]
+    total_weight = sum(weights)
+    if total_weight <= 0:
+        return None
     rand_val = random.uniform(0, total_weight)
 
     current_weight = 0
-    for item in pool.items:
-        current_weight += item.weight
+    for item, weight in zip(pool.items, weights):
+        current_weight += weight
         if rand_val <= current_weight:
             return item
     return None # 理论上不会发生
@@ -226,15 +257,126 @@ class GachaService:
             else:
                 use_pity = False
 
+        # Only new balance-version cards carry gacha effects. The selected
+        # snapshot is immutable, and catalog conflicts are also enforced here
+        # by activating at most one of the six gacha effects.
+        hextech_effect = self._get_hextech_gacha_effect(user_id)
+        effect_id = hextech_effect.get("id") if hextech_effect else None
+        effect_params = hextech_effect.get("params", {}) if hextech_effect else {}
+        if not isinstance(effect_params, dict):
+            effect_params = {}
+        pool_max_rarity = max_rarity
+        if effect_id in {"C27", "P13", "G13"} and pool_max_rarity <= 0:
+            pool_max_rarity = self._get_pool_max_rarity(pool, template_cache)
+        ev_budget = self._hextech_gacha_budget(hextech_effect)
+        reference_value = lambda item: self._hextech_gacha_reward_value(item, template_cache)
+        hextech_chance = self._hextech_gacha_chance(
+            effect_id, effect_params, pool, template_cache, use_pity,
+            pool_max_rarity, reference_value, ev_budget,
+        )
+        hextech_weight_multiplier = self._hextech_gacha_weight_multiplier(
+            effect_id, effect_params, pool, template_cache, use_pity,
+            reference_value, ev_budget,
+        )
+        hextech_quantity_fraction = self._bounded_float(
+            effect_params.get("fraction", 0.0), 0.0, 1.0
+        )
+        hextech_s14_bonus_cap = self._bounded_float(
+            effect_params.get("bonus_cap", 0.0), 0.0, 1.0
+        )
+        hextech_s13_refund_per_draw = 0
+        if effect_id == "S13" and not (
+            is_data_free_pool or is_daily_free_draw or use_premium_currency
+        ):
+            long_run_value = expected_cycle_value(
+                pool.items, lambda item: self._get_item_rarity(item, template_cache),
+                reference_value, self.pity_threshold if use_pity else 0,
+            )
+            refund_fraction = max_coin_refund_fraction(
+                ev_budget, long_run_value, int(getattr(pool, "cost_coins", 0) or 0),
+                effect_params.get("fraction", 0.0),
+                int(self._bounded_float(effect_params.get("bonus_cap", 500), 0, 500)),
+            )
+            hextech_s13_refund_per_draw = int(math.floor(
+                int(getattr(pool, "cost_coins", 0) or 0) * refund_fraction + 1e-9
+            ))
+        hextech_s14_bonus_coins = 0
+        hextech_s14_bonus_coins_total = 0
+        hextech_triggered_count = 0
+        if effect_id == "S14" and not (
+            is_data_free_pool or is_daily_free_draw or use_premium_currency
+        ):
+            coin_cost = int(getattr(pool, "cost_coins", 0) or 0)
+            hextech_s14_bonus_coins = int(math.floor(coin_cost * hextech_s14_bonus_cap + 1e-9))
+            hextech_chance = self._bounded_coin_bonus_chance(
+                pool, template_cache, use_pity, ev_budget,
+                hextech_chance, hextech_s14_bonus_coins,
+            )
+        elif effect_id == "S14":
+            # Do not report an active chance for free or premium-currency draws.
+            hextech_chance = 0.0
+
         # 执行抽卡 + 发放奖励 + 收集日志
         for _ in range(num_draws):
             # 保底判定
-            if use_pity and current_pity >= self.pity_threshold - 1:
+            hard_pity_draw = use_pity and current_pity >= self.pity_threshold - 1
+            if hard_pity_draw:
                 drawn_item = self._pick_pity_item(pool, max_rarity, template_cache)
+            elif hextech_weight_multiplier > 1.0:
+                drawn_item = _perform_single_weighted_draw(
+                    pool,
+                    weight_multiplier=hextech_weight_multiplier,
+                    max_rarity=pool_max_rarity,
+                    rarity_of=lambda item: self._get_item_rarity(item, template_cache),
+                )
             else:
                 drawn_item = _perform_single_weighted_draw(pool)
             if not drawn_item:
                 continue
+
+            # C27/P13 inspect an optional second candidate, but still commit
+            # exactly one final item and one pity/log entry for this draw.
+            if (
+                not hard_pity_draw and effect_id == "C27"
+                and hextech_chance > 0
+                and self._get_item_rarity(drawn_item, template_cache)
+                == min(
+                    self._get_item_rarity(item, template_cache)
+                    for item in pool.items
+                    if float(getattr(item, "weight", 0) or 0) > 0
+                )
+                and random.random() < hextech_chance
+            ):
+                second = _perform_single_weighted_draw(pool)
+                if second and self._get_item_rarity(second, template_cache) > self._get_item_rarity(drawn_item, template_cache):
+                    drawn_item = second
+                    hextech_triggered_count += 1
+            elif (
+                not hard_pity_draw and effect_id == "P13"
+                and hextech_chance > 0 and random.random() < hextech_chance
+            ):
+                second = _perform_single_weighted_draw(pool)
+                if second and self._get_item_rarity(second, template_cache) > self._get_item_rarity(drawn_item, template_cache):
+                    drawn_item = second
+                    hextech_triggered_count += 1
+
+            reward_quantity = int(getattr(drawn_item, "quantity", 1) or 1)
+            if (
+                effect_id == "C28" and drawn_item.item_type in ("bait", "item")
+                and hextech_chance > 0 and random.random() < hextech_chance
+            ):
+                reward_quantity += quantity_bonus(reward_quantity, hextech_quantity_fraction)
+                hextech_triggered_count += 1
+            extra_coin_reward = 0
+            if (
+                effect_id == "S14" and drawn_item.item_type == "coins"
+                and hextech_s14_bonus_coins > 0
+                and hextech_chance > 0 and random.random() < hextech_chance
+            ):
+                extra_coin_reward = hextech_s14_bonus_coins
+                reward_quantity += extra_coin_reward
+                hextech_s14_bonus_coins_total += extra_coin_reward
+                hextech_triggered_count += 1
 
             # 发放奖励 + 收集模板数据
             item_name = "未知物品"
@@ -249,14 +391,14 @@ class GachaService:
                 self.inventory_repo.add_accessory_instance(user_id, drawn_item.item_id)
                 template = self._get_template("accessory", drawn_item.item_id, template_cache)
             elif drawn_item.item_type == "bait":
-                self.inventory_repo.update_bait_quantity(user_id, drawn_item.item_id, drawn_item.quantity)
+                self.inventory_repo.update_bait_quantity(user_id, drawn_item.item_id, reward_quantity)
                 template = self._get_template("bait", drawn_item.item_id, template_cache)
             elif drawn_item.item_type == "item":
-                self.inventory_repo.update_item_quantity(user_id, drawn_item.item_id, drawn_item.quantity)
+                self.inventory_repo.update_item_quantity(user_id, drawn_item.item_id, reward_quantity)
                 template = self._get_template("item", drawn_item.item_id, template_cache)
             elif drawn_item.item_type == "coins":
-                total_coin_reward += drawn_item.quantity
-                item_name = f"{drawn_item.quantity} 金币"
+                total_coin_reward += reward_quantity
+                item_name = f"{reward_quantity} 金币"
             elif drawn_item.item_type == "titles":
                 self.achievement_repo.grant_title_to_user(user_id, drawn_item.item_id)
                 template = self._get_template("titles", drawn_item.item_id, template_cache)
@@ -267,7 +409,7 @@ class GachaService:
 
             # 构建用户可见奖励
             if drawn_item.item_type == "coins":
-                granted_rewards.append({"type": "coins", "quantity": drawn_item.quantity})
+                granted_rewards.append({"type": "coins", "quantity": reward_quantity})
             elif drawn_item.item_type == "titles":
                 granted_rewards.append({"type": "title", "id": drawn_item.item_id, "name": item_name})
             else:
@@ -276,14 +418,14 @@ class GachaService:
                     "id": drawn_item.item_id,
                     "name": item_name,
                     "rarity": item_rarity,
-                    "quantity": drawn_item.quantity if drawn_item.item_type in ("bait", "item") else 1
+                    "quantity": reward_quantity if drawn_item.item_type in ("bait", "item") else 1
                 })
 
             # 收集日志
             log_records.append(GachaRecord(
                 record_id=0, user_id=user_id, gacha_pool_id=pool_id,
                 item_type=drawn_item.item_type, item_id=drawn_item.item_id,
-                item_name=item_name, quantity=drawn_item.quantity,
+                item_name=item_name, quantity=reward_quantity,
                 rarity=item_rarity, timestamp=get_now()
             ))
 
@@ -304,6 +446,9 @@ class GachaService:
             user.coins -= total_coin_cost
         if total_coin_reward > 0:
             user.coins += total_coin_reward
+        hextech_refund_coins = hextech_s13_refund_per_draw * num_draws
+        if hextech_refund_coins > 0:
+            user.coins += hextech_refund_coins
         self.user_repo.update(user)
 
         if log_records:
@@ -317,7 +462,143 @@ class GachaService:
             "results": granted_rewards,
             "pity": current_pity,
             "pity_threshold": self.pity_threshold if use_pity else 0,
+            "hextech_refund_coins": hextech_refund_coins,
+            "hextech_effect": ({
+                "id": effect_id,
+                "chance": hextech_chance,
+                "weight_multiplier": hextech_weight_multiplier,
+                "triggered_count": hextech_triggered_count,
+                "bonus_coins_total": hextech_s14_bonus_coins_total,
+            } if effect_id else None),
         }
+
+    @staticmethod
+    def _bounded_float(value: Any, low: float, high: float) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return low
+        if not math.isfinite(number):
+            return low
+        return min(high, max(low, number))
+
+    def _get_hextech_gacha_effect(self, actor_id: str) -> Optional[Dict[str, Any]]:
+        service = getattr(self, "hextech_service", None)
+        if service is None:
+            return None
+        try:
+            card = service.get_selected_card(actor_id)
+        except Exception:
+            return None
+        if not isinstance(card, dict):
+            return None
+        try:
+            if int(card.get("balance_version", 1)) < 3:
+                return None
+        except (TypeError, ValueError):
+            return None
+        effects = card.get("effects", [])
+        if not isinstance(effects, list):
+            return None
+        for effect in effects:
+            if not isinstance(effect, dict) or effect.get("id") not in GACHA_HEXTECH_IDS:
+                continue
+            return {
+                "id": effect["id"],
+                "params": effect.get("params", {}),
+                "tier": str(card.get("tier", "prismatic")).lower(),
+                "balance_version": card.get("balance_version", 3),
+            }
+        return None
+
+    @staticmethod
+    def _hextech_gacha_budget(effect: Optional[Dict[str, Any]]) -> float:
+        if not effect:
+            return 0.0
+        params = effect.get("params", {})
+        budgets = {"silver": 0.04, "gold": 0.055, "prismatic": 0.07} if effect.get("balance_version", 3) >= 4 else TIER_EV_BUDGETS
+        tier_budget = budgets.get(str(effect.get("tier", "")).lower(), 0.08)
+        # The selected card tier is recovered by _get_hextech_gacha_effect and
+        # attached to the effect below; card-authored values are always clamped.
+        return GachaService._bounded_float(params.get("ev_budget", tier_budget), 0.0, tier_budget)
+
+    def _hextech_gacha_reward_value(self, item: GachaPoolItem, cache: dict) -> Optional[float]:
+        return configured_reward_value(
+            item,
+            lambda item_type, item_id: self._get_template(item_type, item_id, cache),
+            getattr(self, "game_config", {}),
+        )
+
+    def _hextech_gacha_chance(
+        self, effect_id: Optional[str], params: Dict[str, Any], pool: GachaPool,
+        cache: dict, use_pity: bool, max_rarity: int,
+        value_of, budget: float,
+    ) -> float:
+        requested = self._bounded_float(params.get("chance", 0.0), 0.0, 1.0)
+        rarity_of = lambda item: self._get_item_rarity(item, cache)
+        pity_threshold = self.pity_threshold if use_pity else 0
+        if effect_id in {"C27", "P13"}:
+            return max_chance_for_budget(
+                pool.items, rarity_of, value_of, budget, requested,
+                pity_threshold, effect_id,
+            )
+        if effect_id == "C28":
+            fraction = self._bounded_float(params.get("fraction", 0.0), 0.0, 1.0)
+            baseline = expected_cycle_value(pool.items, rarity_of, value_of, pity_threshold)
+            if baseline is None or baseline <= 0:
+                return max_quantity_bonus_chance(
+                    pool.items, budget, requested, fraction
+                )
+
+            def bonus_value(item):
+                if item.item_type not in ("bait", "item"):
+                    return 0.0
+                base = value_of(item)
+                if base is None:
+                    return None
+                quantity = max(1, int(getattr(item, "quantity", 1) or 1))
+                return float(base) * quantity_bonus(quantity, fraction) / quantity
+
+            bonus_ev = expected_cycle_value(pool.items, rarity_of, bonus_value, pity_threshold)
+            if bonus_ev is None or bonus_ev <= 0:
+                return max_quantity_bonus_chance(pool.items, budget, requested, fraction)
+            return min(requested, budget * baseline / bonus_ev)
+        if effect_id == "S14":
+            # The exact chance is further capped after computing the per-draw
+            # coin bonus, whose amount depends on the actual pool cost.
+            return requested
+        return 0.0
+
+    def _hextech_gacha_weight_multiplier(
+        self, effect_id: Optional[str], params: Dict[str, Any], pool: GachaPool,
+        cache: dict, use_pity: bool, value_of, budget: float,
+    ) -> float:
+        if effect_id != "G13":
+            return 1.0
+        requested = self._bounded_float(params.get("weight_multiplier", 1.0), 1.0, 2.0)
+        rarity_of = lambda item: self._get_item_rarity(item, cache)
+        return max_weight_multiplier_for_budget(
+            pool.items, rarity_of, value_of, budget, requested,
+            self.pity_threshold if use_pity else 0,
+        )
+
+    def _bounded_coin_bonus_chance(
+        self, pool: GachaPool, cache: dict, use_pity: bool, budget: float,
+        requested: float, bonus_coins: int,
+    ) -> float:
+        if bonus_coins <= 0 or budget <= 0:
+            return 0.0
+        rarity_of = lambda item: self._get_item_rarity(item, cache)
+        pity_threshold = self.pity_threshold if use_pity else 0
+        return max_bonus_chance_for_value_budget(
+            pool.items,
+            rarity_of,
+            lambda item: self._hextech_gacha_reward_value(item, cache),
+            lambda item: float(bonus_coins) if item.item_type == "coins" else 0.0,
+            budget,
+            requested,
+            pity_threshold,
+        )
 
     def _get_template(self, item_type: str, item_id: int, cache: dict):
         """带缓存的模板查询"""
@@ -348,6 +629,8 @@ class GachaService:
         """计算卡池中最高的稀有度"""
         max_r = 0
         for item in pool.items:
+            if float(getattr(item, "weight", 0) or 0) <= 0:
+                continue
             r = self._get_item_rarity(item, cache)
             if r > max_r:
                 max_r = r
