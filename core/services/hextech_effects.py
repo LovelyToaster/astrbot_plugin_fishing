@@ -142,6 +142,31 @@ for _definition in EFFECTS.values():
 EFFECTS["C33"] = _entry("C33", "海克斯福袋", "common", "随机获得额外海克斯，赠卡的额外强度为普通卡的25%。")
 EFFECTS["C33"]["operation"] = "bonus"
 
+PREMIUM_EFFECT_IDS = ("C34", "S17", "G17", "P17")
+PREMIUM_CONDITIONS = {
+    "C34": "rare",
+    "S17": "empty",
+    "G17": "quality_rare",
+    "P17": "top_rarity",
+}
+PREMIUM_BASE_CHANCES = {
+    "C34": 0.032,
+    "S17": 0.10,
+    "G17": 0.16,
+    "P17": 0.10,
+}
+
+EFFECTS["C34"] = _entry("C34", "瓶中微光", "common", "最终钓到稀有鱼（四星及以上）时，有概率获得1点高级货币。",
+                        ("S17", "G17", "P17"))
+EFFECTS["S17"] = _entry("S17", "空钩奇遇", "silver", "实际付费钓鱼最终空竿时，有概率获得1点高级货币。",
+                        ("C34", "G17", "P17"))
+EFFECTS["G17"] = _entry("G17", "闪光结晶", "gold", "最终钓到高品质且四星以上稀有鱼时，有概率获得1点高级货币。",
+                        ("C34", "S17", "P17"))
+EFFECTS["P17"] = _entry("P17", "鱼王秘藏", "prismatic", "最终鱼星级等于当前鱼区最高可抽星级且最高达到四星以上时，有概率获得1点高级货币。",
+                        ("C34", "S17", "G17"))
+for _premium_id in PREMIUM_EFFECT_IDS:
+    EFFECTS[_premium_id]["operation"] = "fishing"
+
 
 EXPANSION_IDS = frozenset(effect_id for group in EXPANSION_GROUPS.values() for effect_id in group)
 
@@ -278,6 +303,11 @@ def _roll_params(effect_id: str, tier: str, rng: Any,
                  balance_version: int = 2) -> Dict[str, Any]:
     if effect_id in EXPANSION_IDS:
         return _roll_expansion_params(effect_id, tier, rng)
+    if effect_id in PREMIUM_EFFECT_IDS:
+        return {
+            "premium_chance": PREMIUM_BASE_CHANCES[effect_id],
+            "premium_condition": PREMIUM_CONDITIONS[effect_id],
+        }
     params: Dict[str, Any] = {}
     is_v2 = balance_version >= 2
     cost_discount_ranges = _COST_DISCOUNT_V2 if is_v2 else _COST_DISCOUNT
@@ -387,6 +417,14 @@ def _choose(rng: Any, pool: Sequence[str], excluded: Set[str]) -> str:
 def _v4_params(effect_id: str, tier: str, rng: Any, gift: bool = False) -> Dict[str, Any]:
     if effect_id == "C33":
         return {"gift_count": SLOT_COUNTS[tier]}
+    if effect_id in PREMIUM_EFFECT_IDS:
+        base_chance = PREMIUM_BASE_CHANCES[effect_id]
+        chance = round(base_chance * GIFT_STRENGTH, 4) if gift else base_chance
+        return {
+            "premium_chance": chance,
+            "premium_condition": PREMIUM_CONDITIONS[effect_id],
+            "is_gift": gift,
+        }
     params = _roll_params(effect_id, tier, rng, balance_version=2)
     gift_scale = GIFT_STRENGTH if gift else 1.0
     if effect_id in EXPANSION_IDS:
@@ -612,6 +650,27 @@ def _effect_description(effect: Dict[str, Any], tier: str, eligible: Sequence[in
         return f"海克斯福袋：随机获得{count}张额外海克斯；品质概率为白银50%、黄金35%、棱彩15%；赠卡额外强度为普通卡的25%"
     if effect_id in EXPANSION_IDS:
         return _expansion_description(effect)
+    if effect_id in PREMIUM_EFFECT_IDS:
+        name = EFFECTS.get(effect_id, {}).get("name", effect_id or "未知效果")
+        params = effect.get("params") or {}
+        chance = float(params.get("premium_chance", PREMIUM_BASE_CHANCES[effect_id]))
+        chance_val = round(chance * 100, 3)
+        if abs(chance_val - round(chance_val, 1)) < 1e-6:
+            chance_pct = "{:.1f}%".format(chance_val)
+        else:
+            chance_pct = "{:.2f}%".format(chance_val)
+        gift_note = "（赠卡缩减至25%）" if (params.get("is_gift") or chance < PREMIUM_BASE_CHANCES[effect_id]) else ""
+        scale_note = "；实际概率随钓鱼冷却缩放（基准120秒）"
+        if effect_id == "C34":
+            return f"{name}：最终钓到稀有鱼（四星及以上）时，有 {chance_pct} 概率获得1点高级货币{gift_note}{scale_note}"
+        elif effect_id == "S17":
+            return f"{name}：付费钓鱼最终空竿时，有 {chance_pct} 概率获得1点高级货币{gift_note}{scale_note}"
+        elif effect_id == "G17":
+            return f"{name}：最终钓到高品质稀有鱼（四星及以上）时，有 {chance_pct} 概率获得1点高级货币{gift_note}{scale_note}"
+        elif effect_id == "P17":
+            top_val = max(eligible) if eligible else 0
+            zone_info = f"（当前鱼区最高{top_val}星）" if top_val >= 4 else "（当前鱼区最高未达四星）"
+            return f"{name}：最终鱼星级等于当前鱼区最高可抽星级且最高达到四星以上{zone_info}时，有 {chance_pct} 概率获得1点高级货币{gift_note}{scale_note}"
     params = effect.get("params") or {}
     name = EFFECTS.get(effect_id, {}).get("name", effect_id or "未知效果")
     rare = [rarity for rarity in eligible if rarity >= 4]

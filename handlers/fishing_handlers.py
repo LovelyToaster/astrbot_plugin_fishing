@@ -46,11 +46,22 @@ def _build_fish_message(result, fishing_cost):
             f"{value_label}：{fish['value']} 金币\n"
             f"💸消耗：{fishing_cost} 金币/次"
         )
+        if result.get("hextech_premium_message"):
+            message += f"\n{result['hextech_premium_message']}"
+        elif result.get("hextech_premium_reward"):
+            message += "\n💎 海克斯惊喜：获得1点高级货币！"
         if "equipment_broken_messages" in result:
             for broken_msg in result["equipment_broken_messages"]:
                 message += f"\n{broken_msg}"
         return message
-    return f"{result['message']}\n💸消耗：{fishing_cost} 金币/次"
+
+    fail_msg = result.get('message', '')
+    premium_text = result.get("hextech_premium_message") or (
+        "💎 海克斯惊喜：获得1点高级货币！" if result.get("hextech_premium_reward") else ""
+    )
+    if premium_text and premium_text not in fail_msg:
+        fail_msg = f"{fail_msg}\n{premium_text}"
+    return f"{fail_msg}\n💸消耗：{fishing_cost} 金币/次"
 
 
 class FishingHandlers:

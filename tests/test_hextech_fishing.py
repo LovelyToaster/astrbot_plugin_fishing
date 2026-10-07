@@ -189,16 +189,16 @@ class HextechCatalogTests(unittest.TestCase):
                     get_type_hints(member)
 
     def test_catalog_has_exact_ids_and_pool_sizes(self):
-        self.assertEqual(len(EFFECTS), 81)
+        self.assertEqual(len(EFFECTS), 85)
         self.assertEqual(set(EFFECTS), {
-            "C{:02d}".format(i) for i in range(1, 34)
-        } | {"S{:02d}".format(i) for i in range(1, 17)}
-          | {"G{:02d}".format(i) for i in range(1, 17)}
-          | {"P{:02d}".format(i) for i in range(1, 17)})
+            "C{:02d}".format(i) for i in range(1, 35)
+        } | {"S{:02d}".format(i) for i in range(1, 18)}
+          | {"G{:02d}".format(i) for i in range(1, 18)}
+          | {"P{:02d}".format(i) for i in range(1, 18)})
         self.assertEqual(
             {pool: sum(item["pool"] == pool for item in EFFECTS.values())
              for pool in ("common", "silver", "gold", "prismatic")},
-            {"common": 33, "silver": 16, "gold": 16, "prismatic": 16},
+            {"common": 34, "silver": 17, "gold": 17, "prismatic": 17},
         )
 
     def test_roll_card_composition_and_parameter_snapshot(self):

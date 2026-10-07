@@ -347,6 +347,110 @@ class FishingService:
             cap *= 0.9
         return min(cap, sum(bonuses))
 
+    def _get_effective_fishing_cooldown(self, user_id: str) -> float:
+        """获取用户当前实际钓鱼冷却时间（秒），用于海克斯概率缩放。"""
+        fishing_cfg = self.config.get("fishing", {}) if isinstance(self.config, dict) else {}
+        base_cd = 180.0
+        if isinstance(fishing_cfg, dict) and "cooldown_seconds" in fishing_cfg:
+            try:
+                base_cd = float(fishing_cfg["cooldown_seconds"])
+            except (TypeError, ValueError):
+                base_cd = 180.0
+        elif isinstance(self.config, dict) and "cooldown_seconds" in self.config:
+            try:
+                base_cd = float(self.config["cooldown_seconds"])
+            except (TypeError, ValueError):
+                base_cd = 180.0
+        if not math.isfinite(base_cd) or base_cd <= 0:
+            base_cd = 180.0
+
+        equipped_accessory = self.inventory_repo.get_user_equipped_accessory(user_id)
+        if equipped_accessory:
+            acc_template = self.item_template_repo.get_accessory_by_id(equipped_accessory.accessory_id)
+            if acc_template and getattr(acc_template, "name", "") == "海洋之心":
+                base_cd /= 2.0
+        return max(0.0, base_cd)
+
+    @staticmethod
+    def _calculate_effective_premium_chance(stored_chance: Any, cooldown_seconds: float) -> float:
+        """根据实际钓鱼冷却时间缩放高级货币触发概率。
+
+        基准为 120 秒；60 秒时概率减半。结果限制在 [0.0, 1.0]。
+        非法或非有限数值安全返回 0.0。
+        """
+        try:
+            stored_val = float(stored_chance)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(stored_val) or stored_val <= 0.0:
+            return 0.0
+        if not isinstance(cooldown_seconds, (int, float)) or not math.isfinite(cooldown_seconds) or cooldown_seconds <= 0.0:
+            return 0.0
+        effective = stored_val * (float(cooldown_seconds) / 120.0)
+        if not math.isfinite(effective):
+            return 0.0
+        return max(0.0, min(1.0, effective))
+
+    def _evaluate_hextech_premium(
+        self,
+        user: Any,
+        hextech_effects: List[Dict[str, Any]],
+        condition_type: str,
+        context: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """判定并结算海克斯高级货币效果。
+
+        仅当存在对应效果且触发条件满足时才调用随机数，避免扰动旧卡随机流。
+        返回包含 amount 和 effect_id 的字典，未触发返回 None。
+        """
+        premium_effect = next(
+            (e for e in hextech_effects if e.get("id") in ("C34", "S17", "G17", "P17")),
+            None,
+        )
+        if not premium_effect:
+            return None
+
+        effect_id = premium_effect.get("id")
+        params = premium_effect.get("params") or {}
+        stored_chance = params.get("premium_chance", 0.0)
+
+        is_satisfied = False
+        if condition_type == "empty":
+            # S17: 实际付费钓鱼最终空竿（paid > 0）
+            if effect_id == "S17" and context.get("paid", 0) > 0:
+                is_satisfied = True
+        elif condition_type == "caught":
+            rarity = context.get("rarity", 0)
+            quality_level = context.get("quality_level", 0)
+            top_rarity = context.get("top_rarity", 0)
+            if effect_id == "C34":
+                # C34: 最终钓到稀有鱼四星及以上
+                is_satisfied = (rarity >= 4)
+            elif effect_id == "G17":
+                # G17: 最终为高品质且四星以上
+                is_satisfied = (rarity >= 4 and quality_level == 1)
+            elif effect_id == "P17":
+                # P17: 最终鱼星级等于当前鱼区最高可抽星级且最高>=4
+                is_satisfied = (top_rarity >= 4 and rarity == top_rarity)
+
+        if not is_satisfied:
+            return None
+
+        cooldown_seconds = self._get_effective_fishing_cooldown(user.user_id)
+        effective_chance = self._calculate_effective_premium_chance(stored_chance, cooldown_seconds)
+        if effective_chance <= 0.0:
+            return None
+
+        if random.random() < effective_chance:
+            current_premium = getattr(user, "premium_currency", 0)
+            try:
+                user.premium_currency = int(current_premium) + 1
+            except (TypeError, ValueError):
+                user.premium_currency = 1
+            return {"amount": 1, "effect_id": effect_id}
+
+        return None
+
     def go_fish(self, user_id: str) -> Dict[str, Any]:
         """
         执行一次完整的钓鱼动作。
@@ -574,10 +678,19 @@ class FishingService:
             )
             user.coins += refund
             user.last_fishing_time = get_now()
+            premium_reward = self._evaluate_hextech_premium(
+                user, hextech_effects, condition_type="empty",
+                context={"paid": fishing_cost_paid, "cost": fishing_cost},
+            )
             self.user_repo.update(user)
             result = {"success": False, "message": "💨 什么都没钓到..."}
             if refund:
                 result["refund"] = refund
+            if premium_reward:
+                result["hextech_premium_reward"] = premium_reward["amount"]
+                result["hextech_premium_effect_id"] = premium_reward["effect_id"]
+                result["hextech_premium_message"] = "💎 海克斯惊喜：获得1点高级货币！"
+                result["message"] += "\n💎 海克斯惊喜：获得1点高级货币！"
             return result
 
         # 4. 成功，先构造严格受当前区域鱼种与星级概率约束的鱼池。
@@ -935,6 +1048,15 @@ class FishingService:
             if not accessory_instance:
                 user.equipped_accessory_instance_id = None
 
+        premium_reward = self._evaluate_hextech_premium(
+            user, hextech_effects, condition_type="caught",
+            context={
+                "rarity": fish_template.rarity,
+                "quality_level": quality_level,
+                "top_rarity": top_rarity,
+            }
+        )
+
         # 更新用户信息
         self.user_repo.update(user)
 
@@ -988,6 +1110,12 @@ class FishingService:
             }
         }
         
+        if premium_reward:
+            result["hextech_premium_reward"] = premium_reward["amount"]
+            result["hextech_premium_effect_id"] = premium_reward["effect_id"]
+            result["hextech_premium_message"] = "💎 海克斯惊喜：获得1点高级货币！"
+            result["message"] = "💎 海克斯惊喜：获得1点高级货币！"
+
         # 添加装备损坏消息
         if equipment_broken_messages:
             result["equipment_broken_messages"] = equipment_broken_messages
@@ -1670,6 +1798,16 @@ class FishingService:
                             except Exception:
                                 # 通知失败不影响主流程
                                 pass
+
+                    # 自动钓鱼时，若获得高级货币，独立通知一次（成功或空竿均发）
+                    if result and result.get("hextech_premium_reward"):
+                        premium_msg = result.get("hextech_premium_message") or "💎 海克斯惊喜：获得1点高级货币！"
+                        try:
+                            if self._notifier:
+                                self._notifier(user_id, premium_msg)
+                        except Exception:
+                            # 通知失败不影响已入账奖励或重发
+                            pass
                     # if result['success']:
                     #     fish = result["fish"]
                     #     logger.info(f"用户 {user_id} 自动钓鱼成功: {fish['name']}")
