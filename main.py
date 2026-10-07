@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+from functools import wraps
 from datetime import datetime
 
 from astrbot.api import logger, AstrBotConfig
@@ -30,6 +31,7 @@ from .core.repositories.sqlite_notification_repo import SqliteNotificationReposi
 from .core.repositories.sqlite_statistics_repo import SqliteStatisticsRepository
 from .core.repositories.sqlite_ai_state_repo import SqliteAIPlayerStateRepository
 from .core.repositories.sqlite_ai_snapshot_repo import SqliteAIDecisionSnapshotRepository
+from .core.repositories.sqlite_hextech_repo import SqliteHextechRepository
 from .core.services.statistics_service import StatisticsService
 from .core.utils import get_now
 from .draw.statistics import draw_period_report_image_async
@@ -56,6 +58,7 @@ from .core.services.cat_service import CatService
 from .core.services.blackjack_service import BlackjackService
 from .core.services.slot_service import SlotService
 from .core.services.showcase_service import ShowcaseService
+from .core.services.hextech_service import HextechService
 
 from .core.services.ai_player_service import AIPlayerService
 from .core.services.ai.feature_extractor import FeatureExtractor
@@ -102,6 +105,46 @@ from .handlers.exchange_handlers import ExchangeHandlers
 from .handlers.loan_handlers import LoanHandlers
 from .handlers.bank_handlers import BankHandlers
 from .handlers.cat_handlers import CatHandlers
+
+
+_HEXTECH_ADMIN_COMMANDS = {
+    "set_blackjack_mode", "toggle_game_module", "modify_coins", "modify_premium",
+    "reward_premium", "deduct_premium", "reward_all_coins", "reward_all_premium",
+    "deduct_all_coins", "deduct_all_premium", "reward_coins", "deduct_coins",
+    "start_admin", "stop_admin", "sync_initial_data", "grant_title", "revoke_title",
+    "create_title", "impersonate_start", "impersonate_stop", "reward_all_items",
+    "replenish_fish_pools", "cleanup_red_packets", "force_settle_sicbo",
+    "set_sicbo_countdown", "set_sicbo_mode", "set_slot_mode", "view_all_loans",
+}
+
+
+def _hextech_prompt_after_command(handler):
+    """Append first-time daily offers after the original command has fully replied."""
+    @wraps(handler)
+    async def wrapped(self, event, *args, **kwargs):
+        async for result in handler(self, event, *args, **kwargs):
+            yield result
+
+        # /海克斯 is the explicit card UI and handles its own first-use behavior.
+        if handler.__name__ == "hextech":
+            return
+
+        service = getattr(self, "hextech_service", None)
+        if service is None:
+            return
+
+        try:
+            if handler.__name__ in _HEXTECH_ADMIN_COMMANDS:
+                actor_id = event.get_sender_id()
+            else:
+                actor_id = self._get_effective_user_id(event)
+            state, created = service.ensure_daily_state(actor_id)
+            if created and state is not None:
+                yield event.plain_result(service.render_new_offer_prompt(state, str(actor_id)))
+        except Exception as exc:
+            logger.error(f"触发每日海克斯候选失败: {exc}")
+
+    return wrapped
 
 
 class FishingPlugin(Star):
@@ -332,6 +375,18 @@ class FishingPlugin(Star):
             self.game_config,
             statistics_repo=self.statistics_repo,
         )
+
+        self.hextech_repo = SqliteHextechRepository(db_path)
+        self.hextech_service = HextechService(
+            repository=self.hextech_repo,
+            user_repo=self.user_repo,
+            inventory_repo=self.inventory_repo,
+            item_template_repo=self.item_template_repo,
+            fishing_zone_service=self.fishing_zone_service,
+            daily_reset_hour=self.game_config.get("daily_reset_hour", 0),
+        )
+        self.fishing_service.hextech_service = self.hextech_service
+        self.gacha_service.game_config = self.game_config
         
         # 导入并初始化展示柜服务
         self.showcase_service = ShowcaseService(
@@ -979,49 +1034,139 @@ class FishingPlugin(Star):
                                """)
     # =========== 基础与核心 ==========
 
+    @filter.command("海克斯")
+    async def hextech(self, event: AstrMessageEvent):
+        """查看、刷新或选择今日海克斯卡。用法：/海克斯 [刷新/1/2/3/重置]"""
+        raw_text = (getattr(event, "message_str", "") or "").strip()
+        parts = raw_text.split()
+        action = ""
+        if parts:
+            first = parts[0].lstrip("/")
+            if first == "海克斯":
+                action = parts[1] if len(parts) > 1 else ""
+            elif first in {"刷新", "重抽", "1", "2", "3", "重置"}:
+                action = first
+
+        if action == "重置":
+            # Check the real event's AstrBot permission, never the proxy actor.
+            if not event.is_admin():
+                yield event.plain_result("❌ 只有管理员可以重置所有用户的海克斯。")
+                return
+            if len(parts) > 2:
+                yield event.plain_result("用法：/海克斯 重置")
+                return
+            try:
+                result = self.hextech_service.reset_all_users()
+                logger.info(f"管理员 {event.get_sender_id()} 重置全部海克斯: {result}")
+                yield event.plain_result(
+                    f"✅ 已重置全部用户的海克斯和刷新次数（涉及 {result['users']} 位用户）。\n"
+                    "用户下次操作时会重新触发选择，免费刷新恢复为2次。"
+                )
+            except Exception as exc:
+                logger.error(f"重置全部海克斯失败: {exc}")
+                yield event.plain_result("❌ 重置失败，请检查日志后重试。")
+            return
+
+        actor_id = self._get_effective_user_id(event)
+        if not action:
+            state, _ = self.hextech_service.ensure_daily_state(actor_id)
+            if state is None:
+                yield event.plain_result("❌ 当前无法生成海克斯候选卡。")
+            else:
+                yield event.plain_result(self.hextech_service.render_offers(state, str(actor_id)))
+            return
+
+        if action in {"刷新", "重抽"}:
+            state, status = self.hextech_service.reroll(actor_id)
+            if status == "created" and state is not None:
+                message = "今日候选已生成，首次展示不消耗刷新次数。\n\n"
+                message += self.hextech_service.render_offers(state, str(actor_id))
+            elif status == "rerolled" and state is not None:
+                message = "✅ 已刷新整组三张候选卡。\n\n"
+                message += self.hextech_service.render_offers(state, str(actor_id))
+            elif status == "limit_reached" and state is not None:
+                message = "今日两次刷新机会已用完。\n\n"
+                message += self.hextech_service.render_offers(state, str(actor_id))
+            elif status == "selected" and state is not None:
+                message = "已选择今日海克斯卡，不能再刷新。\n\n"
+                message += self.hextech_service.render_offers(state, str(actor_id))
+            else:
+                message = "❌ 当前无法刷新海克斯候选卡。"
+            yield event.plain_result(message)
+            return
+
+        if action in {"1", "2", "3"}:
+            state, status = self.hextech_service.choose(actor_id, int(action))
+            if status == "created" and state is not None:
+                message = "今日候选刚生成，请先查看卡片后再选择。\n\n"
+                message += self.hextech_service.render_offers(state, str(actor_id))
+            elif status == "selected" and state is not None:
+                message = f"✅ 已选择第 {int(action)} 张海克斯卡，今日效果已生效。\n\n"
+                message += self.hextech_service.render_offers(state, str(actor_id))
+            elif status == "already_selected" and state is not None:
+                message = "今日已经选择过海克斯卡，不能更改。\n\n"
+                message += self.hextech_service.render_offers(state, str(actor_id))
+            elif status == "invalid_index" and state is not None:
+                message = "❌ 卡片编号无效，请使用 1、2 或 3。\n\n"
+                message += self.hextech_service.render_offers(state, str(actor_id))
+            else:
+                message = "❌ 当前无法选择海克斯卡。"
+            yield event.plain_result(message)
+            return
+
+        yield event.plain_result("用法：/海克斯 查看，/海克斯 刷新，或 /海克斯 1、2、3 选择卡片。")
+
     @filter.command("注册")
+    @_hextech_prompt_after_command
     async def register_user(self, event: AstrMessageEvent):
         """注册成为钓鱼游戏玩家，开始你的钓鱼之旅"""
         async for r in common_handlers.register_user(self, event):
             yield r
 
     @filter.command("钓鱼")
+    @_hextech_prompt_after_command
     async def fish(self, event: AstrMessageEvent):
         """进行一次钓鱼，消耗金币并获得鱼类或物品"""
         async for r in self.fishing_handlers.fish(event):
             yield r
 
     @filter.command("签到")
+    @_hextech_prompt_after_command
     async def sign_in(self, event: AstrMessageEvent):
         """每日签到领取奖励，连续签到奖励更丰厚"""
         async for r in common_handlers.sign_in(self, event):
             yield r
 
     @filter.command("补签")
+    @_hextech_prompt_after_command
     async def makeup_sign_in(self, event: AstrMessageEvent):
         """补签最近漏签的一天，消耗高级货币"""
         async for r in common_handlers.makeup_sign_in(self, event):
             yield r
 
     @filter.command("自动钓鱼")
+    @_hextech_prompt_after_command
     async def auto_fish(self, event: AstrMessageEvent):
         """开启或关闭自动钓鱼功能，自动钓鱼会定期帮你钓鱼"""
         async for r in self.fishing_handlers.auto_fish(event): 
             yield r
 
     @filter.command("钓鱼记录", alias={"钓鱼日志", "钓鱼历史"})
+    @_hextech_prompt_after_command
     async def fishing_log(self, event: AstrMessageEvent):
         """查看你的钓鱼历史记录"""
         async for r in common_handlers.fishing_log(self, event):
             yield r
 
     @filter.command("状态", alias={"我的状态"})
+    @_hextech_prompt_after_command
     async def state(self, event: AstrMessageEvent):
         """查看你的游戏状态，包括金币、等级、装备等信息"""
         async for r in common_handlers.state(self, event):
             yield r
 
     @filter.command("钓鱼帮助", alias={"钓鱼菜单", "菜单"})
+    @_hextech_prompt_after_command
     async def fishing_help(self, event: AstrMessageEvent):
         """查看钓鱼游戏的帮助信息和所有可用命令"""
         async for r in common_handlers.fishing_help(self, event):
@@ -1030,30 +1175,35 @@ class FishingPlugin(Star):
     # =========== 背包与资产 ==========
 
     @filter.command("背包", alias={"查看背包", "我的背包"})
+    @_hextech_prompt_after_command
     async def user_backpack(self, event: AstrMessageEvent):
         """查看你的背包，包含所有物品和装备"""
         async for r in inventory_handlers.user_backpack(self, event):
             yield r
 
     @filter.command("鱼塘")
+    @_hextech_prompt_after_command
     async def pond(self, event: AstrMessageEvent):
         """查看你的鱼塘，查看所有已钓到的鱼"""
         async for r in inventory_handlers.pond(self, event):
             yield r
 
     @filter.command("偷看鱼塘", alias={"查看鱼塘", "偷看"})
+    @_hextech_prompt_after_command
     async def peek_pond(self, event: AstrMessageEvent):
         """偷看别人的鱼塘，查看其他玩家的鱼。用法：偷看鱼塘 @用户"""
         async for r in inventory_handlers.peek_pond(self, event):
             yield r
 
     @filter.command("鱼塘容量")
+    @_hextech_prompt_after_command
     async def pond_capacity(self, event: AstrMessageEvent):
         """查看当前鱼塘容量和升级信息"""
         async for r in inventory_handlers.pond_capacity(self, event):
             yield r
 
     @filter.command("升级鱼塘", alias={"鱼塘升级"})
+    @_hextech_prompt_after_command
     async def upgrade_pond(self, event: AstrMessageEvent):
         """升级鱼塘容量，可以存放更多的鱼"""
         async for r in inventory_handlers.upgrade_pond(self, event):
@@ -1061,169 +1211,199 @@ class FishingPlugin(Star):
 
     # 水族箱相关命令
     @filter.command("水族箱")
+    @_hextech_prompt_after_command
     async def aquarium(self, event: AstrMessageEvent):
         """查看你的水族箱，欣赏展示的珍贵鱼类"""
         async for r in aquarium_handlers.aquarium(self, event):
             yield r
 
     @filter.command("放入水族箱", alias={"移入水族箱"})
+    @_hextech_prompt_after_command
     async def add_to_aquarium(self, event: AstrMessageEvent):
         """将鱼从鱼塘放入水族箱展示。用法：放入水族箱 鱼的编号"""
         async for r in aquarium_handlers.add_to_aquarium(self, event):
             yield r
 
     @filter.command("移出水族箱", alias={"移回鱼塘"})
+    @_hextech_prompt_after_command
     async def remove_from_aquarium(self, event: AstrMessageEvent):
         """将鱼从水族箱移回鱼塘。用法：移出水族箱 鱼的编号"""
         async for r in aquarium_handlers.remove_from_aquarium(self, event):
             yield r
 
     @filter.command("升级水族箱", alias={"水族箱升级"})
+    @_hextech_prompt_after_command
     async def upgrade_aquarium(self, event: AstrMessageEvent):
         """升级水族箱容量，可以展示更多珍贵鱼类"""
         async for r in aquarium_handlers.upgrade_aquarium(self, event):
             yield r
 
     @filter.command("养猫帮助")
+    @_hextech_prompt_after_command
     async def cat_help(self, event: AstrMessageEvent):
         async for r in self.cat_handlers.cat_help(event):
             yield r
 
     @filter.command("领养猫咪")
+    @_hextech_prompt_after_command
     async def adopt_cat(self, event: AstrMessageEvent):
         async for r in self.cat_handlers.adopt_cat(event):
             yield r
 
     @filter.command("我的猫咪")
+    @_hextech_prompt_after_command
     async def my_cats(self, event: AstrMessageEvent):
         async for r in self.cat_handlers.my_cats(event):
             yield r
 
     @filter.command("猫咪状态")
+    @_hextech_prompt_after_command
     async def cat_status(self, event: AstrMessageEvent):
         async for r in self.cat_handlers.cat_status(event):
             yield r
 
     @filter.command("喂猫")
+    @_hextech_prompt_after_command
     async def feed_cat(self, event: AstrMessageEvent):
         async for r in self.cat_handlers.feed_cat(event):
             yield r
 
     @filter.command("逗猫")
+    @_hextech_prompt_after_command
     async def play_with_cat(self, event: AstrMessageEvent):
         async for r in self.cat_handlers.play_with_cat(event):
             yield r
 
     @filter.command("治疗猫咪")
+    @_hextech_prompt_after_command
     async def treat_cat(self, event: AstrMessageEvent):
         async for r in self.cat_handlers.treat_cat(event):
             yield r
 
     @filter.command("猫咪改名")
+    @_hextech_prompt_after_command
     async def rename_cat(self, event: AstrMessageEvent):
         async for r in self.cat_handlers.rename_cat(event):
             yield r
 
     @filter.command("放生猫咪")
+    @_hextech_prompt_after_command
     async def release_cat(self, event: AstrMessageEvent):
         async for r in self.cat_handlers.release_cat(event):
             yield r
 
     @filter.command("一键逗猫")
+    @_hextech_prompt_after_command
     async def batch_play_with_cats(self, event: AstrMessageEvent):
         async for r in self.cat_handlers.batch_play_with_cats(event):
             yield r
 
     @filter.command("一键喂猫")
+    @_hextech_prompt_after_command
     async def batch_feed_cats(self, event: AstrMessageEvent):
         async for r in self.cat_handlers.batch_feed_cats(event):
             yield r
 
     @filter.command("鱼竿")
+    @_hextech_prompt_after_command
     async def rod(self, event: AstrMessageEvent):
         """查看你拥有的所有鱼竿"""
         async for r in inventory_handlers.rod(self, event):
             yield r
 
     @filter.command("精炼", alias={"强化"})
+    @_hextech_prompt_after_command
     async def refine_equipment(self, event: AstrMessageEvent):
         """精炼装备提升属性。用法：精炼 装备编号"""
         async for r in inventory_handlers.refine_equipment(self, event):
             yield r
 
     @filter.command("修复", alias={"修复鱼竿"})
+    @_hextech_prompt_after_command
     async def repair_rod(self, event: AstrMessageEvent):
         """修复鱼竿耐久度。用法：修复 [鱼竿ID]"""
         async for r in inventory_handlers.repair_rod(self, event):
             yield r
 
     @filter.command("出售", alias={"卖出"})
+    @_hextech_prompt_after_command
     async def sell_equipment(self, event: AstrMessageEvent):
         """出售装备换取金币。用法：出售 装备编号"""
         async for r in inventory_handlers.sell_equipment(self, event):
             yield r
 
     @filter.command("鱼饵")
+    @_hextech_prompt_after_command
     async def bait(self, event: AstrMessageEvent):
         """查看你拥有的所有鱼饵"""
         async for r in inventory_handlers.bait(self, event):
             yield r
 
     @filter.command("道具", alias={"我的道具", "查看道具"})
+    @_hextech_prompt_after_command
     async def items(self, event: AstrMessageEvent):
         """查看你拥有的所有道具"""
         async for r in inventory_handlers.items(self, event):
             yield r
 
     @filter.command("开启全部钱袋", alias={"打开全部钱袋", "打开所有钱袋"})
+    @_hextech_prompt_after_command
     async def open_all_money_bags(self, event: AstrMessageEvent):
         """一次性打开所有钱袋，获得金币"""
         async for r in inventory_handlers.open_all_money_bags(self, event):
             yield r
 
     @filter.command("饰品")
+    @_hextech_prompt_after_command
     async def accessories(self, event: AstrMessageEvent):
         """查看你拥有的所有饰品"""
         async for r in inventory_handlers.accessories(self, event):
             yield r
 
     @filter.command("锁定", alias={"上锁"})
+    @_hextech_prompt_after_command
     async def lock_equipment(self, event: AstrMessageEvent):
         """锁定装备防止误操作。用法：锁定 装备编号"""
         async for r in inventory_handlers.lock_equipment(self, event):
             yield r
 
     @filter.command("解锁", alias={"开锁"})
+    @_hextech_prompt_after_command
     async def unlock_equipment(self, event: AstrMessageEvent):
         """解锁已锁定的装备。用法：解锁 装备编号"""
         async for r in inventory_handlers.unlock_equipment(self, event):
             yield r
 
     @filter.command("使用", alias={"装备"})
+    @_hextech_prompt_after_command
     async def use_equipment(self, event: AstrMessageEvent):
         """使用或装备物品。用法：使用 物品编号"""
         async for r in inventory_handlers.use_equipment(self, event):
             yield r
 
     @filter.command("金币", alias={"钱包", "余额"})
+    @_hextech_prompt_after_command
     async def coins(self, event: AstrMessageEvent):
         """查看你当前拥有的金币数量"""
         async for r in inventory_handlers.coins(self, event):
             yield r
 
     @filter.command("转账", alias={"赠送"})
+    @_hextech_prompt_after_command
     async def transfer_coins(self, event: AstrMessageEvent):
         """转账金币给其他玩家。用法：转账 @用户 金额"""
         async for r in common_handlers.transfer_coins(self, event):
             yield r
 
     @filter.command("更新昵称", alias={"修改昵称", "改昵称", "昵称"})
+    @_hextech_prompt_after_command
     async def update_nickname(self, event: AstrMessageEvent):
         """更新你的游戏昵称。用法：更新昵称 新昵称"""
         async for r in common_handlers.update_nickname(self, event):
             yield r
 
     @filter.command("高级货币", alias={"钻石", "星石"})
+    @_hextech_prompt_after_command
     async def premium(self, event: AstrMessageEvent):
         """查看你当前拥有的高级货币（钻石/星石）数量"""
         async for r in inventory_handlers.premium(self, event):
@@ -1232,12 +1412,14 @@ class FishingPlugin(Star):
     # =========== 钓鱼与图鉴 ==========
 
     @filter.command("钓鱼区域", alias={"区域"})
+    @_hextech_prompt_after_command
     async def fishing_area(self, event: AstrMessageEvent):
         """查看所有钓鱼区域和切换钓鱼区域。用法：钓鱼区域 [区域编号]"""
         async for r in self.fishing_handlers.fishing_area(event):
             yield r
 
     @filter.command("鱼类图鉴", alias={"图鉴"})
+    @_hextech_prompt_after_command
     async def fish_pokedex(self, event: AstrMessageEvent):
         """查看鱼类图鉴，了解所有可钓到的鱼"""
         async for r in self.fishing_handlers.fish_pokedex(event): 
@@ -1246,78 +1428,91 @@ class FishingPlugin(Star):
     # =========== 市场与商店 ==========
 
     @filter.command("全部卖出", alias={"全部出售", "卖出全部", "出售全部", "清空鱼"})
+    @_hextech_prompt_after_command
     async def sell_all(self, event: AstrMessageEvent):
         """卖出鱼塘中所有的鱼，换取金币"""
         async for r in market_handlers.sell_all(self, event):
             yield r
 
     @filter.command("保留卖出", alias={"保留出售", "卖出保留", "出售保留"})
+    @_hextech_prompt_after_command
     async def sell_keep(self, event: AstrMessageEvent):
         """卖出鱼塘中的鱼，但保留指定数量。用法：保留卖出 保留数量"""
         async for r in market_handlers.sell_keep(self, event):
             yield r
 
     @filter.command("砸锅卖铁", alias={"破产", "清空"})
+    @_hextech_prompt_after_command
     async def sell_everything(self, event: AstrMessageEvent):
         """卖掉所有可以出售的物品，包括鱼、装备等"""
         async for r in market_handlers.sell_everything(self, event):
             yield r
 
     @filter.command("出售稀有度", alias={"稀有度出售", "出售星级"})
+    @_hextech_prompt_after_command
     async def sell_by_rarity(self, event: AstrMessageEvent):
         """按稀有度出售鱼。用法：出售稀有度 星级"""
         async for r in market_handlers.sell_by_rarity(self, event):
             yield r
 
     @filter.command("出售所有鱼竿", alias={"出售全部鱼竿", "卖出所有鱼竿", "卖出全部鱼竿", "清空鱼竿"})
+    @_hextech_prompt_after_command
     async def sell_all_rods(self, event: AstrMessageEvent):
         """出售所有未装备且未锁定的鱼竿"""
         async for r in market_handlers.sell_all_rods(self, event):
             yield r
 
     @filter.command("出售所有饰品", alias={"出售全部饰品", "卖出所有饰品", "卖出全部饰品", "清空饰品"})
+    @_hextech_prompt_after_command
     async def sell_all_accessories(self, event: AstrMessageEvent):
         """出售所有未装备且未锁定的饰品"""
         async for r in market_handlers.sell_all_accessories(self, event):
             yield r
 
     @filter.command("商店")
+    @_hextech_prompt_after_command
     async def shop(self, event: AstrMessageEvent):
         """查看所有可用的商店"""
         async for r in market_handlers.shop(self, event):
             yield r
 
     @filter.command("商店购买", alias={"购买商店商品", "购买商店"})
+    @_hextech_prompt_after_command
     async def buy_in_shop(self, event: AstrMessageEvent):
         """从商店购买商品。用法：商店购买 商品编号 [数量]"""
         async for r in market_handlers.buy_in_shop(self, event):
             yield r
 
     @filter.command("市场")
+    @_hextech_prompt_after_command
     async def market(self, event: AstrMessageEvent):
         """查看玩家市场中的所有上架商品"""
         async for r in market_handlers.market(self, event):
             yield r
 
     @filter.command("上架")
+    @_hextech_prompt_after_command
     async def list_any(self, event: AstrMessageEvent):
         """将物品上架到市场出售。用法：上架 物品编号 价格"""
         async for r in market_handlers.list_any(self, event):
             yield r
 
     @filter.command("购买")
+    @_hextech_prompt_after_command
     async def buy_item(self, event: AstrMessageEvent):
         """从市场购买玩家上架的商品。用法：购买 订单编号"""
         async for r in market_handlers.buy_item(self, event):
             yield r
 
     @filter.command("我的上架", alias={"上架列表", "我的商品", "我的挂单"})
+    @_hextech_prompt_after_command
     async def my_listings(self, event: AstrMessageEvent):
         """查看你在市场上架的所有商品"""
         async for r in market_handlers.my_listings(self, event):
             yield r
 
     @filter.command("下架")
+    @_hextech_prompt_after_command
     async def delist_item(self, event: AstrMessageEvent):
         """从市场下架你上架的商品。用法：下架 订单编号"""
         async for r in market_handlers.delist_item(self, event):
@@ -1326,54 +1521,63 @@ class FishingPlugin(Star):
     # =========== 抽卡 ==========
 
     @filter.command("抽卡", alias={"抽奖"})
+    @_hextech_prompt_after_command
     async def gacha(self, event: AstrMessageEvent):
         """进行一次抽卡，有机会获得稀有装备和道具"""
         async for r in gacha_handlers.gacha(self, event):
             yield r
 
     @filter.command("十连")
+    @_hextech_prompt_after_command
     async def ten_gacha(self, event: AstrMessageEvent):
         """进行十次连续抽卡，有保底机制"""
         async for r in gacha_handlers.ten_gacha(self, event):
             yield r
 
     @filter.command("查看卡池", alias={"卡池"})
+    @_hextech_prompt_after_command
     async def view_gacha_pool(self, event: AstrMessageEvent):
         """查看当前卡池中的所有物品及其概率"""
         async for r in gacha_handlers.view_gacha_pool(self, event):
             yield r
 
     @filter.command("抽卡记录")
+    @_hextech_prompt_after_command
     async def gacha_history(self, event: AstrMessageEvent):
         """查看你的抽卡历史记录"""
         async for r in gacha_handlers.gacha_history(self, event):
             yield r
 
     @filter.command("擦弹")
+    @_hextech_prompt_after_command
     async def wipe_bomb(self, event: AstrMessageEvent):
         """使用擦弹道具，有机会重置保底计数"""
         async for r in gacha_handlers.wipe_bomb(self, event):
             yield r
 
     @filter.command("擦弹记录", alias={"擦弹历史"})
+    @_hextech_prompt_after_command
     async def wipe_bomb_history(self, event: AstrMessageEvent):
         """查看你的擦弹历史记录"""
         async for r in gacha_handlers.wipe_bomb_history(self, event):
             yield r
 
     @filter.command("命运之轮", alias={"wof", "命运"})
+    @_hextech_prompt_after_command
     async def wheel_of_fate_start(self, event: AstrMessageEvent):
         """开始命运之轮游戏"""
         async for r in gacha_handlers.start_wheel_of_fate(self, event):
             yield r
         
     @filter.command("继续")
+    @_hextech_prompt_after_command
     async def wheel_of_fate_continue(self, event: AstrMessageEvent):
         """在命运之轮游戏中选择继续冒险"""
         async for r in gacha_handlers.continue_wheel_of_fate(self, event):
             yield r
 
     @filter.command("放弃")
+    @_hextech_prompt_after_command
     async def wheel_of_fate_stop(self, event: AstrMessageEvent):
         """在命运之轮游戏中选择放弃并结算奖励"""
         async for r in gacha_handlers.stop_wheel_of_fate(self, event):
@@ -1382,30 +1586,35 @@ class FishingPlugin(Star):
     # =========== 红包系统 ==========
 
     @filter.command("发红包", alias={"发放红包"})
+    @_hextech_prompt_after_command
     async def send_red_packet(self, event: AstrMessageEvent):
         """发送红包。用法：发红包 [金额] [数量] [类型] [口令]"""
         async for r in red_packet_handlers.send_red_packet(self, event):
             yield r
 
     @filter.command("领红包", alias={"抢红包", "拿红包", "取红包", "领取红包"})
+    @_hextech_prompt_after_command
     async def claim_red_packet(self, event: AstrMessageEvent):
         """领取红包。用法：领红包 [口令]"""
         async for r in red_packet_handlers.claim_red_packet(self, event):
             yield r
 
     @filter.command("红包列表", alias={"红包", "查看红包列表"})
+    @_hextech_prompt_after_command
     async def list_red_packets(self, event: AstrMessageEvent):
         """查看当前群组可领取的红包列表"""
         async for r in red_packet_handlers.list_red_packets(self, event):
             yield r
 
     @filter.command("红包详情", alias={"查看红包"})
+    @_hextech_prompt_after_command
     async def red_packet_details(self, event: AstrMessageEvent):
         """查看红包详情。用法：红包详情 [红包ID]"""
         async for r in red_packet_handlers.red_packet_details(self, event):
             yield r
 
     @filter.command("撤回红包", alias={"撤销红包", "取消红包"})
+    @_hextech_prompt_after_command
     async def revoke_red_packet(self, event: AstrMessageEvent):
         """撤回红包并退还未领取的金额。用法：撤回红包 [红包ID]"""
         async for r in red_packet_handlers.revoke_red_packet(self, event):
@@ -1414,186 +1623,217 @@ class FishingPlugin(Star):
     # =========== 骰宝游戏 ==========
 
     @filter.command("开庄")
+    @_hextech_prompt_after_command
     async def start_sicbo(self, event: AstrMessageEvent):
         """开启骰宝游戏（系统庄家），倒计时供玩家下注"""
         async for r in sicbo_handlers.start_sicbo_game(self, event):
             yield r
 
     @filter.command("玩家开庄", alias={"我来当庄", "我当庄"})
+    @_hextech_prompt_after_command
     async def start_sicbo_player_banker(self, event: AstrMessageEvent):
         """玩家当庄开启骰宝游戏，胜负结果从庄家账上结算"""
         async for r in sicbo_handlers.start_sicbo_player_banker(self, event):
             yield r
 
     @filter.command("鸭大")
+    @_hextech_prompt_after_command
     async def bet_big(self, event: AstrMessageEvent):
         """鸭大（总点数11-17）。用法：鸭大 金额"""
         async for r in sicbo_handlers.bet_big(self, event):
             yield r
 
     @filter.command("鸭小")
+    @_hextech_prompt_after_command
     async def bet_small(self, event: AstrMessageEvent):
         """鸭小（总点数4-10）。用法：鸭小 金额"""
         async for r in sicbo_handlers.bet_small(self, event):
             yield r
 
     @filter.command("鸭单")
+    @_hextech_prompt_after_command
     async def bet_odd(self, event: AstrMessageEvent):
         """鸭单（总点数为奇数）。用法：鸭单 金额"""
         async for r in sicbo_handlers.bet_odd(self, event):
             yield r
 
     @filter.command("鸭双")
+    @_hextech_prompt_after_command
     async def bet_even(self, event: AstrMessageEvent):
         """鸭双（总点数为偶数）。用法：鸭双 金额"""
         async for r in sicbo_handlers.bet_even(self, event):
             yield r
 
     @filter.command("鸭豹子")
+    @_hextech_prompt_after_command
     async def bet_triple(self, event: AstrMessageEvent):
         """鸭豹子（三个骰子相同）。用法：鸭豹子 金额"""
         async for r in sicbo_handlers.bet_triple(self, event):
             yield r
 
     @filter.command("鸭一点")
+    @_hextech_prompt_after_command
     async def bet_one_point(self, event: AstrMessageEvent):
         """鸭一点（骰子出现1）。用法：鸭一点 金额"""
         async for r in sicbo_handlers.bet_one_point(self, event):
             yield r
 
     @filter.command("鸭二点")
+    @_hextech_prompt_after_command
     async def bet_two_point(self, event: AstrMessageEvent):
         """鸭二点（骰子出现2）。用法：鸭二点 金额"""
         async for r in sicbo_handlers.bet_two_point(self, event):
             yield r
 
     @filter.command("鸭三点")
+    @_hextech_prompt_after_command
     async def bet_three_point(self, event: AstrMessageEvent):
         """鸭三点（骰子出现3）。用法：鸭三点 金额"""
         async for r in sicbo_handlers.bet_three_point(self, event):
             yield r
 
     @filter.command("鸭四点")
+    @_hextech_prompt_after_command
     async def bet_four_point(self, event: AstrMessageEvent):
         """鸭四点（骰子出现4）。用法：鸭四点 金额"""
         async for r in sicbo_handlers.bet_four_point(self, event):
             yield r
 
     @filter.command("鸭五点")
+    @_hextech_prompt_after_command
     async def bet_five_point(self, event: AstrMessageEvent):
         """鸭五点（骰子出现5）。用法：鸭五点 金额"""
         async for r in sicbo_handlers.bet_five_point(self, event):
             yield r
 
     @filter.command("鸭六点")
+    @_hextech_prompt_after_command
     async def bet_six_point(self, event: AstrMessageEvent):
         """鸭六点（骰子出现6）。用法：鸭六点 金额"""
         async for r in sicbo_handlers.bet_six_point(self, event):
             yield r
 
     @filter.command("鸭4点")
+    @_hextech_prompt_after_command
     async def bet_4_points(self, event: AstrMessageEvent):
         """鸭总点数4点。用法：鸭4点 金额"""
         async for r in sicbo_handlers.bet_4_points(self, event):
             yield r
 
     @filter.command("鸭5点")
+    @_hextech_prompt_after_command
     async def bet_5_points(self, event: AstrMessageEvent):
         """鸭总点数5点。用法：鸭5点 金额"""
         async for r in sicbo_handlers.bet_5_points(self, event):
             yield r
 
     @filter.command("鸭6点")
+    @_hextech_prompt_after_command
     async def bet_6_points(self, event: AstrMessageEvent):
         """鸭总点数6点。用法：鸭6点 金额"""
         async for r in sicbo_handlers.bet_6_points(self, event):
             yield r
 
     @filter.command("鸭7点")
+    @_hextech_prompt_after_command
     async def bet_7_points(self, event: AstrMessageEvent):
         """鸭总点数7点。用法：鸭7点 金额"""
         async for r in sicbo_handlers.bet_7_points(self, event):
             yield r
 
     @filter.command("鸭8点")
+    @_hextech_prompt_after_command
     async def bet_8_points(self, event: AstrMessageEvent):
         """押总点数8点。用法：押8点 金额"""
         async for r in sicbo_handlers.bet_8_points(self, event):
             yield r
 
     @filter.command("鸭9点")
+    @_hextech_prompt_after_command
     async def bet_9_points(self, event: AstrMessageEvent):
         """押总点数9点。用法：押9点 金额"""
         async for r in sicbo_handlers.bet_9_points(self, event):
             yield r
 
     @filter.command("鸭10点")
+    @_hextech_prompt_after_command
     async def bet_10_points(self, event: AstrMessageEvent):
         """押总点数10点。用法：押10点 金额"""
         async for r in sicbo_handlers.bet_10_points(self, event):
             yield r
 
     @filter.command("鸭11点")
+    @_hextech_prompt_after_command
     async def bet_11_points(self, event: AstrMessageEvent):
         """押总点数11点。用法：押11点 金额"""
         async for r in sicbo_handlers.bet_11_points(self, event):
             yield r
 
     @filter.command("鸭12点")
+    @_hextech_prompt_after_command
     async def bet_12_points(self, event: AstrMessageEvent):
         """押总点数12点。用法：押12点 金额"""
         async for r in sicbo_handlers.bet_12_points(self, event):
             yield r
 
     @filter.command("鸭13点")
+    @_hextech_prompt_after_command
     async def bet_13_points(self, event: AstrMessageEvent):
         """押总点数13点。用法：押13点 金额"""
         async for r in sicbo_handlers.bet_13_points(self, event):
             yield r
 
     @filter.command("鸭14点")
+    @_hextech_prompt_after_command
     async def bet_14_points(self, event: AstrMessageEvent):
         """押总点数14点。用法：押14点 金额"""
         async for r in sicbo_handlers.bet_14_points(self, event):
             yield r
 
     @filter.command("鸭15点")
+    @_hextech_prompt_after_command
     async def bet_15_points(self, event: AstrMessageEvent):
         """押总点数15点。用法：押15点 金额"""
         async for r in sicbo_handlers.bet_15_points(self, event):
             yield r
 
     @filter.command("鸭16点")
+    @_hextech_prompt_after_command
     async def bet_16_points(self, event: AstrMessageEvent):
         """押总点数16点。用法：押16点 金额"""
         async for r in sicbo_handlers.bet_16_points(self, event):
             yield r
 
     @filter.command("鸭17点")
+    @_hextech_prompt_after_command
     async def bet_17_points(self, event: AstrMessageEvent):
         """押总点数17点。用法：押17点 金额"""
         async for r in sicbo_handlers.bet_17_points(self, event):
             yield r
 
     @filter.command("骰宝状态", alias={"游戏状态"})
+    @_hextech_prompt_after_command
     async def sicbo_status(self, event: AstrMessageEvent):
         """查看当前骰宝游戏状态"""
         async for r in sicbo_handlers.sicbo_status(self, event):
             yield r
 
     @filter.command("我的下注", alias={"下注情况"})
+    @_hextech_prompt_after_command
     async def my_bets(self, event: AstrMessageEvent):
         """查看本局游戏中的下注情况"""
         async for r in sicbo_handlers.my_bets(self, event):
             yield r
 
     @filter.command("骰宝帮助", alias={"骰宝说明"})
+    @_hextech_prompt_after_command
     async def sicbo_help(self, event: AstrMessageEvent):
         """查看骰宝游戏帮助"""
         async for r in sicbo_handlers.sicbo_help(self, event):
             yield r
 
     @filter.command("骰宝赔率", alias={"骰宝赔率表", "赔率"})
+    @_hextech_prompt_after_command
     async def sicbo_odds(self, event: AstrMessageEvent):
         """查看骰宝赔率详情"""
         async for r in sicbo_handlers.sicbo_odds(self, event):
@@ -1602,42 +1842,49 @@ class FishingPlugin(Star):
     # =========== 深海探险 ==========
 
     @filter.command("深海", alias={"深海探险"})
+    @_hextech_prompt_after_command
     async def deep_sea(self, event: AstrMessageEvent):
         """开始深海探险。选择区域：浅海区/深海区/深渊区"""
         async for r in deep_sea_start(self, event):
             yield r
 
     @filter.command("下潜")
+    @_hextech_prompt_after_command
     async def deep_sea_down(self, event: AstrMessageEvent):
         """下潜移动"""
         async for r in deep_sea_move_down(self, event):
             yield r
 
     @filter.command("上浮")
+    @_hextech_prompt_after_command
     async def deep_sea_up(self, event: AstrMessageEvent):
         """上浮移动"""
         async for r in deep_sea_move_up(self, event):
             yield r
 
     @filter.command("左游")
+    @_hextech_prompt_after_command
     async def deep_sea_left(self, event: AstrMessageEvent):
         """左游移动"""
         async for r in deep_sea_move_left(self, event):
             yield r
 
     @filter.command("右游")
+    @_hextech_prompt_after_command
     async def deep_sea_right(self, event: AstrMessageEvent):
         """右游移动"""
         async for r in deep_sea_move_right(self, event):
             yield r
 
     @filter.command("回头")
+    @_hextech_prompt_after_command
     async def deep_sea_retreat(self, event: AstrMessageEvent):
         """回头，结束深海探险"""
         async for r in deep_sea_retreat(self, event):
             yield r
 
     @filter.command("深海状态", alias={"探险状态"})
+    @_hextech_prompt_after_command
     async def deep_sea_status(self, event: AstrMessageEvent):
         """查看当前深海探险状态"""
         async for r in deep_sea_status(self, event):
@@ -1646,72 +1893,84 @@ class FishingPlugin(Star):
     # =========== 21点游戏 ==========
 
     @filter.command("21点", alias={"二十一点", "blackjack"})
+    @_hextech_prompt_after_command
     async def blackjack(self, event: AstrMessageEvent):
         """开始21点游戏（系统庄家）。用法：21点 [金额]"""
         async for r in blackjack_handlers.start_blackjack(self, event):
             yield r
 
     @filter.command("21点开庄", alias={"21点当庄", "21点玩家开庄"})
+    @_hextech_prompt_after_command
     async def blackjack_banker(self, event: AstrMessageEvent):
         """玩家当庄开始21点游戏，其他人可加入"""
         async for r in blackjack_handlers.start_blackjack_banker(self, event):
             yield r
 
     @filter.command("21点加入", alias={"加入21点"})
+    @_hextech_prompt_after_command
     async def blackjack_join(self, event: AstrMessageEvent):
         """加入21点游戏。用法：21点加入 [金额]"""
         async for r in blackjack_handlers.join_blackjack(self, event):
             yield r
 
     @filter.command("抽牌", alias={"要牌", "拿牌"})
+    @_hextech_prompt_after_command
     async def blackjack_hit(self, event: AstrMessageEvent):
         """21点游戏中要一张牌"""
         async for r in blackjack_handlers.blackjack_hit(self, event):
             yield r
 
     @filter.command("停牌", alias={"不要了", "不要牌"})
+    @_hextech_prompt_after_command
     async def blackjack_stand(self, event: AstrMessageEvent):
         """21点游戏中停止要牌"""
         async for r in blackjack_handlers.blackjack_stand(self, event):
             yield r
 
     @filter.command("21点状态", alias={"21点查看"})
+    @_hextech_prompt_after_command
     async def blackjack_status(self, event: AstrMessageEvent):
         """查看当前21点游戏状态"""
         async for r in blackjack_handlers.blackjack_status(self, event):
             yield r
 
     @filter.command("21点开始", alias={"21点强制开始"})
+    @_hextech_prompt_after_command
     async def blackjack_force_start(self, event: AstrMessageEvent):
         """跳过等待期直接开始21点游戏"""
         async for r in blackjack_handlers.blackjack_force_start(self, event):
             yield r
 
     @filter.command("21点帮助", alias={"21点规则", "21点说明"})
+    @_hextech_prompt_after_command
     async def blackjack_help(self, event: AstrMessageEvent):
         """查看21点游戏帮助和规则"""
         async for r in blackjack_handlers.blackjack_help(self, event):
             yield r
 
     @filter.command("加倍", alias={"21点加倍", "doubledown"})
+    @_hextech_prompt_after_command
     async def blackjack_double_down(self, event: AstrMessageEvent):
         """21点游戏中加倍下注，只能在初始两张牌时使用"""
         async for r in blackjack_handlers.blackjack_double_down(self, event):
             yield r
 
     @filter.command("分牌", alias={"21点分牌", "split"})
+    @_hextech_prompt_after_command
     async def blackjack_split(self, event: AstrMessageEvent):
         """21点游戏中分牌，两张同点数牌时可用"""
         async for r in blackjack_handlers.blackjack_split(self, event):
             yield r
 
     @filter.command("买保险", alias={"21点保险", "insurance"})
+    @_hextech_prompt_after_command
     async def blackjack_buy_insurance(self, event: AstrMessageEvent):
         """21点游戏中购买保险，庄家明牌为A时可用"""
         async for r in blackjack_handlers.blackjack_buy_insurance(self, event):
             yield r
 
     @filter.command("读博记录", alias={"读博历史", "gambling_records"})
+    @_hextech_prompt_after_command
     async def blackjack_gambling_records(self, event: AstrMessageEvent):
         """查看最近的读博历史记录"""
         async for r in blackjack_handlers.blackjack_gambling_records(self, event):
@@ -1719,6 +1978,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("21点模式")
+    @_hextech_prompt_after_command
     async def set_blackjack_mode(self, event: AstrMessageEvent):
         """[管理员] 设置21点消息模式（图片/文本）"""
         async for r in blackjack_handlers.set_blackjack_mode(self, event):
@@ -1726,6 +1986,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("游戏开关", alias={"功能开关"})
+    @_hextech_prompt_after_command
     async def toggle_game_module(self, event: AstrMessageEvent):
         """[管理员] 开关游戏模块。用法：游戏开关 [21点/骰宝/拉杆机] [开/关]"""
         args = event.message_str.split()
@@ -1776,60 +2037,70 @@ class FishingPlugin(Star):
     # =========== 社交 ==========
 
     @filter.command("排行榜", alias={"phb"})
+    @_hextech_prompt_after_command
     async def ranking(self, event: AstrMessageEvent):
         """查看金币、鱼类等各种排行榜"""
         async for r in social_handlers.ranking(self, event):
             yield r
 
     @filter.command("偷鱼")
+    @_hextech_prompt_after_command
     async def steal_fish(self, event: AstrMessageEvent):
         """偷取其他玩家的鱼，但有失败风险。用法：偷鱼 @用户"""
         async for r in social_handlers.steal_fish(self, event):
             yield r
 
     @filter.command("电鱼")
+    @_hextech_prompt_after_command
     async def electric_fish(self, event: AstrMessageEvent):
         """对其他玩家使用电鱼，成功可获得金币。用法：电鱼 @用户"""
         async for r in social_handlers.electric_fish(self, event):
             yield r
 
     @filter.command("驱灵")
+    @_hextech_prompt_after_command
     async def dispel_protection(self, event: AstrMessageEvent):
         """驱散目标玩家的保护效果。用法：驱灵 @用户"""
         async for r in social_handlers.dispel_protection(self, event):
             yield r
 
     @filter.command("查看称号", alias={"称号"})
+    @_hextech_prompt_after_command
     async def view_titles(self, event: AstrMessageEvent):
         """查看你拥有的所有称号"""
         async for r in social_handlers.view_titles(self, event):
             yield r
 
     @filter.command("使用称号")
+    @_hextech_prompt_after_command
     async def use_title(self, event: AstrMessageEvent):
         """装备或卸下称号。用法：使用称号 称号编号"""
         async for r in social_handlers.use_title(self, event):
             yield r
 
     @filter.command("查看成就", alias={"成就"})
+    @_hextech_prompt_after_command
     async def view_achievements(self, event: AstrMessageEvent):
         """查看你的成就完成情况"""
         async for r in social_handlers.view_achievements(self, event):
             yield r
 
     @filter.command("税收记录")
+    @_hextech_prompt_after_command
     async def tax_record(self, event: AstrMessageEvent):
         """查看你的税收缴纳记录"""
         async for r in social_handlers.tax_record(self, event):
             yield r
 
     @filter.command("消息", alias={"通知"})
+    @_hextech_prompt_after_command
     async def view_notifications(self, event: AstrMessageEvent):
         """查看你的通知消息，包括被偷鱼和被电鱼的记录"""
         async for r in social_handlers.view_notifications(self, event):
             yield r
 
     @filter.command("统计")
+    @_hextech_prompt_after_command
     async def statistics(self, event: AstrMessageEvent):
         """查看个人或群统计数据。手动群报表用法：/统计 总览 [今天/本周/本月]；也支持个人统计和排行榜。"""
         async for r in statistics_handlers.statistics(self, event):
@@ -1838,42 +2109,49 @@ class FishingPlugin(Star):
     # =========== 银行系统 ==========
 
     @filter.command("银行", alias={"银行帮助"})
+    @_hextech_prompt_after_command
     async def bank_main(self, event: AstrMessageEvent):
         """查看银行帮助信息和所有可用命令"""
         async for r in self.bank_handlers.bank_help(event):
             yield r
 
     @filter.command("银行账户", alias={"我的银行账户", "查看银行账户"})
+    @_hextech_prompt_after_command
     async def bank_account(self, event: AstrMessageEvent):
         """查看你的银行账户信息"""
         async for r in self.bank_handlers.bank_info(event):
             yield r
 
     @filter.command("利率信息", alias={"查看利率", "银行利率"})
+    @_hextech_prompt_after_command
     async def bank_interest_rate(self, event: AstrMessageEvent):
         """查看当前银行利率信息"""
         async for r in self.bank_handlers.interest_rate_info(event):
             yield r
 
     @filter.command("存款")
+    @_hextech_prompt_after_command
     async def bank_deposit(self, event: AstrMessageEvent):
         """存款操作（支持活期和定期）"""
         async for r in self.bank_handlers.deposit(event):
             yield r
 
     @filter.command("取款")
+    @_hextech_prompt_after_command
     async def bank_withdraw(self, event: AstrMessageEvent):
         """取款操作（支持活期和定期）"""
         async for r in self.bank_handlers.withdraw(event):
             yield r
 
     @filter.command("存款详情", alias={"查看存款详情", "我的存款详情"})
+    @_hextech_prompt_after_command
     async def bank_deposit_details(self, event: AstrMessageEvent):
         """查看存款详情（包含本金、利息和平均利率）"""
         async for r in self.bank_handlers.deposit_details(event):
             yield r
 
     @filter.command("存款记录")
+    @_hextech_prompt_after_command
     async def bank_deposit_records(self, event: AstrMessageEvent):
         """查看存款记录"""
         async for r in self.bank_handlers.deposit_records(event):
@@ -1882,18 +2160,21 @@ class FishingPlugin(Star):
     # =========== 交易所 ==========
 
     @filter.command("交易所")
+    @_hextech_prompt_after_command
     async def exchange_main(self, event: AstrMessageEvent):
         """查看交易所信息和进行交易。用法：交易所 [买入/卖出] [商品] [数量]"""
         async for r in self.exchange_handlers.exchange_main(event):
             yield r
 
     @filter.command("持仓")
+    @_hextech_prompt_after_command
     async def view_inventory(self, event: AstrMessageEvent):
         """查看你在交易所的持仓情况"""
         async for r in self.exchange_handlers.view_inventory(event):
             yield r
 
     @filter.command("清仓")
+    @_hextech_prompt_after_command
     async def clear_inventory(self, event: AstrMessageEvent):
         """清空交易所持仓，将所有商品按当前价格卖出"""
         async for r in self.exchange_handlers.clear_inventory(event):
@@ -1903,6 +2184,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("修改金币")
+    @_hextech_prompt_after_command
     async def modify_coins(self, event: AstrMessageEvent):
         """[管理员] 修改指定玩家的金币数量。用法：修改金币 @用户 数量"""
         async for r in admin_handlers.modify_coins(self, event):
@@ -1910,6 +2192,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("修改高级货币")
+    @_hextech_prompt_after_command
     async def modify_premium(self, event: AstrMessageEvent):
         """[管理员] 修改指定玩家的高级货币数量。用法：修改高级货币 @用户 数量"""
         async for r in admin_handlers.modify_premium(self, event):
@@ -1917,6 +2200,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("奖励高级货币")
+    @_hextech_prompt_after_command
     async def reward_premium(self, event: AstrMessageEvent):
         """[管理员] 奖励指定玩家高级货币。用法：奖励高级货币 @用户 数量"""
         async for r in admin_handlers.reward_premium(self, event):
@@ -1924,6 +2208,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("扣除高级货币")
+    @_hextech_prompt_after_command
     async def deduct_premium(self, event: AstrMessageEvent):
         """[管理员] 扣除指定玩家的高级货币。用法：扣除高级货币 @用户 数量"""
         async for r in admin_handlers.deduct_premium(self, event):
@@ -1931,6 +2216,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("全体奖励金币")
+    @_hextech_prompt_after_command
     async def reward_all_coins(self, event: AstrMessageEvent):
         """[管理员] 给所有玩家奖励金币。用法：全体奖励金币 数量"""
         async for r in admin_handlers.reward_all_coins(self, event):
@@ -1938,6 +2224,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("全体奖励高级货币")
+    @_hextech_prompt_after_command
     async def reward_all_premium(self, event: AstrMessageEvent):
         """[管理员] 给所有玩家奖励高级货币。用法：全体奖励高级货币 数量"""
         async for r in admin_handlers.reward_all_premium(self, event):
@@ -1945,6 +2232,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("全体扣除金币")
+    @_hextech_prompt_after_command
     async def deduct_all_coins(self, event: AstrMessageEvent):
         """[管理员] 扣除所有玩家的金币。用法：全体扣除金币 数量"""
         async for r in admin_handlers.deduct_all_coins(self, event):
@@ -1952,6 +2240,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("全体扣除高级货币")
+    @_hextech_prompt_after_command
     async def deduct_all_premium(self, event: AstrMessageEvent):
         """[管理员] 扣除所有玩家的高级货币。用法：全体扣除高级货币 数量"""
         async for r in admin_handlers.deduct_all_premium(self, event):
@@ -1959,6 +2248,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("奖励金币")
+    @_hextech_prompt_after_command
     async def reward_coins(self, event: AstrMessageEvent):
         """[管理员] 奖励指定玩家金币。用法：奖励金币 @用户 数量"""
         async for r in admin_handlers.reward_coins(self, event):
@@ -1966,6 +2256,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("扣除金币")
+    @_hextech_prompt_after_command
     async def deduct_coins(self, event: AstrMessageEvent):
         """[管理员] 扣除指定玩家的金币。用法：扣除金币 @用户 数量"""
         async for r in admin_handlers.deduct_coins(self, event):
@@ -1973,6 +2264,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("开启钓鱼后台管理")
+    @_hextech_prompt_after_command
     async def start_admin(self, event: AstrMessageEvent):
         """[管理员] 启动Web后台管理服务器"""
         async for r in admin_handlers.start_admin(self, event):
@@ -1980,6 +2272,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("关闭钓鱼后台管理")
+    @_hextech_prompt_after_command
     async def stop_admin(self, event: AstrMessageEvent):
         """[管理员] 关闭Web后台管理服务器"""
         async for r in admin_handlers.stop_admin(self, event):
@@ -1987,6 +2280,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("同步初始设定", alias={"同步设定", "同步数据", "同步"})
+    @_hextech_prompt_after_command
     async def sync_initial_data(self, event: AstrMessageEvent):
         """[管理员] 同步游戏初始设定数据到数据库"""
         async for r in admin_handlers.sync_initial_data(self, event):
@@ -1994,6 +2288,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("授予称号")
+    @_hextech_prompt_after_command
     async def grant_title(self, event: AstrMessageEvent):
         """[管理员] 授予用户称号。用法：授予称号 @用户 称号名称"""
         async for r in admin_handlers.grant_title(self, event):
@@ -2001,6 +2296,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("移除称号")
+    @_hextech_prompt_after_command
     async def revoke_title(self, event: AstrMessageEvent):
         """[管理员] 移除用户称号。用法：移除称号 @用户 称号名称"""
         async for r in admin_handlers.revoke_title(self, event):
@@ -2008,6 +2304,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("创建称号")
+    @_hextech_prompt_after_command
     async def create_title(self, event: AstrMessageEvent):
         """[管理员] 创建自定义称号。用法：创建称号 称号名称 描述 [显示格式]"""
         async for r in admin_handlers.create_title(self, event):
@@ -2015,6 +2312,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("代理上线", alias={"login"})
+    @_hextech_prompt_after_command
     async def impersonate_start(self, event: AstrMessageEvent):
         """[管理员] 代理其他玩家进行操作。用法：代理上线 @用户"""
         async for r in admin_handlers.impersonate_start(self, event):
@@ -2022,6 +2320,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("代理下线", alias={"logout"})
+    @_hextech_prompt_after_command
     async def impersonate_stop(self, event: AstrMessageEvent):
         """[管理员] 结束代理模式，恢复为管理员身份"""
         async for r in admin_handlers.impersonate_stop(self, event):
@@ -2029,6 +2328,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("全体发放道具")
+    @_hextech_prompt_after_command
     async def reward_all_items(self, event: AstrMessageEvent):
         """[管理员] 给所有玩家发放道具。用法：全体发放道具 道具ID 数量"""
         async for r in admin_handlers.reward_all_items(self, event):
@@ -2036,6 +2336,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("补充鱼池")
+    @_hextech_prompt_after_command
     async def replenish_fish_pools(self, event: AstrMessageEvent):
         """[管理员] 重置所有钓鱼区域的稀有鱼剩余数量"""
         async for r in admin_handlers.replenish_fish_pools(self, event):
@@ -2043,6 +2344,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("清理红包")
+    @_hextech_prompt_after_command
     async def cleanup_red_packets(self, event: AstrMessageEvent):
         """[管理员] 清理红包。用法：/清理红包 [所有]（不带参数清理当前群，带"所有"清理全局）"""
         async for r in red_packet_handlers.cleanup_red_packets(self, event):
@@ -2050,6 +2352,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("骰宝结算")
+    @_hextech_prompt_after_command
     async def force_settle_sicbo(self, event: AstrMessageEvent):
         """[管理员] 跳过倒计时直接结算当前骰宝游戏"""
         async for r in sicbo_handlers.force_settle_sicbo(self, event):
@@ -2057,6 +2360,7 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("骰宝倒计时")
+    @_hextech_prompt_after_command
     async def set_sicbo_countdown(self, event: AstrMessageEvent):
         """[管理员] 设置骰宝游戏倒计时时间"""
         async for r in sicbo_handlers.set_sicbo_countdown(self, event):
@@ -2064,12 +2368,14 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("骰宝模式")
+    @_hextech_prompt_after_command
     async def set_sicbo_mode(self, event: AstrMessageEvent):
         """[管理员] 设置骰宝消息模式（图片/文本）"""
         async for r in sicbo_handlers.set_sicbo_mode(self, event):
             yield r
 
     @filter.command("骰宝记录", alias={"骰宝开奖记录"})
+    @_hextech_prompt_after_command
     async def sicbo_draw_history(self, event: AstrMessageEvent):
         """查看当前群的骰宝开奖记录（最近5期）"""
         async for r in sicbo_handlers.sicbo_draw_history(self, event):
@@ -2078,30 +2384,35 @@ class FishingPlugin(Star):
     # =========== 拉杆机游戏 ==========
 
     @filter.command("拉杆", alias={"拉杆机", "slot"})
+    @_hextech_prompt_after_command
     async def slot_spin(self, event: AstrMessageEvent):
         """拉杆机游戏。用法：拉杆 [铜/银/金/至尊]"""
         async for r in slot_handlers.slot_spin(self, event):
             yield r
 
     @filter.command("连转", alias={"拉杆连转", "multi_spin"})
+    @_hextech_prompt_after_command
     async def slot_multi_spin(self, event: AstrMessageEvent):
         """连续拉杆。用法：连转 [档位] [次数]"""
         async for r in slot_handlers.slot_multi_spin(self, event):
             yield r
 
     @filter.command("奖池", alias={"拉杆奖池", "jackpot"})
+    @_hextech_prompt_after_command
     async def slot_jackpot(self, event: AstrMessageEvent):
         """查看拉杆机累积奖池与档位信息"""
         async for r in slot_handlers.slot_jackpot(self, event):
             yield r
 
     @filter.command("拉杆记录", alias={"拉杆历史"})
+    @_hextech_prompt_after_command
     async def slot_history(self, event: AstrMessageEvent):
         """查看拉杆历史记录"""
         async for r in slot_handlers.slot_history(self, event):
             yield r
 
     @filter.command("拉杆帮助", alias={"拉杆说明"})
+    @_hextech_prompt_after_command
     async def slot_help(self, event: AstrMessageEvent):
         """查看拉杆机帮助"""
         async for r in slot_handlers.slot_help(self, event):
@@ -2109,48 +2420,56 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("拉杆模式")
+    @_hextech_prompt_after_command
     async def set_slot_mode(self, event: AstrMessageEvent):
         """[管理员] 设置拉杆机消息模式（图片/文本）"""
         async for r in slot_handlers.set_slot_mode(self, event):
             yield r
 
     @filter.regex(r"^借[他她它]")
+    @_hextech_prompt_after_command
     async def borrow_money(self, event: AstrMessageEvent):
         """借钱给其他玩家。用法：借他@用户 金额"""
         async for r in self.loan_handlers.handle_borrow_money(event, []):
             yield r
 
     @filter.regex(r"^还[他她它]")
+    @_hextech_prompt_after_command
     async def repay_money(self, event: AstrMessageEvent):
         """还钱给放贷人。用法：还他@用户 金额"""
         async for r in self.loan_handlers.handle_repay_money(event, []):
             yield r
 
     @filter.command("还系统", alias={"还钱"})
+    @_hextech_prompt_after_command
     async def repay_system(self, event: AstrMessageEvent):
         """还系统借款。用法：还系统 金额 或 还钱 金额"""
         async for r in self.loan_handlers.handle_repay_money(event, []):
             yield r
 
     @filter.regex(r"^收[他她它]")
+    @_hextech_prompt_after_command
     async def force_collect(self, event: AstrMessageEvent):
         """强制收款。用法：收他@用户 [金额]"""
         async for r in self.loan_handlers.handle_force_collect(event, []):
             yield r
 
     @filter.command("确认借款")
+    @_hextech_prompt_after_command
     async def confirm_loan(self, event: AstrMessageEvent):
         """确认别人发起的借款申请。用法：确认借款 #借条ID"""
         async for r in self.loan_handlers.handle_confirm_loan(event, []):
             yield r
 
     @filter.command("一键还债", alias={"全部还清", "一键还清"})
+    @_hextech_prompt_after_command
     async def repay_all_loans(self, event: AstrMessageEvent):
         """一键偿还所有债务。优先系统，其次高利率。"""
         async for r in self.loan_handlers.handle_repay_all(event, []):
             yield r
 
     @filter.command("借条", alias={"我的借条", "查看借条"})
+    @_hextech_prompt_after_command
     async def view_loans(self, event: AstrMessageEvent):
         """查看自己的借贷记录"""
         async for r in self.loan_handlers.handle_view_loans(event, []):
@@ -2158,12 +2477,14 @@ class FishingPlugin(Star):
 
     @filter.permission_type(PermissionType.ADMIN)
     @filter.command("所有借条")
+    @_hextech_prompt_after_command
     async def view_all_loans(self, event: AstrMessageEvent):
         """[管理员] 查看所有借条记录"""
         async for r in self.loan_handlers.handle_view_all_loans(event, []):
             yield r
 
     @filter.command("系统借款", alias={"借钱", "应急借款"})
+    @_hextech_prompt_after_command
     async def system_loan(self, event: AstrMessageEvent):
         """向系统借款。用法：系统借款 [金额]"""
         async for r in self.loan_handlers.handle_system_loan(event, []):
@@ -2171,30 +2492,35 @@ class FishingPlugin(Star):
 
     # ==================== 展示柜指令 ====================
     @filter.command("展示柜", alias={"我的展示柜", "查看展示柜"})
+    @_hextech_prompt_after_command
     async def showcase_view(self, event: AstrMessageEvent):
         """查看展示柜。用法：/展示柜 或 /查看展示柜 @用户"""
         async for r in showcase_handlers.showcase(self, event):
             yield r
 
     @filter.command("放入展示柜", alias={"展示柜放入"})
+    @_hextech_prompt_after_command
     async def put_in_showcase(self, event: AstrMessageEvent):
         """将装备放入展示柜。用法：/放入展示柜 <装备短码>"""
         async for r in showcase_handlers.put_in_showcase(self, event):
             yield r
 
     @filter.command("取出展示柜", alias={"展示柜取出"})
+    @_hextech_prompt_after_command
     async def take_out_showcase(self, event: AstrMessageEvent):
         """将装备从展示柜移回背包。用法：/取出展示柜 <装备短码>"""
         async for r in showcase_handlers.take_out_showcase(self, event):
             yield r
 
     @filter.command("展示柜签名", alias={"展示柜宣言"})
+    @_hextech_prompt_after_command
     async def set_showcase_signature(self, event: AstrMessageEvent):
         """修改展示柜个性宣言。用法：/展示柜签名 <宣言内容>"""
         async for r in showcase_handlers.set_showcase_signature(self, event):
             yield r
 
     @filter.command("展示柜颜色", alias={"展示柜主题", "设置展示柜颜色"})
+    @_hextech_prompt_after_command
     async def set_showcase_theme(self, event: AstrMessageEvent):
         """设置单个展示位置颜色。用法：/展示柜颜色 <位置编号或装备短码> <颜色>"""
         async for r in showcase_handlers.set_showcase_theme(self, event):

@@ -3,7 +3,7 @@ import math
 import random
 import threading
 import time
-from typing import Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 from datetime import timedelta
 from astrbot.api import logger
 
@@ -18,6 +18,7 @@ from ..repositories.abstract_repository import (
 from ..domain.models import FishingRecord, TaxRecord, FishingZone
 from ..services.fishing_zone_service import FishingZoneService
 from .fish_weight_service import FishWeightService
+from .hextech_effects import EFFECTS as HEXTECH_EFFECTS, high_weight_multiplier, upgrade_chance
 from ..utils import get_now, get_last_reset_time, get_last_interval_reset_time, calculate_after_refine
 
 
@@ -46,6 +47,8 @@ class FishingService:
         self.config = config
         self.statistics_repo = statistics_repo
         self.cat_service: Any = None
+        # Injected by the daily Hextech selection service after construction.
+        self.hextech_service: Any = None
 
         # 获取每日刷新时间配置
         self.daily_reset_hour = self.config.get("daily_reset_hour", 0)
@@ -130,6 +133,220 @@ class FishingService:
 
         return bonus
 
+    def _get_selected_hextech_card(self, user_id: str) -> Optional[Dict[str, Any]]:
+        service = getattr(self, "hextech_service", None)
+        if service is None:
+            return None
+        try:
+            card = service.get_selected_card(user_id)
+            return card if isinstance(card, dict) else None
+        except Exception as e:
+            logger.warning(f"读取用户 {user_id} 的海克斯卡失败: {e}")
+            return None
+
+    @staticmethod
+    def _get_hextech_effects(card: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        effects = card.get("effects", []) if isinstance(card, dict) else []
+        return [effect for effect in effects if isinstance(effect, dict)
+                and effect.get("id") in HEXTECH_EFFECTS
+                and isinstance(effect.get("params", {}), dict)]
+
+    @staticmethod
+    def _hextech_values(effects: List[Dict[str, Any]], key: str) -> List[float]:
+        values = []
+        for effect in effects:
+            value = (effect.get("params") or {}).get(key)
+            if isinstance(value, (int, float)):
+                values.append(float(value))
+        return values
+
+    @classmethod
+    def _hextech_sum(cls, effects: List[Dict[str, Any]], key: str) -> float:
+        return sum(cls._hextech_values(effects, key))
+
+    @staticmethod
+    def _hextech_balance_version(card: Optional[Dict[str, Any]]) -> int:
+        """Cards without a version keep the original settlement rules."""
+        version = card.get("balance_version", 1) if isinstance(card, dict) else 1
+        return version if isinstance(version, int) and version >= 2 else 1
+
+    @staticmethod
+    def _hextech_savings_cap(tier: str, balance_version: int) -> float:
+        if balance_version < 2:
+            return 1.0
+        return {"silver": 0.60, "gold": 0.75, "prismatic": 0.85}.get(tier, 0.60) * (0.9 if balance_version >= 4 else 1.0)
+
+    @classmethod
+    def _hextech_payment(cls, cost: int, effects: List[Dict[str, Any]], tier: str,
+                         balance_version: int) -> tuple:
+        """Return (paid amount, remaining refund budget) for one cast."""
+        original_cost = max(0, int(cost))
+        discount = min(1.0, max(0.0, cls._hextech_sum(effects, "cost_discount")))
+        if balance_version < 2:
+            paid = max(0, int(math.ceil(original_cost * (1.0 - discount))))
+            return paid, paid
+
+        savings_limit = int(math.floor(original_cost * cls._hextech_savings_cap(tier, balance_version)))
+        paid = max(0, int(math.ceil(original_cost * (1.0 - discount))))
+        paid = max(original_cost - savings_limit, min(original_cost, paid))
+        upfront_savings = original_cost - paid
+        return paid, max(0, savings_limit - upfront_savings)
+
+    @classmethod
+    def _hextech_refund_amount(cls, proposed: int, original_cost: int, paid: int,
+                               tier: str, balance_version: int) -> int:
+        proposed = max(0, int(proposed))
+        paid = max(0, int(paid))
+        if balance_version < 2:
+            return min(paid, proposed)
+        original_cost = max(0, int(original_cost))
+        savings_limit = int(math.floor(original_cost * cls._hextech_savings_cap(tier, balance_version)))
+        upfront_savings = max(0, original_cost - paid)
+        refund_budget = max(0, savings_limit - upfront_savings)
+        return min(paid, refund_budget, proposed)
+
+    @classmethod
+    def _hextech_independent_chance(cls, effects: List[Dict[str, Any]], key: str) -> float:
+        remaining = 1.0
+        for chance in cls._hextech_values(effects, key):
+            remaining *= 1.0 - max(0.0, min(1.0, chance))
+        return 1.0 - remaining
+
+    def get_hextech_discounted_cost(self, user_id: str, cost: int) -> int:
+        """Return the pre-payment cost used by manual and automatic fishing."""
+        card = self._get_selected_hextech_card(user_id)
+        effects = self._get_hextech_effects(card)
+        tier = (card or {}).get("tier", "silver")
+        if tier not in ("silver", "gold", "prismatic"):
+            tier = "silver"
+        paid, _ = self._hextech_payment(cost, effects, tier, self._hextech_balance_version(card))
+        return paid
+
+    def _get_zone_fish_candidates(self, zone: FishingZone) -> Dict[int, List[Any]]:
+        """Build strict zone candidates so Hextech cannot promote into a ghost star."""
+        specific_ids = getattr(zone, "specific_fish_ids", None)
+        if specific_ids is None:
+            try:
+                specific_ids = self.inventory_repo.get_specific_fish_ids_for_zone(zone.id)
+            except Exception:
+                specific_ids = None
+            zone.specific_fish_ids = specific_ids
+        if specific_ids:
+            fish_list = [self.item_template_repo.get_fish_by_id(fish_id) for fish_id in specific_ids]
+        else:
+            fish_list = self.item_template_repo.get_all_fish()
+        by_rarity: Dict[int, List[Any]] = {}
+        for fish in fish_list or []:
+            if fish and int(getattr(fish, "rarity", 0)) > 0:
+                by_rarity.setdefault(int(fish.rarity), []).append(fish)
+        return by_rarity
+
+    @staticmethod
+    def _normalize_fish_distribution(distribution: List[float], valid_rarities) -> List[float]:
+        valid = set(valid_rarities)
+        result = [max(0.0, float(weight)) if index + 1 in valid else 0.0
+                  for index, weight in enumerate(distribution)]
+        total = sum(result)
+        return [weight / total for weight in result] if total > 0 else result
+
+    @staticmethod
+    def _transfer_weight_to_rarities(distribution: List[float], rarities, amount: float) -> List[float]:
+        """Transfer a fraction of ordinary-star mass to a dynamic rarity group."""
+        result = list(distribution)
+        target_indices = [rarity - 1 for rarity in rarities
+                          if 1 <= rarity <= len(result) and result[rarity - 1] > 0]
+        source_indices = [index for index, weight in enumerate(result)
+                          if index < 3 and weight > 0]
+        if not target_indices or not source_indices:
+            return result
+        source_total = sum(result[index] for index in source_indices)
+        target_total = sum(result[index] for index in target_indices)
+        transfer = source_total * max(0.0, min(0.8, amount))
+        for index in source_indices:
+            result[index] -= transfer * result[index] / source_total
+        for index in target_indices:
+            result[index] += transfer * result[index] / target_total
+        total = sum(result)
+        return [weight / total for weight in result] if total > 0 else result
+
+    @staticmethod
+    def _multiply_rarity_weights(distribution: List[float], rarities, multiplier: float) -> List[float]:
+        result = list(distribution)
+        for rarity in rarities:
+            index = rarity - 1
+            if 0 <= index < len(result):
+                result[index] *= max(0.0, multiplier)
+        total = sum(result)
+        return [weight / total for weight in result] if total > 0 else result
+
+    @staticmethod
+    def _quality_chance_from_modifier(quality_modifier: float, configured_max: float) -> float:
+        if quality_modifier <= 1.0:
+            return 0.0
+        configured_max = max(0.0, min(1.0, float(configured_max)))
+        return min(configured_max, math.log2(quality_modifier) * configured_max / 2.0)
+
+    @staticmethod
+    def _hextech_combined_quality_chance(base_chance: float, extra_chance: float,
+                                         balance_version: int) -> float:
+        cap = 0.50 if balance_version >= 2 else 0.60
+        return min(cap, 1.0 - (1.0 - base_chance) * (1.0 - extra_chance))
+
+    @classmethod
+    def _hextech_price_bonus(cls, effects, rarity, quality_level, raw_weight,
+                             fish_template, rare_rarities, high_rarities,
+                             top_rarity, was_upgraded, quota_breakthrough,
+                             lucky_triggered_ids, fate_choice, tier="silver",
+                             balance_version=1):
+        """Sum card price bonuses before the per-star safety cap is applied."""
+        general = {"C05", "C17", "C19", "C20", "S06", "S08", "S09", "S10", "G07", "G09", "P01"}
+        rare = {"C06", "S03", "G02", "G08", "P05", "P08"}
+        high = {"C07", "S04"}
+        top = {"C08", "G03", "P03", "P09"}
+        quality = {"C09", "S07", "G06", "P04"}
+        low = {"S02"}
+        upgraded = {"S05", "G04"}
+        bonuses = []
+        is_top_weight = raw_weight > fish_template.min_weight + 0.75 * (fish_template.max_weight - fish_template.min_weight)
+        for effect in effects:
+            effect_id = effect.get("id")
+            params = effect.get("params") or {}
+            if effect_id in general:
+                key = "price"
+            elif effect_id in rare and rarity in rare_rarities and (effect_id != "G08" or quota_breakthrough):
+                key = "price"
+            elif effect_id in high and rarity in high_rarities:
+                key = "price"
+            elif effect_id in top and rarity == top_rarity:
+                key = "price"
+            elif effect_id in quality and quality_level == 1:
+                key = "quality_price"
+            elif effect_id == "C10" and is_top_weight:
+                key = "price"
+            elif effect_id in low and rarity <= 3:
+                key = "price"
+            elif effect_id in upgraded and was_upgraded:
+                key = "upgrade_price"
+            elif effect_id in ("C11", "G05") and effect_id in lucky_triggered_ids:
+                key = "lucky_price"
+            elif effect_id == "P07" and fate_choice == "price":
+                key = "fate_price"
+            else:
+                continue
+            suffix = "1_5" if rarity <= 5 else "6_8"
+            value = params.get("{}_{}".format(key, suffix))
+            if isinstance(value, (int, float)):
+                bonuses.append(max(0.0, float(value)))
+        if balance_version >= 2:
+            cap = ({"silver": 0.40, "gold": 0.70, "prismatic": 1.00}.get(tier, 0.40)
+                   if rarity <= 5 else
+                   {"silver": 0.06, "gold": 0.10, "prismatic": 0.15}.get(tier, 0.06))
+        else:
+            cap = 2.0 if rarity <= 5 else 0.40
+        if balance_version >= 4:
+            cap *= 0.9
+        return min(cap, sum(bonuses))
+
     def go_fish(self, user_id: str) -> Dict[str, Any]:
         """
         执行一次完整的钓鱼动作。
@@ -171,11 +388,25 @@ class FishingService:
             return {"success": False, "message": f"该钓鱼区域已于 {zone.available_until.strftime('%Y-%m-%d %H:%M')} 关闭，已自动传送回{first_zone_name}"}
         
         fishing_cost = zone.fishing_cost
-        if not user.can_afford(fishing_cost):
-            return {"success": False, "message": f"金币不足，需要 {fishing_cost} 金币。"}
+        hextech_card = self._get_selected_hextech_card(user_id)
+        hextech_effects = self._get_hextech_effects(hextech_card)
+        hextech_tier = (hextech_card or {}).get("tier", "silver")
+        if hextech_tier not in ("silver", "gold", "prismatic"):
+            hextech_tier = "silver"
+        hextech_balance_version = self._hextech_balance_version(hextech_card)
+        fate_choice = None
+        if any(effect.get("id") == "P07" for effect in hextech_effects):
+            fate_choice = random.choice(("refund", "price", "quality"))
 
-        # 先扣除成本
-        user.coins -= fishing_cost
+        fishing_cost_paid, _ = self._hextech_payment(
+            fishing_cost, hextech_effects, hextech_tier, hextech_balance_version
+        )
+        if not user.can_afford(fishing_cost_paid):
+            return {"success": False, "message": f"金币不足，需要 {fishing_cost_paid} 金币。"}
+
+        # 海克斯费用减免在扣款前生效；所有返还仍受实付金额限制。
+        user.coins -= fishing_cost_paid
+        bait_preserve_chance = self._hextech_independent_chance(hextech_effects, "bait_preserve_chance")
 
         # 2. 计算各种加成和修正值
         base_success_rate = 0.7 # 基础成功率70%
@@ -254,7 +485,8 @@ class FishingService:
                     # 如果鱼饵没有设置持续时间, 是一次性鱼饵，消耗一个鱼饵
                     user_bait_inventory = self.inventory_repo.get_user_bait_inventory(user_id)
                     if user_bait_inventory is not None and user_bait_inventory.get(user.current_bait_id, 0) > 0:
-                        self.inventory_repo.update_bait_quantity(user_id, user.current_bait_id, -1)
+                        if bait_preserve_chance <= 0 or random.random() >= bait_preserve_chance:
+                            self.inventory_repo.update_bait_quantity(user_id, user.current_bait_id, -1)
                     else:
                         # 如果用户没有库存鱼饵，清除当前鱼饵
                         user.current_bait_id = None
@@ -323,90 +555,230 @@ class FishingService:
             logger.error(f"获取猫咪加成失败: {e}")
         # === 猫咪加成结束 ===
 
-        # 3. 判断是否成功钓到
-        if random.random() >= base_success_rate:
+        # 3. 判断是否成功钓到。免费重试最多一次，不会递归触发自己。
+        did_catch = random.random() < base_success_rate
+        if not did_catch:
+            retry_chance = self._hextech_independent_chance(hextech_effects, "empty_retry_chance")
+            if retry_chance > 0 and random.random() < retry_chance:
+                did_catch = random.random() < base_success_rate
+
+        if not did_catch:
             # 失败逻辑
+            refund_fraction = min(1.0, max(0.0, self._hextech_sum(hextech_effects, "empty_refund")))
+            if fate_choice == "refund":
+                refund_fraction += self._hextech_sum(hextech_effects, "fate_refund")
+            proposed_refund = int(math.ceil(fishing_cost_paid * min(1.0, max(0.0, refund_fraction))))
+            refund = self._hextech_refund_amount(
+                proposed_refund, fishing_cost, fishing_cost_paid,
+                hextech_tier, hextech_balance_version,
+            )
+            user.coins += refund
             user.last_fishing_time = get_now()
             self.user_repo.update(user)
-            return {"success": False, "message": "💨 什么都没钓到..."}
+            result = {"success": False, "message": "💨 什么都没钓到..."}
+            if refund:
+                result["refund"] = refund
+            return result
 
-        # 4. 成功，生成渔获
-        # 使用区域策略获取基础稀有度分布
+        # 4. 成功，先构造严格受当前区域鱼种与星级概率约束的鱼池。
         strategy = self.fishing_zone_service.get_strategy(user.fishing_zone_id)
-        rarity_distribution = strategy.get_fish_rarity_distribution(user)
-        
+        full_distribution = strategy.get_fish_rarity_distribution(user)
         zone = self.inventory_repo.get_zone_by_id(user.fishing_zone_id)
-        quota = zone.rare_fish_quota_per_cycle if zone.rare_fish_quota_per_cycle is not None else zone.daily_rare_fish_quota
-        caught = zone.rare_fish_caught_this_cycle if zone.rare_fish_caught_this_cycle is not None else zone.rare_fish_caught_today
-        is_rare_fish_available = caught < quota
-        
-        if not is_rare_fish_available:
-            # 稀有鱼定义：4星及以上（4, 5, 6, 7, 8...）
-            # 若达到配额，屏蔽4星及以上的所有星级概率，其它星级不受影响
-            for idx in range(3, len(rarity_distribution)):
-                rarity_distribution[idx] = 0.0
-            # 重新归一化概率分布
-            total = sum(rarity_distribution)
-            if total > 0:
-                rarity_distribution = [x / total for x in rarity_distribution]
-        
-        # 应用稀有度加成（rare_chance）调整分布权重
-        # 如果玩家有装备/Buff/鱼饵提供的稀有度加成，会提升 4-5 星鱼的概率
-        # 6星及以上的超稀有鱼概率不受影响
-        if rare_chance > 0:
-            adjusted_distribution = self._apply_rare_chance_to_distribution(
-                rarity_distribution, rare_chance
+        candidates_by_rarity = self._get_zone_fish_candidates(zone)
+        if hextech_card:
+            eligible_rarities = sorted(
+                rarity for rarity in candidates_by_rarity
+                if rarity <= len(full_distribution) and full_distribution[rarity - 1] > 0
             )
         else:
-            adjusted_distribution = rarity_distribution
-        
-        # 根据调整后的分布加权随机抽取稀有度，直接映射到对应星级 (1-indexed)
-        rarity_index = random.choices(range(len(adjusted_distribution)), weights=adjusted_distribution, k=1)[0]
+            # Without a selected card, retain the legacy distribution and its
+            # repository fallback behavior exactly.
+            eligible_rarities = [rarity for rarity, weight in enumerate(full_distribution, 1) if weight > 0]
+        if not eligible_rarities:
+            refund = fishing_cost_paid
+            user.coins += refund
+            user.last_fishing_time = get_now()
+            self.user_repo.update(user)
+            return {"success": False, "message": "错误：当前区域没有可钓的鱼，已退还钓鱼费用。"}
+
+        full_distribution = self._normalize_fish_distribution(full_distribution, eligible_rarities)
+        rare_rarities = [rarity for rarity in eligible_rarities if rarity >= 4]
+        high_rarities = rare_rarities[-2:]
+        top_rarity = max(eligible_rarities)
+
+        quota = zone.rare_fish_quota_per_cycle if zone.rare_fish_quota_per_cycle is not None else zone.daily_rare_fish_quota
+        caught = zone.rare_fish_caught_this_cycle if zone.rare_fish_caught_this_cycle is not None else zone.rare_fish_caught_today
+        quota_exhausted = caught >= quota
+        quota_breakthrough = False
+        if quota_exhausted and rare_rarities and hextech_card:
+            if hextech_balance_version >= 2:
+                base_break, normal_cap, boosted_cap = {
+                    "silver": (0.01, 0.015, 0.025),
+                    "gold": (0.02, 0.03, 0.045),
+                    "prismatic": (0.03, 0.045, 0.07),
+                }[hextech_tier]
+            else:
+                base_break, normal_cap, boosted_cap = {
+                    "silver": (0.015, 0.02, 0.04),
+                    "gold": (0.03, 0.04, 0.07),
+                    "prismatic": (0.05, 0.07, 0.11),
+                }[hextech_tier]
+            break_bonus = max(self._hextech_values(hextech_effects, "break_bonus") or [0.0])
+            extra_quality = self._hextech_independent_chance(hextech_effects, "quality_extra_chance")
+            if fate_choice == "quality":
+                extra_quality = 1.0 - (1.0 - extra_quality) * (1.0 - self._hextech_sum(hextech_effects, "fate_quality_chance"))
+            rare_quality = self._hextech_independent_chance(hextech_effects, "rare_quality_chance")
+            extra_quality = 1.0 - (1.0 - extra_quality) * (1.0 - rare_quality)
+            quality_base = self._quality_chance_from_modifier(
+                quality_modifier, min(0.35, self.config.get("quality_bonus_max_chance", 0.35))
+            )
+            expected_quality = self._hextech_combined_quality_chance(
+                quality_base, extra_quality, hextech_balance_version
+            )
+            break_limit = boosted_cap if break_bonus > 0 else normal_cap
+            break_probability = min(break_limit, (base_break + break_bonus) * (1.0 + expected_quality))
+            quota_breakthrough = random.random() < break_probability
+
+        allowed_rarities = set(eligible_rarities)
+        if quota_exhausted and not quota_breakthrough:
+            allowed_rarities.difference_update(rare_rarities)
+        rarity_distribution = self._normalize_fish_distribution(full_distribution, allowed_rarities)
+        if sum(rarity_distribution) <= 0:
+            refund = fishing_cost_paid
+            user.coins += refund
+            user.last_fishing_time = get_now()
+            self.user_repo.update(user)
+            return {"success": False, "message": "稀有鱼配额已用完，当前鱼池没有可钓鱼种，已退还钓鱼费用。"}
+
+        # 先沿用现有装备/鱼饵加成，再叠加海克斯动态 R/T 权重。
+        adjusted_distribution = self._apply_rare_chance_to_distribution(
+            rarity_distribution, rare_chance
+        ) if rare_chance > 0 else rarity_distribution
+        rare_transfer = self._hextech_sum(hextech_effects, "rare_transfer")
+        if rare_transfer > 0:
+            adjusted_distribution = self._transfer_weight_to_rarities(
+                adjusted_distribution, rare_rarities, rare_transfer
+            )
+        strengths = [
+            effect
+            for effect in hextech_effects
+            if (effect.get("id") in ("C14", "S04", "G03", "P09")
+                or (effect.get("id") == "P02" and quota_breakthrough))
+            and isinstance((effect.get("params") or {}).get("high_weight_strength", 0.5), (int, float))
+        ]
+        if strengths and high_rarities:
+            multiplier = 1.0
+            for effect in strengths:
+                params = effect.get("params") or {}
+                multiplier *= high_weight_multiplier(
+                    effect.get("tier", hextech_tier), params.get("high_weight_strength", 0.5), top_rarity,
+                    balance_version=hextech_balance_version,
+                    strength_scale=params.get("strength_scale", 1.0),
+                )
+            adjusted_distribution = self._multiply_rarity_weights(
+                adjusted_distribution, high_rarities, multiplier
+            )
+
+        positive_indices = [index for index, weight in enumerate(adjusted_distribution) if weight > 0]
+        if not positive_indices:
+            user.coins += fishing_cost_paid
+            user.last_fishing_time = get_now()
+            self.user_repo.update(user)
+            return {"success": False, "message": "当前鱼池没有可钓鱼种，已退还钓鱼费用。"}
+        rarity_index = random.choices(
+            positive_indices,
+            weights=[adjusted_distribution[index] for index in positive_indices],
+            k=1,
+        )[0]
         rarity = rarity_index + 1
-            
-        fish_template = self._get_fish_template(rarity, zone, coins_chance)
 
+        # 升星只到鱼池内下一个真实可抽星级；配额耗尽且突破失败时不能升入 R。
+        upgrade_effects = [effect for effect in hextech_effects
+                           if effect.get("id") in ("C15", "S05", "G04", "P03")]
+        was_upgraded = False
+        if upgrade_effects:
+            target_rarity = next((candidate for candidate in eligible_rarities if candidate > rarity), None)
+            if target_rarity is not None and not (quota_exhausted and not quota_breakthrough and target_rarity >= 4):
+                strength = float((upgrade_effects[0].get("params") or {}).get("upgrade_strength", 0.5))
+                if random.random() < upgrade_chance(
+                    upgrade_effects[0].get("tier", hextech_tier), strength, target_rarity,
+                    balance_version=hextech_balance_version,
+                    strength_scale=(upgrade_effects[0].get("params") or {}).get("strength_scale", 1.0),
+                ):
+                    rarity = target_rarity
+                    was_upgraded = True
+
+        fish_candidates = candidates_by_rarity.get(rarity, [])
+        if hextech_card:
+            fish_template = self.fish_weight_service.choose_fish(fish_candidates, coins_chance)
+        else:
+            fish_template = self._get_fish_template(rarity, zone, coins_chance)
         if not fish_template:
-             return {"success": False, "message": "错误：当前条件下没有可钓的鱼！"}
+            user.coins += fishing_cost_paid
+            user.last_fishing_time = get_now()
+            self.user_repo.update(user)
+            return {"success": False, "message": "错误：当前条件下没有可钓的鱼，已退还钓鱼费用。"}
 
-        # 如果有垃圾鱼减少修正，则应用，价值 < 5则被视为垃圾鱼
+        # 原有垃圾鱼保护仍可换鱼，但只在当前区域有效候选和本竿可用星级中重抽。
         if garbage_reduction_modifier is not None and fish_template.base_value < 5:
-            # 根据垃圾鱼减少修正值决定是否重新选择一次
             if random.random() < garbage_reduction_modifier:
-                # 重新选择一条鱼
-                new_rarity = random.choices(range(1, len(rarity_distribution) + 1), weights=rarity_distribution, k=1)[0]
-                new_fish_template = self._get_fish_template(new_rarity, zone, coins_chance)
+                new_indices = [index for index, weight in enumerate(rarity_distribution) if weight > 0]
+                if new_indices:
+                    new_index = random.choices(
+                        new_indices,
+                        weights=[rarity_distribution[index] for index in new_indices],
+                        k=1,
+                    )[0]
+                    new_fish = (self.fish_weight_service.choose_fish(
+                        candidates_by_rarity.get(new_index + 1, []), coins_chance
+                    ) if hextech_card else self._get_fish_template(new_index + 1, zone, coins_chance))
+                    if new_fish:
+                        fish_template = new_fish
 
-                if new_fish_template:
-                    fish_template = new_fish_template
+        # Species filters share a single same-star reroll budget per cast.
+        fish_candidates = candidates_by_rarity.get(fish_template.rarity, [])
+        if hextech_card and len(fish_candidates) > 1:
+            low_reroll = self._hextech_independent_chance(hextech_effects, "low_value_reroll_chance")
+            preferred_reroll = self._hextech_independent_chance(hextech_effects, "species_reroll_chance")
+            sorted_values = sorted(int(fish.base_value) for fish in fish_candidates)
+            lower_quartile = sorted_values[max(0, int(math.ceil(len(sorted_values) * 0.25)) - 1)]
+            low_value_candidate = fish_template.base_value <= lower_quartile
+            reroll_chance = max(low_reroll if low_value_candidate else 0.0, preferred_reroll)
+            if reroll_chance > 0 and random.random() < reroll_chance:
+                alternatives = [fish for fish in fish_candidates if fish.fish_id != fish_template.fish_id]
+                alternate = self.fish_weight_service.choose_fish(alternatives, coins_chance)
+                if alternate and alternate.base_value > fish_template.base_value:
+                    fish_template = alternate
 
         # 计算最终属性
         weight = random.randint(fish_template.min_weight, fish_template.max_weight)
+        raw_weight = weight
         value = fish_template.base_value
 
         # 4.2 按品质加成给予额外品质（重量/价值）奖励
         # 品质加成来自：鱼竿 × 饰品 × 鱼饵（乘法累积）
         # 使用对数压缩避免概率过高，保持高品质鱼的稀有性
+        quality_base_chance = self._quality_chance_from_modifier(
+            quality_modifier,
+            min(0.35, self.config.get("quality_bonus_max_chance", 0.35))
+            if hextech_card else self.config.get("quality_bonus_max_chance", 0.35),
+        )
         quality_bonus = False
+        if hextech_card:
+            extra_quality_chance = self._hextech_independent_chance(hextech_effects, "quality_extra_chance")
+            if fate_choice == "quality":
+                fate_quality = min(1.0, self._hextech_sum(hextech_effects, "fate_quality_chance"))
+                extra_quality_chance = 1.0 - (1.0 - extra_quality_chance) * (1.0 - fate_quality)
+            if fish_template.rarity in rare_rarities:
+                rare_quality = self._hextech_independent_chance(hextech_effects, "rare_quality_chance")
+                extra_quality_chance = 1.0 - (1.0 - extra_quality_chance) * (1.0 - rare_quality)
+            final_quality_chance = self._hextech_combined_quality_chance(
+                quality_base_chance, extra_quality_chance, hextech_balance_version
+            )
+            quality_bonus = random.random() <= final_quality_chance
+        elif quality_modifier > 1.0:
+            quality_bonus = random.random() <= quality_base_chance
         quality_level = 0  # 默认普通品质
-        if quality_modifier > 1.0:
-            # 对数压缩公式：处理乘法累积的品质加成
-            # log2(x) 特性：log2(1)=0, log2(2)=1, log2(4)=2
-            # 天然适合处理乘法累积：log2(a×b) = log2(a) + log2(b)
-            log_value = math.log2(quality_modifier)
-            
-            # 从配置获取高品质鱼最大触发概率，默认35%
-            max_quality_chance = self.config.get("quality_bonus_max_chance", 0.35)
-            
-            # 缩放到配置的上限，让 quality_modifier=4.0 时达到上限
-            # 缩放系数 = max_chance / 2（因为 log2(4) = 2）
-            scale_factor = max_quality_chance / 2.0
-            adjusted_chance = log_value * scale_factor
-            
-            # 确保不超过配置的上限，避免高品质鱼过于常见
-            final_chance = min(adjusted_chance, max_quality_chance)
-            
-            quality_bonus = random.random() <= final_chance
         if quality_bonus:
             extra_weight = random.randint(fish_template.min_weight, fish_template.max_weight)
             weight += extra_weight
@@ -423,15 +795,56 @@ class FishingService:
             if fractional > 0 and random.random() < fractional:
                 total_catches += 1
 
-        # 4.4 计算所有加成后总共金币（方案B：解耦鱼种，直接加成结算）
-        # 基础单价（含品质翻倍）
+        # 4.4 计算所有加成后总共金币，并在写入库存时保存结算单价快照。
         base_unit_value = fish_template.base_value * (2 if quality_level == 1 else 1)
         if coins_chance > 0:
-            final_unit_value = math.ceil(base_unit_value * (1.0 + coins_chance))
-        else:
-            final_unit_value = base_unit_value
+            base_unit_value = math.ceil(base_unit_value * (1.0 + coins_chance))
+        lucky_triggered_ids = set()
+        for effect in hextech_effects:
+            effect_id = effect.get("id")
+            if effect_id in ("C11", "G05"):
+                chance = float((effect.get("params") or {}).get("lucky_chance", 0))
+                if chance > 0 and random.random() < chance:
+                    lucky_triggered_ids.add(effect_id)
+        hextech_price_bonus = self._hextech_price_bonus(
+            hextech_effects,
+            fish_template.rarity,
+            quality_level,
+            raw_weight,
+            fish_template,
+            rare_rarities,
+            high_rarities,
+            top_rarity,
+            was_upgraded,
+            quota_breakthrough,
+            lucky_triggered_ids,
+            fate_choice,
+            tier=hextech_tier,
+            balance_version=hextech_balance_version,
+        )
+        final_unit_value = int(math.ceil(base_unit_value * (1.0 + hextech_price_bonus)))
 
+        # 数量加成结算后计算本竿总价值保底与费用返还。
         final_total_value = final_unit_value * total_catches
+        floor_multiple = max(self._hextech_values(hextech_effects, "value_floor_multiple") or [0.0])
+        if fish_template.rarity <= 3 and floor_multiple > 0:
+            minimum_total = int(math.ceil(fishing_cost * floor_multiple))
+            if final_total_value < minimum_total:
+                final_unit_value = int(math.ceil(minimum_total / total_catches))
+                final_total_value = final_unit_value * total_catches
+
+        refund_fraction = 0.0
+        if fish_template.rarity <= 3:
+            refund_fraction += self._hextech_sum(hextech_effects, "low_fish_refund")
+            refund_fraction += self._hextech_sum(hextech_effects, "ordinary_refund")
+        if fate_choice == "refund":
+            refund_fraction += self._hextech_sum(hextech_effects, "fate_refund")
+        proposed_refund = int(math.ceil(fishing_cost_paid * min(1.0, max(0.0, refund_fraction))))
+        refund = self._hextech_refund_amount(
+            proposed_refund, fishing_cost, fishing_cost_paid,
+            hextech_tier, hextech_balance_version,
+        )
+        user.coins += refund
 
         # 5. 处理鱼塘容量（在确定总渔获量后）
         user_fish_inventory = self.inventory_repo.get_fish_inventory(user.user_id)
@@ -464,9 +877,9 @@ class FishingService:
             zone = self.inventory_repo.get_zone_by_id(user.fishing_zone_id)
             if zone:
                 if zone.rare_fish_caught_this_cycle is not None:
-                    zone.rare_fish_caught_this_cycle += 1
+                    zone.rare_fish_caught_this_cycle += total_catches
                 else:
-                    zone.rare_fish_caught_this_cycle = zone.rare_fish_caught_today + 1
+                    zone.rare_fish_caught_this_cycle = zone.rare_fish_caught_today + total_catches
                 zone.rare_fish_caught_today = zone.rare_fish_caught_this_cycle  # 同步旧字段
                 self.inventory_repo.update_fishing_zone(zone)
 
@@ -488,6 +901,7 @@ class FishingService:
         
         # 处理装备耐久度消耗
         equipment_broken_messages = []
+        rod_preserve_chance = self._hextech_independent_chance(hextech_effects, "rod_preserve_chance")
 
         # 判断用户的鱼竿是否存在并处理耐久度
         if user.equipped_rod_instance_id:
@@ -497,8 +911,9 @@ class FishingService:
             else:
                 # 减少鱼竿耐久度（仅当为有限耐久时）
                 if rod_instance.current_durability is not None and rod_instance.current_durability > 0:
-                    rod_instance.current_durability -= 1
-                    self.inventory_repo.update_rod_instance(rod_instance)
+                    if rod_preserve_chance <= 0 or random.random() >= rod_preserve_chance:
+                        rod_instance.current_durability -= 1
+                        self.inventory_repo.update_rod_instance(rod_instance)
 
                 # 无论是刚减为0，还是之前就是0，都进行一次破损检查与卸下，保证一致性
                 if rod_instance.current_durability is not None and rod_instance.current_durability <= 0:
@@ -1225,11 +1640,12 @@ class FishingService:
                     if not zone:
                         continue
                     fishing_cost = zone.fishing_cost
-                    if not user.can_afford(fishing_cost):
+                    actual_cost = self.get_hextech_discounted_cost(user_id, fishing_cost)
+                    if not user.can_afford(actual_cost):
                         # 金币不足，关闭其自动钓鱼
                         user.auto_fishing_enabled = False
                         self.user_repo.update(user)
-                        logger.warning(f"用户 {user_id} 金币不足（需要 {fishing_cost} 金币），已关闭自动钓鱼")
+                        logger.warning(f"用户 {user_id} 金币不足（需要 {actual_cost} 金币），已关闭自动钓鱼")
                         continue
 
                     # 执行钓鱼
