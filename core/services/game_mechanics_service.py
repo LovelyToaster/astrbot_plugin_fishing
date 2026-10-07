@@ -175,6 +175,10 @@ class GameMechanicsService:
     @staticmethod
     def _social_fish_unit_value(item: Any, template: Any, coins_chance: float) -> int:
         """Transfer the pond's saved price, including its original Hextech bonus."""
+        stored = int(getattr(item, "unit_value", 0) or 0)
+        if stored > 0:
+            return stored
+        # Compatibility for legacy rows without a saved price.
         return calculate_fish_unit_value(template.base_value, item.quality_level, coins_chance) if template else 0
 
     @staticmethod
@@ -2395,7 +2399,7 @@ class GameMechanicsService:
                 name_str = f"【{q_label}{template.name}】" if q_label else f"【{template.name}】"
                 stolen_summary.append(f"{name_str}x{count}")
 
-                transfer_unit_val = calculate_fish_unit_value(
+                transfer_unit_val = stored_unit_value if stored_unit_value > 0 else calculate_fish_unit_value(
                     template.base_value, quality_level, victim_coins_chance
                 )
                 self.inventory_repo.add_fish_to_inventory(
