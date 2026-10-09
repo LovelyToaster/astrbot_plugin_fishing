@@ -384,6 +384,7 @@ class FishingPlugin(Star):
             item_template_repo=self.item_template_repo,
             fishing_zone_service=self.fishing_zone_service,
             daily_reset_hour=self.game_config.get("daily_reset_hour", 0),
+            config=config.get("hextech", {}),
         )
         self.fishing_service.hextech_service = self.hextech_service
         self.game_mechanics_service.hextech_service = self.hextech_service

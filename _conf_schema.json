@@ -717,6 +717,74 @@
       }
     }
   },
+  "hextech": {
+    "description": "海克斯候选生成与效果数量",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用近期展示历史降权",
+        "type": "bool",
+        "hint": "降低近期展示过的效果再次出现在候选卡中的权重",
+        "default": true
+      },
+      "history_window_days": {
+        "description": "展示历史回看天数",
+        "type": "int",
+        "hint": "统计近几天展示过的效果，默认7天",
+        "default": 7,
+        "min": 0,
+        "max": 30
+      },
+      "same_day_weight": {
+        "description": "当日已展示效果权重",
+        "type": "float",
+        "hint": "范围0到1；默认0.15，数值越低越不容易再次展示",
+        "default": 0.15,
+        "min": 0,
+        "max": 1
+      },
+      "recent_weight": {
+        "description": "近期已展示效果权重",
+        "type": "float",
+        "hint": "当日以外、回看窗口内已展示效果的权重；默认0.5",
+        "default": 0.5,
+        "min": 0,
+        "max": 1
+      },
+      "same_group_weight": {
+        "description": "同组候选重复效果权重",
+        "type": "float",
+        "hint": "同组三张候选已出现效果的后续权重；默认0.15",
+        "default": 0.15,
+        "min": 0,
+        "max": 1
+      },
+      "silver_effect_count": {
+        "description": "白银卡效果数",
+        "type": "int",
+        "hint": "每张白银候选卡包含的效果数；建议2，允许2到5",
+        "default": 2,
+        "min": 2,
+        "max": 5
+      },
+      "gold_effect_count": {
+        "description": "黄金卡效果数",
+        "type": "int",
+        "hint": "每张黄金候选卡包含的效果数；建议3，允许2到5",
+        "default": 3,
+        "min": 2,
+        "max": 5
+      },
+      "prismatic_effect_count": {
+        "description": "棱彩卡效果数",
+        "type": "int",
+        "hint": "每张棱彩候选卡包含的效果数；建议4，允许2到5",
+        "default": 4,
+        "min": 2,
+        "max": 5
+      }
+    }
+  },
   "statistics_report": {
     "description": "每日/每周群统计报表",
     "type": "object",

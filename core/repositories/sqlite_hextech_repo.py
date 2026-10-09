@@ -3,6 +3,7 @@
 import json
 import sqlite3
 import threading
+from datetime import date, timedelta
 from typing import Any, Dict, Optional, Tuple
 
 
@@ -54,6 +55,94 @@ class SqliteHextechRepository:
             ).fetchone()
         return self._row_to_state(row)
 
+    @staticmethod
+    def _has_history_table(conn: sqlite3.Connection) -> bool:
+        return conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='hextech_offer_history'"
+        ).fetchone() is not None
+
+    def get_offer_history_weights(
+        self,
+        actor_id: str,
+        game_day: str,
+        window_days: int = 7,
+        same_day_weight: float = 0.15,
+        recent_weight: float = 0.5,
+    ) -> Dict[str, float]:
+        """Return the most recent exposure weight for each effect in the window."""
+        try:
+            end_day = date.fromisoformat(str(game_day))
+            window_days = int(window_days)
+        except (TypeError, ValueError):
+            return {}
+        if window_days <= 0:
+            return {}
+        start_day = (end_day - timedelta(days=window_days - 1)).isoformat()
+        with self._get_connection() as conn:
+            if not self._has_history_table(conn):
+                return {}
+            rows = conn.execute(
+                """SELECT DISTINCT effect_id, game_day FROM hextech_offer_history
+                WHERE actor_id = ? AND game_day BETWEEN ? AND ?""",
+                (str(actor_id), start_day, end_day.isoformat()),
+            ).fetchall()
+        weights: Dict[str, float] = {}
+        for row in rows:
+            weight = (
+                same_day_weight
+                if row["game_day"] == end_day.isoformat()
+                else recent_weight
+            )
+            effect_id = str(row["effect_id"])
+            weights[effect_id] = min(weights.get(effect_id, 1.0), float(weight))
+        return weights
+
+    @staticmethod
+    def _record_offer_history(
+        conn: sqlite3.Connection,
+        actor_id: str,
+        game_day: str,
+        shown_effect_counts: Optional[Dict[str, int]],
+        shown_at: str,
+    ) -> None:
+        if not shown_effect_counts or not SqliteHextechRepository._has_history_table(conn):
+            return
+        for effect_id, raw_count in shown_effect_counts.items():
+            count = int(raw_count)
+            if count <= 0:
+                continue
+            conn.execute(
+                """INSERT INTO hextech_offer_history
+                    (actor_id, game_day, effect_id, shown_count, last_shown_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(actor_id, game_day, effect_id) DO UPDATE SET
+                    shown_count = shown_count + excluded.shown_count,
+                    last_shown_at = excluded.last_shown_at""",
+                (str(actor_id), str(game_day), str(effect_id), count, str(shown_at)),
+            )
+
+    @staticmethod
+    def _prune_offer_history(
+        conn: sqlite3.Connection,
+        actor_id: str,
+        game_day: str,
+        window_days: int,
+    ) -> None:
+        if not SqliteHextechRepository._has_history_table(conn):
+            return
+        try:
+            end_day = date.fromisoformat(str(game_day))
+            window_days = int(window_days)
+        except (TypeError, ValueError):
+            return
+        if window_days <= 0:
+            return
+        cutoff = (end_day - timedelta(days=window_days - 1)).isoformat()
+        conn.execute(
+            "DELETE FROM hextech_offer_history WHERE actor_id = ? AND game_day < ?",
+            (str(actor_id), cutoff),
+        )
+
     def create_daily_state(
         self,
         actor_id: str,
@@ -61,6 +150,8 @@ class SqliteHextechRepository:
         tier: str,
         offers: list,
         created_at: str,
+        shown_effect_counts: Optional[Dict[str, int]] = None,
+        history_window_days: int = 7,
     ) -> Tuple[Dict[str, Any], bool]:
         """Insert once under concurrent requests and return the persisted winner."""
         conn = self._get_connection()
@@ -80,6 +171,11 @@ class SqliteHextechRepository:
                 ),
             )
             created = cursor.rowcount == 1
+            if created:
+                self._record_offer_history(
+                    conn, actor_id, game_day, shown_effect_counts, created_at
+                )
+                self._prune_offer_history(conn, actor_id, game_day, history_window_days)
             row = conn.execute(
                 "SELECT * FROM hextech_daily_choices WHERE actor_id = ? AND game_day = ?",
                 (str(actor_id), game_day),
@@ -94,6 +190,9 @@ class SqliteHextechRepository:
         actor_id: str,
         game_day: str,
         offers: list,
+        shown_effect_counts: Optional[Dict[str, int]] = None,
+        shown_at: Optional[str] = None,
+        history_window_days: int = 7,
     ) -> Tuple[Optional[Dict[str, Any]], str]:
         """Atomically replace all offers, enforcing the daily limit and selection lock."""
         conn = self._get_connection()
@@ -126,6 +225,14 @@ class SqliteHextechRepository:
                     game_day,
                 ),
             )
+            self._record_offer_history(
+                conn,
+                actor_id,
+                game_day,
+                shown_effect_counts,
+                shown_at or "",
+            )
+            self._prune_offer_history(conn, actor_id, game_day, history_window_days)
             updated = conn.execute(
                 "SELECT * FROM hextech_daily_choices WHERE actor_id = ? AND game_day = ?",
                 (str(actor_id), game_day),
@@ -192,6 +299,11 @@ class SqliteHextechRepository:
                 "SELECT DISTINCT actor_id FROM hextech_daily_choices"
             )}
             records = conn.execute("DELETE FROM hextech_daily_choices").rowcount
+            if self._has_history_table(conn):
+                actors.update(row[0] for row in conn.execute(
+                    "SELECT DISTINCT actor_id FROM hextech_offer_history"
+                ))
+                conn.execute("DELETE FROM hextech_offer_history")
             snapshots = 0
             columns = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
             if "wof_hextech_snapshot" in columns:

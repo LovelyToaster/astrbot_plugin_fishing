@@ -1,7 +1,9 @@
 """Daily offer generation, persistence, and presentation for Hextech cards."""
 
 import random
+from collections import Counter
 from datetime import datetime, timedelta, timezone
+from math import isfinite
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..utils import get_now
@@ -11,6 +13,7 @@ from .hextech_effects import describe_card, roll_card, effective_card
 UTC_PLUS_8 = timezone(timedelta(hours=8))
 TIERS = ("silver", "gold", "prismatic")
 TIER_LABELS = {"silver": "白银", "gold": "黄金", "prismatic": "棱彩"}
+DEFAULT_EFFECT_COUNTS = {"silver": 2, "gold": 3, "prismatic": 4}
 
 
 class HextechService:
@@ -26,6 +29,7 @@ class HextechService:
         daily_reset_hour: int = 0,
         rng=None,
         clock: Optional[Callable[[], datetime]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ):
         self.repository = repository
         self.user_repo = user_repo
@@ -35,6 +39,52 @@ class HextechService:
         self.daily_reset_hour = self._normalize_reset_hour(daily_reset_hour)
         self.rng = rng or random.SystemRandom()
         self.clock = clock or get_now
+        self.config = self._normalize_config(config)
+        self.history_enabled = (
+            self.config["enabled"] and self.config["history_window_days"] > 0
+        )
+        self.effect_counts = {
+            tier: self.config[tier + "_effect_count"] for tier in TIERS
+        }
+
+    @staticmethod
+    def _normalize_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        values = dict(config or {})
+
+        def as_bool(value: Any) -> bool:
+            if isinstance(value, str):
+                return value.strip().lower() not in {"", "0", "false", "no", "off"}
+            return bool(value)
+
+        normalized: Dict[str, Any] = {"enabled": as_bool(values.get("enabled", True))}
+        try:
+            normalized["history_window_days"] = int(values.get("history_window_days", 7))
+        except (TypeError, ValueError):
+            normalized["history_window_days"] = 7
+        if not 0 <= normalized["history_window_days"] <= 90:
+            normalized["history_window_days"] = 7
+
+        for name, default in (
+            ("same_day_weight", 0.15),
+            ("recent_weight", 0.5),
+            ("same_group_weight", 0.15),
+        ):
+            try:
+                weight = float(values.get(name, default))
+            except (TypeError, ValueError):
+                weight = default
+            if not isfinite(weight) or not 0.0 <= weight <= 1.0:
+                weight = default
+            normalized[name] = weight
+
+        for tier, default in DEFAULT_EFFECT_COUNTS.items():
+            key = tier + "_effect_count"
+            try:
+                count = int(values.get(key, default))
+            except (TypeError, ValueError):
+                count = default
+            normalized[key] = count if 2 <= count <= 5 else default
+        return normalized
 
     @staticmethod
     def _normalize_reset_hour(value: Any) -> int:
@@ -109,12 +159,55 @@ class HextechService:
             and float(probabilities[rarity - 1] or 0.0) > 0
         )
 
-    def _make_offers(self) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _visible_effect_counts(offers: List[Dict[str, Any]]) -> Dict[str, int]:
+        counts = Counter()
+        for card in offers:
+            for effect in card.get("effects", []):
+                effect_id = effect.get("id") if isinstance(effect, dict) else None
+                if effect_id:
+                    counts[str(effect_id)] += 1
+        return dict(counts)
+
+    def _history_weights(self, actor_id: str, game_day: str) -> Dict[str, float]:
+        if not self.history_enabled:
+            return {}
+        getter = getattr(self.repository, "get_offer_history_weights", None)
+        if not callable(getter):
+            return {}
+        return getter(
+            str(actor_id),
+            game_day,
+            self.config["history_window_days"],
+            self.config["same_day_weight"],
+            self.config["recent_weight"],
+        )
+
+    def _make_offers(
+        self, actor_id: str = "", game_day: str = ""
+    ) -> List[Dict[str, Any]]:
         offers = []
         fishing_slot = self.rng.randrange(3)
+        history_weights = self._history_weights(actor_id, game_day) if actor_id else {}
+        same_group_weight = (
+            self.config["same_group_weight"] if self.config["enabled"] else 1.0
+        )
+        sibling_effect_ids = set()
         for index in range(3):
             tier = self.rng.choices(TIERS, weights=(50, 35, 15), k=1)[0]
-            offers.append(roll_card(tier, self.rng, fishing_only=index == fishing_slot))
+            card = roll_card(
+                tier,
+                self.rng,
+                fishing_only=index == fishing_slot,
+                effect_counts=self.effect_counts,
+                history_weights=history_weights,
+                sibling_effect_ids=sibling_effect_ids,
+                same_group_weight=same_group_weight,
+            )
+            offers.append(card)
+            sibling_effect_ids.update(
+                effect["id"] for effect in card.get("effects", []) if effect.get("id")
+            )
         return offers
 
     def ensure_daily_state(
@@ -138,10 +231,20 @@ class HextechService:
         if existing is not None:
             return existing, False
 
-        offers = self._make_offers()
+        offers = self._make_offers(actor_id, game_day)
         created_at = self._now(now).isoformat(timespec="seconds")
         # Keep the legacy NOT NULL column compatible; card tiers live in each offer.
-        return self.repository.create_daily_state(actor_id, game_day, offers[0]["tier"], offers, created_at)
+        return self.repository.create_daily_state(
+            actor_id,
+            game_day,
+            offers[0]["tier"],
+            offers,
+            created_at,
+            shown_effect_counts=(
+                self._visible_effect_counts(offers) if self.history_enabled else {}
+            ),
+            history_window_days=self.config["history_window_days"],
+        )
 
     def get_daily_state(self, actor_id: str, now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
         if not actor_id:
@@ -162,9 +265,17 @@ class HextechService:
             return state, "selected"
         if state["reroll_count"] >= 2:
             return state, "limit_reached"
-        new_offers = self._make_offers()
+        game_day = self.get_game_day(now)
+        new_offers = self._make_offers(str(actor_id), game_day)
         return self.repository.reroll_daily_offers(
-            str(actor_id), self.get_game_day(now), new_offers
+            str(actor_id),
+            game_day,
+            new_offers,
+            shown_effect_counts=(
+                self._visible_effect_counts(new_offers) if self.history_enabled else {}
+            ),
+            shown_at=self._now(now).isoformat(timespec="seconds"),
+            history_window_days=self.config["history_window_days"],
         )
 
     def choose(self, actor_id: str, selected_number: int, now: Optional[datetime] = None):

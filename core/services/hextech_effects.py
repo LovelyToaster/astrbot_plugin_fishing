@@ -5,6 +5,7 @@ effect's dynamic rarity targets are intentionally resolved against the fish
 pool at cast time, while every random numeric parameter is stored on the card.
 """
 
+import logging
 import random
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
@@ -12,6 +13,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 TIERS = ("silver", "gold", "prismatic")
 SLOT_COUNTS = {"silver": 2, "gold": 3, "prismatic": 4}
+# 福袋赠卡保持旧版数量，主卡新增效果槽位不会扩大赠卡奖励。
+GIFT_SLOT_COUNTS = dict(SLOT_COUNTS)
 FISHING_STRENGTH = {"silver": 0.45, "gold": 0.60, "prismatic": 0.675}
 V4_EV_BUDGETS = {"silver": 0.04, "gold": 0.055, "prismatic": 0.07}
 GIFT_STRENGTH = 0.25
@@ -416,7 +419,7 @@ def _choose(rng: Any, pool: Sequence[str], excluded: Set[str]) -> str:
 
 def _v4_params(effect_id: str, tier: str, rng: Any, gift: bool = False) -> Dict[str, Any]:
     if effect_id == "C33":
-        return {"gift_count": SLOT_COUNTS[tier]}
+        return {"gift_count": GIFT_SLOT_COUNTS[tier]}
     if effect_id in PREMIUM_EFFECT_IDS:
         base_chance = PREMIUM_BASE_CHANCES[effect_id]
         chance = round(base_chance * GIFT_STRENGTH, 4) if gift else base_chance
@@ -466,16 +469,67 @@ def _compatible(effect_id: str, selected: Sequence[str]) -> bool:
     )
 
 
+def _weighted_permutation(
+    rng: Any,
+    candidates: Sequence[str],
+    history_weights: Optional[Dict[str, float]] = None,
+    sibling_effect_ids: Optional[Set[str]] = None,
+    same_group_weight: float = 1.0,
+) -> List[str]:
+    """Return a weighted random ordering without removing hard-compatible fallbacks.
+
+    The compatibility search still considers every candidate. History and
+    same-offer repetition affect only ordering, never the hard conflict rules.
+    """
+    remaining = list(candidates)
+    history_weights = history_weights or {}
+    sibling_effect_ids = sibling_effect_ids or set()
+    weights = {
+        effect_id: max(0.0, float(history_weights.get(effect_id, 1.0)))
+        * (same_group_weight if effect_id in sibling_effect_ids else 1.0)
+        for effect_id in remaining
+    }
+    if all(abs(weights[effect_id] - 1.0) < 1e-12 for effect_id in remaining):
+        rng.shuffle(remaining)
+        return remaining
+
+    ordered: List[str] = []
+    while remaining:
+        total = sum(weights[effect_id] for effect_id in remaining)
+        if total <= 0:
+            rng.shuffle(remaining)
+            ordered.extend(remaining)
+            break
+        value = rng.random() * total
+        cumulative = 0.0
+        chosen = remaining[-1]
+        for effect_id in remaining:
+            cumulative += weights[effect_id]
+            if value < cumulative:
+                chosen = effect_id
+                break
+        ordered.append(chosen)
+        remaining.remove(chosen)
+    return ordered
+
+
 def _roll_single(tier: str, rng: Any, selected: Sequence[str], fishing_only: bool,
-                 allow_gift: bool, gift: bool = False) -> Dict[str, Any]:
+                 allow_gift: bool, gift: bool = False, effect_count: Optional[int] = None,
+                 history_weights: Optional[Dict[str, float]] = None,
+                 sibling_effect_ids: Optional[Set[str]] = None,
+                 same_group_weight: float = 1.0,
+                 balance_version: int = 4) -> Dict[str, Any]:
     available = {key: effect for key, effect in EFFECTS.items()
                  if (not fishing_only or effect["operation"] == "fishing")
                  and (allow_gift or key != "C33")}
     pools = {name: [key for key, effect in available.items() if effect["pool"] == name]
              for name in ("common", tier)}
+    effect_count = SLOT_COUNTS[tier] if effect_count is None else int(effect_count)
+    if not 2 <= effect_count <= 5:
+        raise ValueError("effect_count must be between 2 and 5")
     choices = ["common", tier] + [
         "common" if rng.random() < 0.5 else tier
-        for _ in range(SLOT_COUNTS[tier] - 2)
+        for _ in range(effect_count - 2)
     ]
 
     def fill(index: int, result: List[str]) -> Optional[List[str]]:
@@ -486,9 +540,18 @@ def _roll_single(tier: str, rng: Any, selected: Sequence[str], fishing_only: boo
         if index >= 2:
             order.append(tier if preferred == "common" else "common")
         for pool in order:
-            candidates = [key for key in pools[pool] if _compatible(key, list(selected) + result)]
-            rng.shuffle(candidates)
-            for key in candidates:
+            candidates = [
+                key for key in pools[pool]
+                if _compatible(key, list(selected) + result)
+            ]
+            ordered = _weighted_permutation(
+                rng,
+                candidates,
+                history_weights,
+                sibling_effect_ids,
+                same_group_weight,
+            )
+            for key in ordered:
                 completed = fill(index + 1, result + [key])
                 if completed is not None:
                     return completed
@@ -497,13 +560,66 @@ def _roll_single(tier: str, rng: Any, selected: Sequence[str], fishing_only: boo
     ids = fill(0, [])
     if ids is None:
         raise ValueError("no compatible Hextech effects remain")
-    return {"tier": tier, "balance_version": 4, "effects": [
+    return {"tier": tier, "balance_version": balance_version, "effects": [
         {"id": key, "tier": tier, "params": _v4_params(key, tier, rng, gift)}
         for key in ids
     ]}
 
 
-def roll_card(tier: str, rng: Optional[Any] = None, fishing_only: bool = False) -> Dict[str, Any]:
+def _roll_card_once(
+    tier: str,
+    rng: Any,
+    fishing_only: bool,
+    effect_count: int,
+    history_weights: Optional[Dict[str, float]],
+    sibling_effect_ids: Optional[Set[str]],
+    same_group_weight: float,
+) -> Dict[str, Any]:
+    balance_version = 4 if effect_count == SLOT_COUNTS[tier] else 5
+    card = _roll_single(
+        tier,
+        rng,
+        [],
+        fishing_only,
+        True,
+        effect_count=effect_count,
+        history_weights=history_weights,
+        sibling_effect_ids=sibling_effect_ids,
+        same_group_weight=same_group_weight,
+        balance_version=balance_version,
+    )
+    if any(effect["id"] == "C33" for effect in card["effects"]):
+        selected = [effect["id"] for effect in card["effects"]]
+        gifts = []
+        for _ in range(GIFT_SLOT_COUNTS[tier]):
+            value = rng.random()
+            gift_tier = "silver" if value < 0.50 else "gold" if value < 0.85 else "prismatic"
+            child = _roll_single(
+                gift_tier,
+                rng,
+                selected,
+                False,
+                False,
+                gift=True,
+                effect_count=GIFT_SLOT_COUNTS[gift_tier],
+                balance_version=4,
+            )
+            gifts.append(child)
+            selected.extend(effect["id"] for effect in child["effects"])
+        card["gifts"] = gifts
+    return card
+
+
+def roll_card(
+    tier: str,
+    rng: Optional[Any] = None,
+    fishing_only: bool = False,
+    *,
+    effect_counts: Optional[Dict[str, int]] = None,
+    history_weights: Optional[Dict[str, float]] = None,
+    sibling_effect_ids: Optional[Set[str]] = None,
+    same_group_weight: float = 1.0,
+) -> Dict[str, Any]:
     """Two guaranteed pools, then independent 50/50 pool slots.
 
     Gifts are hidden, persisted rolls revealed on selection. They are never
@@ -513,18 +629,41 @@ def roll_card(tier: str, rng: Optional[Any] = None, fishing_only: bool = False) 
     if tier not in TIERS:
         raise ValueError("tier must be silver, gold, or prismatic")
     rng = rng or random
-    card = _roll_single(tier, rng, [], fishing_only, True)
-    if any(effect["id"] == "C33" for effect in card["effects"]):
-        selected = [effect["id"] for effect in card["effects"]]
-        gifts = []
-        for _ in range(SLOT_COUNTS[tier]):
-            value = rng.random()
-            gift_tier = "silver" if value < 0.50 else "gold" if value < 0.85 else "prismatic"
-            child = _roll_single(gift_tier, rng, selected, False, False, gift=True)
-            gifts.append(child)
-            selected.extend(effect["id"] for effect in child["effects"])
-        card["gifts"] = gifts
-    return card
+    requested_count = SLOT_COUNTS[tier]
+    if effect_counts:
+        requested_count = int(effect_counts.get(tier, requested_count))
+    if not 2 <= requested_count <= 5:
+        raise ValueError("configured effect count must be between 2 and 5")
+
+    try:
+        return _roll_card_once(
+            tier,
+            rng,
+            fishing_only,
+            requested_count,
+            history_weights,
+            sibling_effect_ids,
+            same_group_weight,
+        )
+    except ValueError:
+        if requested_count == SLOT_COUNTS[tier]:
+            raise
+        logging.getLogger(__name__).warning(
+            "Configured %s Hextech card with %s effects had no compatible roll; "
+            "falling back to the legacy %s-effect card",
+            tier,
+            requested_count,
+            SLOT_COUNTS[tier],
+        )
+        return _roll_card_once(
+            tier,
+            rng,
+            fishing_only,
+            SLOT_COUNTS[tier],
+            history_weights,
+            sibling_effect_ids,
+            same_group_weight,
+        )
 
 
 def effective_card(card: Dict[str, Any]) -> Dict[str, Any]:
