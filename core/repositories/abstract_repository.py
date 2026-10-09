@@ -9,7 +9,7 @@ from ..domain.models import (
     User, Fish, Rod, Bait, Accessory, Title, Achievement, Item,
     UserRodInstance, UserAccessoryInstance, UserFishInventoryItem, UserAquariumItem,
     FishingRecord, GachaRecord, WipeBombLog, MarketListing, TaxRecord,
-    GachaPool, GachaPoolItem, UserGachaPity, FishingZone, UserBuff, AquariumUpgrade,
+    GachaPool, GachaPoolItem, UserGachaPity, UserGachaUp, FishingZone, UserBuff, AquariumUpgrade,
     ShopOffer, ShopOfferCost, ShopOfferReward,
     Commodity, Exchange, UserCommodity,
     CatTemplate, UserCatInstance, CatDisease, UserCatDisease, UserCatEventRecord,
@@ -33,6 +33,17 @@ class AbstractUserRepository(ABC):
     # 更新用户信息
     @abstractmethod
     def update(self, user: User) -> None: pass
+    @abstractmethod
+    def adjust_balance(
+        self,
+        user_id: str,
+        coins_delta: int = 0,
+        premium_currency_delta: int = 0,
+        required_coins: int = 0,
+        required_premium_currency: int = 0,
+    ) -> bool:
+        """Atomically apply balance deltas if the account can cover required costs."""
+        pass
     # 获取所有用户ID
     @abstractmethod
     def get_all_user_ids(self, auto_fishing_only: bool = False) -> List[str]: pass
@@ -555,6 +566,33 @@ class AbstractGachaRepository(ABC):
 
     @abstractmethod
     def set_user_pity(self, user_id: str, pool_id: int, current_pity: int) -> None: pass
+
+    @abstractmethod
+    def get_user_up(self, user_id: str, pool_id: int) -> Optional["UserGachaUp"]: pass
+
+    @abstractmethod
+    def get_user_up_choices(self, user_id: str) -> List["UserGachaUp"]: pass
+
+    @abstractmethod
+    def get_all_user_up_choices(self) -> List["UserGachaUp"]: pass
+
+    @abstractmethod
+    def set_user_up(self, user_id: str, pool_id: int, item_pool_id: int) -> None: pass
+
+    @abstractmethod
+    def delete_user_up(self, user_id: str, pool_id: int) -> None: pass
+
+    @abstractmethod
+    def invalidate_user_up(self, user_id: str, pool_id: int, reason: str) -> None: pass
+
+    @abstractmethod
+    def invalidate_user_ups_by_item(self, item_pool_id: int, reason: str) -> None: pass
+
+    @abstractmethod
+    def take_user_up_invalidation(self, user_id: str, pool_id: int) -> Optional[str]: pass
+
+    @abstractmethod
+    def clear_user_up_invalidation(self, user_id: str, pool_id: int) -> None: pass
 
 
 class AbstractMarketRepository(ABC):

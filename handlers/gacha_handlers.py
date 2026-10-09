@@ -43,7 +43,10 @@ def _get_field(obj, key, default=None):
         return getattr(obj, key, default)
 
 
-def _format_pool_details(pool, probabilities, pity_threshold=0):
+def _format_pool_details(
+    pool, probabilities, pity_threshold=0, personal_up=None, up_warning=None,
+    current_hextech_effect_id=None,
+):
     message = "【🎰 卡池详情】\n\n"
     message += f"ID: {pool['gacha_pool_id']} - {pool['name']}\n"
     message += f"描述: {pool['description']}\n"
@@ -61,20 +64,56 @@ def _format_pool_details(pool, probabilities, pity_threshold=0):
         message += f"花费: {pool['cost_coins']} 金币 / 次\n\n"
     if pity_threshold > 0:
         message += f"【🎯 保底规则】连续 {pity_threshold} 抽未出本卡池最稀有物品时，下一抽必出\n\n"
-    message += "【📋 物品概率】\n"
+    message += "【📋 基础权重单抽概率】\n"
+    message += "个人概率已计入你的UP；基础概率未启用UP。两者均不含保底长期影响。\n"
+    if current_hextech_effect_id:
+        effect_name = EFFECTS.get(current_hextech_effect_id, {}).get("name", "海克斯")
+        message += (
+            f"当前海克斯列按{effect_name}计算（非硬保底状态）；"
+            "只改变数量或货币的效果不会改变物品命中概率。\n"
+        )
+    if any(item.get("hard_pity_probability") is not None for item in probabilities):
+        message += "硬保底列表示下一抽处于硬保底时的条件概率。\n"
+    if personal_up:
+        message += (
+            f"你的个人UP：{personal_up['item_name']}（{personal_up['rarity']}星，"
+            f"奖品条目ID {personal_up['entry_id']}）；最终抽到该星级时，UP命中率为50%。\n"
+        )
+    else:
+        message += "你的个人UP：关闭\n"
+    if up_warning:
+        message += f"⚠️ {up_warning}\n"
     if probabilities:
         for item in probabilities:
-            message += (
-                f" - {'⭐' * item.get('item_rarity', 0)} {item['item_name']} "
-                f"(概率: {to_percentage(item['probability'])})\n"
+            probability_text = (
+                f"个人: {to_percentage(item['probability'])}；"
+                f"基础: {to_percentage(item['base_probability'])}"
             )
+            if item.get("current_hextech_probability") is not None:
+                probability_text += (
+                    f"；当前海克斯: {to_percentage(item['current_hextech_probability'])}"
+                )
+            if item.get("hard_pity_probability") is not None:
+                probability_text += (
+                    f"；硬保底: {to_percentage(item['hard_pity_probability'])}"
+                )
+            message += (
+                f" - 条目 {item['gacha_pool_item_id']} "
+                f"{'🎯UP ' if item.get('is_personal_up') else ''}"
+                f"{'⭐' * item.get('item_rarity', 0)} {item['item_name']} "
+                f"({probability_text})\n"
+            )
+    message += (
+        f"\n设置：/卡池 {pool['gacha_pool_id']} UP <奖品条目ID>\n"
+        f"关闭：/卡池 {pool['gacha_pool_id']} UP 关闭"
+    )
     return message
 
 
 async def gacha(self: "FishingPlugin", event: AstrMessageEvent):
     """抽卡"""
     user_id = self._get_effective_user_id(event)
-    args = event.message_str.split(" ")
+    args = event.message_str.split()
     if len(args) < 2:
         # 展示所有的抽奖池信息并显示帮助
         pools = self.gacha_service.get_all_pools()
@@ -89,6 +128,7 @@ async def gacha(self: "FishingPlugin", event: AstrMessageEvent):
             message += f"ID: {pool['gacha_pool_id']} - {pool['name']} - {pool['description']}\n {cost_text}\n\n"
         # 添加卡池详细信息
         message += "【📋 卡池详情】使用「查看卡池 ID」命令查看详细物品概率\n"
+        message += "【🎯 个人UP】使用「卡池 ID UP」查询或设置自己的卡池UP\n"
         message += "【🎲 抽卡命令】使用「抽卡 ID」命令选择抽卡池进行单次抽卡\n"
         message += "【🎯 十连命令】使用「十连 ID [次数]」命令进行十连抽卡\n"
         message += "   - 单次十连：/十连 1\n"
@@ -108,12 +148,16 @@ async def gacha(self: "FishingPlugin", event: AstrMessageEvent):
                 if item.get("type") == "coins":
                     message += f"⭐ {item['quantity']} 金币！\n"
                 else:
-                    message += f"{'⭐' * item.get('rarity', 1)} {item['name']}{_reward_quantity_text(item)}\n"
+                    marker = " 🎯UP" if item.get("is_up") else ""
+                    message += f"{'⭐' * item.get('rarity', 1)} {item['name']}{marker}{_reward_quantity_text(item)}\n"
             pity = result.get("pity", 0)
             pity_threshold = result.get("pity_threshold", 0)
             if pity_threshold > 0:
                 remaining = max(0, pity_threshold - pity)
                 message += f"\n🎯 距离保底还有 {remaining} 抽"
+            up_hits = sum(1 for item in items if item.get("is_up"))
+            if up_hits:
+                message += f"\n✨ 本次命中个人UP {up_hits} 次"
             message += _hextech_gacha_summary(result)
             yield event.plain_result(message)
         else:
@@ -125,7 +169,7 @@ async def gacha(self: "FishingPlugin", event: AstrMessageEvent):
 async def ten_gacha(self: "FishingPlugin", event: AstrMessageEvent):
     """十连抽卡"""
     user_id = self._get_effective_user_id(event)
-    args = event.message_str.split(" ")
+    args = event.message_str.split()
     if len(args) < 2:
         yield event.plain_result("❌ 请指定要进行十连抽卡的抽奖池 ID，例如：/十连 1")
         return
@@ -138,8 +182,10 @@ async def ten_gacha(self: "FishingPlugin", event: AstrMessageEvent):
             if times <= 0:
                 yield event.plain_result("❌ 抽卡次数必须大于0")
                 return
-            if times > 100:
-                yield event.plain_result("❌ 单次最多只能进行100次十连抽卡")
+            max_draws = int(getattr(self.gacha_service, "max_draws_per_request", 100))
+            max_ten_batches = max_draws // 10
+            if times > max_ten_batches:
+                yield event.plain_result(f"❌ 当前单次最多抽 {max_draws} 张（{max_ten_batches} 次十连）")
                 return
         else:
             yield event.plain_result("❌ 抽卡次数必须是数字")
@@ -166,12 +212,16 @@ async def ten_gacha(self: "FishingPlugin", event: AstrMessageEvent):
                 if item.get("type") == "coins":
                     message += f"⭐ {item['quantity']} 金币！\n"
                 else:
-                    message += f"{'⭐' * item.get('rarity', 1)} {item['name']}{_reward_quantity_text(item)}\n"
+                    marker = " 🎯UP" if item.get("is_up") else ""
+                    message += f"{'⭐' * item.get('rarity', 1)} {item['name']}{marker}{_reward_quantity_text(item)}\n"
             pity = result.get("pity", 0)
             pity_threshold = result.get("pity_threshold", 0)
             if pity_threshold > 0:
                 remaining = max(0, pity_threshold - pity)
                 message += f"\n🎯 距离保底还有 {remaining} 抽"
+            up_hits = sum(1 for item in items if item.get("is_up"))
+            if up_hits:
+                message += f"\n✨ 本次命中个人UP {up_hits} 次"
             message += _hextech_gacha_summary(result)
             yield event.plain_result(message)
         else:
@@ -184,6 +234,10 @@ async def multi_ten_gacha(self: "FishingPlugin", event: AstrMessageEvent, pool_i
     """多次十连抽卡，单次调用并合并统计"""
     user_id = self._get_effective_user_id(event)
     total_draws = times * 10
+    max_draws = int(getattr(self.gacha_service, "max_draws_per_request", 100))
+    if total_draws > max_draws:
+        yield event.plain_result(f"❌ 单次最多只能抽 {max_draws} 张")
+        return
 
     pool = self.gacha_service.gacha_repo.get_pool_by_id(pool_id)
     if not pool:
@@ -247,27 +301,111 @@ async def multi_ten_gacha(self: "FishingPlugin", event: AstrMessageEvent, pool_i
         remaining = max(0, pity_threshold - pity)
         message += f"\n🎯 距离保底还有 {remaining} 抽"
 
+    up_hits = int(result.get("up_hit_count", 0) or 0)
+    if up_hits:
+        message += f"\n✨ 本次命中个人UP {up_hits} 次"
+
     message += _hextech_gacha_summary(result)
     yield event.plain_result(message)
 
 
 async def view_gacha_pool(self: "FishingPlugin", event: AstrMessageEvent):
-    """查看当前卡池"""
-    args = event.message_str.split(" ")
-    if len(args) < 2:
-        yield event.plain_result("❌ 请指定要查看的卡池 ID，例如：/查看卡池 1")
+    """查看卡池，并管理当前有效用户自己的个人UP。"""
+    user_id = self._get_effective_user_id(event)
+    args = event.message_str.split()
+    if len(args) < 2 or (len(args) == 2 and args[1].lower() == "list"):
+        pools_result = self.gacha_service.get_all_pools()
+        if not pools_result.get("success"):
+            yield event.plain_result(f"❌ 查看卡池失败：{pools_result.get('message', '未知错误')}")
+            return
+        up_by_pool = {
+            row["pool_id"]: row for row in self.gacha_service.get_user_up_overview(user_id)
+        }
+        message = "【🎰 卡池列表】\n"
+        for pool in pools_result.get("pools", []):
+            pool_id = int(_get_field(pool, "gacha_pool_id", 0) or 0)
+            pool_name = _get_field(pool, "name", "未知卡池")
+            choice = up_by_pool.get(pool_id, {}).get("up")
+            if choice:
+                up_text = f"个人UP：{choice['item_name']}（{choice['rarity']}星，条目ID {choice['entry_id']}）"
+            else:
+                up_text = "个人UP：关闭"
+            message += f"\n{pool_id} - {pool_name}\n{up_text}\n"
+            warning = up_by_pool.get(pool_id, {}).get("warning")
+            if warning:
+                message += f"⚠️ {warning}\n"
+        message += (
+            "\n查看奖品与概率：/卡池 <卡池ID>\n"
+            "查询自己的UP：/卡池 <卡池ID> UP\n"
+            "设置UP：/卡池 <卡池ID> UP <奖品条目ID>\n"
+            "关闭UP：/卡池 <卡池ID> UP 关闭"
+        )
+        yield event.plain_result(message)
         return
     pool_id = args[1]
     if not pool_id.isdigit():
         yield event.plain_result("❌ 卡池 ID 必须是数字，请检查后重试。")
         return
     pool_id = int(pool_id)
-    if result := self.gacha_service.get_pool_details(pool_id):
+
+    if len(args) >= 3 and args[2].lower() == "up":
+        if len(args) == 3:
+            result = self.gacha_service.get_user_up(user_id, pool_id)
+            if not result.get("success"):
+                yield event.plain_result(f"❌ 查询个人UP失败：{result['message']}")
+                return
+            up = result.get("up")
+            if up:
+                message = (
+                    f"卡池「{result['pool'].name}」的个人UP：{up['item_name']}"
+                    f"（{up['rarity']}星，奖品条目ID {up['entry_id']}）。\n"
+                    f"最终抽到{up['rarity']}星时，UP命中率为50%。\n"
+                )
+            else:
+                message = f"卡池 {pool_id} 当前没有个人UP。\n"
+            if result.get("warning"):
+                message += f"⚠️ {result['warning']}\n"
+            message += (
+                f"设置：/卡池 {pool_id} UP <奖品条目ID>\n"
+                f"关闭：/卡池 {pool_id} UP 关闭"
+            )
+            yield event.plain_result(message)
+            return
+        if len(args) != 4:
+            yield event.plain_result(
+                f"用法：/卡池 {pool_id} UP <奖品条目ID> 或 /卡池 {pool_id} UP 关闭"
+            )
+            return
+        if args[3].lower() == "关闭":
+            result = self.gacha_service.close_user_up(user_id, pool_id)
+        elif args[3].isdigit():
+            result = self.gacha_service.set_user_up(user_id, pool_id, int(args[3]))
+        else:
+            yield event.plain_result(
+                f"奖品条目ID必须是数字。用法：/卡池 {pool_id} UP <奖品条目ID> 或 /卡池 {pool_id} UP 关闭"
+            )
+            return
+        if result.get("success"):
+            yield event.plain_result(f"✅ {result['message']}")
+        else:
+            yield event.plain_result(f"❌ 设置个人UP失败：{result['message']}")
+        return
+
+    if len(args) != 2:
+        yield event.plain_result(
+            "❌ 参数格式错误。示例：/卡池 1、/卡池 1 UP、/卡池 1 UP 23、/卡池 1 UP 关闭"
+        )
+        return
+    if result := self.gacha_service.get_pool_details(pool_id, user_id=user_id):
         if result["success"]:
             pool = result.get("pool", {})
             probabilities = result.get("probabilities", [])
             pity_threshold = getattr(self.gacha_service, "pity_threshold", 0)
-            yield event.plain_result(_format_pool_details(pool, probabilities, pity_threshold))
+            yield event.plain_result(_format_pool_details(
+                pool, probabilities, pity_threshold,
+                result.get("personal_up"), result.get("up_warning"),
+                result.get("current_hextech_effect_id"),
+            ))
         else:
             yield event.plain_result(f"❌ 查看卡池失败：{result['message']}")
     else:

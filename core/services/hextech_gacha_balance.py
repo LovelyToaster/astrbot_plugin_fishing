@@ -9,6 +9,8 @@ silently treating an unknown reward as worthless.
 import math
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .gacha_up import apply_personal_up_to_distribution
+
 
 TIER_EV_BUDGETS = {"silver": 0.05, "gold": 0.065, "prismatic": 0.08}
 GACHA_HEXTECH_IDS = {"C27", "C28", "S13", "S14", "G13", "P13"}
@@ -99,10 +101,12 @@ def _draw_distribution(
     pity_threshold: int,
     max_rarity: int,
     weight_multiplier: float = 1.0,
+    up_item: Optional[Any] = None,
 ) -> List[Tuple[Any, float]]:
     hard_pity = pity_threshold > 0 and state >= pity_threshold - 1
     if hard_pity:
-        return _forced_probabilities(items, max_rarity, rarity_of)
+        forced = _forced_probabilities(items, max_rarity, rarity_of)
+        return apply_personal_up_to_distribution(forced, items, rarity_of, up_item)
 
     base = _weighted_probabilities(
         items,
@@ -110,7 +114,7 @@ def _draw_distribution(
         multiplier=weight_multiplier if effect_id == "G13" else 1.0,
     )
     if not base or chance <= 0 or effect_id not in {"C27", "P13"}:
-        return base
+        return apply_personal_up_to_distribution(base, items, rarity_of, up_item)
 
     full = _weighted_probabilities(items, rarity_of)
     lowest_rarity = min((_rarity(item, rarity_of) for item, _ in full), default=0)
@@ -143,7 +147,44 @@ def _draw_distribution(
                 add(chosen, first_p * chance * second_p)
 
     total = sum(float(row[1]) for row in result.values())
-    return [(row[0], float(row[1]) / total) for row in result.values()] if total > 0 else base
+    distribution = (
+        [(row[0], float(row[1]) / total) for row in result.values()]
+        if total > 0 else base
+    )
+    return apply_personal_up_to_distribution(distribution, items, rarity_of, up_item)
+
+
+def draw_probabilities(
+    items: Sequence[Any],
+    rarity_of: Callable[[Any], int],
+    effect_id: Optional[str] = None,
+    chance: float = 0.0,
+    state: int = 0,
+    pity_threshold: int = 0,
+    weight_multiplier: float = 1.0,
+    up_item: Optional[Any] = None,
+) -> Dict[int, float]:
+    """Return one draw's exact outcomes, optionally conditioned on hard pity."""
+    base = _weighted_probabilities(items, rarity_of)
+    if not base:
+        return {}
+    max_rarity = max(
+        (_rarity(item, rarity_of) for item, _ in base
+         if _get(item, "item_type") != "coins"),
+        default=0,
+    )
+    distribution = _draw_distribution(
+        items,
+        rarity_of,
+        effect_id,
+        chance,
+        state,
+        pity_threshold,
+        max_rarity,
+        weight_multiplier,
+        up_item,
+    )
+    return {id(item): probability for item, probability in distribution}
 
 
 def expected_cycle_value(
@@ -154,6 +195,7 @@ def expected_cycle_value(
     effect_id: Optional[str] = None,
     chance: float = 0.0,
     weight_multiplier: float = 1.0,
+    up_item: Optional[Any] = None,
 ) -> Optional[float]:
     """Return expected reference reward value per draw, including hard pity.
 
@@ -162,7 +204,8 @@ def expected_cycle_value(
     the previous highest-rarity reward and ends at the next one.
     """
     probabilities = expected_cycle_probabilities(
-        items, rarity_of, pity_threshold, effect_id, chance, weight_multiplier
+        items, rarity_of, pity_threshold, effect_id, chance, weight_multiplier,
+        up_item,
     )
     if not probabilities:
         return None
@@ -189,6 +232,7 @@ def expected_cycle_probabilities(
     effect_id: Optional[str] = None,
     chance: float = 0.0,
     weight_multiplier: float = 1.0,
+    up_item: Optional[Any] = None,
 ) -> Dict[int, float]:
     """Return every reward's long-run probability per draw, keyed by entry id.
 
@@ -210,7 +254,7 @@ def expected_cycle_probabilities(
     if not pity_enabled:
         distribution = _draw_distribution(
             items, rarity_of, effect_id, chance, 0, 0, max_rarity,
-            weight_multiplier,
+            weight_multiplier, up_item,
         )
         return {id(item): probability for item, probability in distribution}
 
@@ -219,11 +263,11 @@ def expected_cycle_probabilities(
     # state. This keeps budget searches independent of the threshold length.
     normal_distribution = _draw_distribution(
         items, rarity_of, effect_id, chance, 0, pity_threshold,
-        max_rarity, weight_multiplier,
+        max_rarity, weight_multiplier, up_item,
     )
     hard_distribution = _draw_distribution(
         items, rarity_of, effect_id, chance, pity_threshold - 1,
-        pity_threshold, max_rarity, weight_multiplier,
+        pity_threshold, max_rarity, weight_multiplier, up_item,
     )
     if not normal_distribution or not hard_distribution:
         return {}
@@ -260,6 +304,7 @@ def max_chance_for_probability_budget(
     requested_chance: float,
     pity_threshold: int,
     effect_id: str,
+    up_item: Optional[Any] = None,
 ) -> float:
     """Cap an unpriced selector so no individual reward's cycle probability
     rises by more than the budget. This bounds EV for every non-negative
@@ -269,13 +314,16 @@ def max_chance_for_probability_budget(
     requested_chance = min(1.0, max(0.0, float(requested_chance or 0.0)))
     if budget <= 0 or requested_chance <= 0:
         return 0.0
-    baseline = expected_cycle_probabilities(items, rarity_of, pity_threshold)
+    baseline = expected_cycle_probabilities(
+        items, rarity_of, pity_threshold, up_item=up_item
+    )
     if not baseline:
         return 0.0
 
     def fits(chance: float) -> bool:
         adjusted = expected_cycle_probabilities(
-            items, rarity_of, pity_threshold, effect_id, chance
+            items, rarity_of, pity_threshold, effect_id, chance,
+            up_item=up_item,
         )
         for item_id, base_probability in baseline.items():
             adjusted_probability = adjusted.get(item_id, 0.0)
@@ -305,13 +353,16 @@ def max_weight_multiplier_for_probability_budget(
     budget: float,
     requested_multiplier: float,
     pity_threshold: int,
+    up_item: Optional[Any] = None,
 ) -> float:
     """Per-reward long-run probability guard for an unpriced G13 pool."""
     budget = min(0.08, max(0.0, float(budget or 0.0)))
     requested_multiplier = max(1.0, float(requested_multiplier or 1.0))
     if budget <= 0 or requested_multiplier <= 1.0:
         return 1.0
-    baseline = expected_cycle_probabilities(items, rarity_of, pity_threshold)
+    baseline = expected_cycle_probabilities(
+        items, rarity_of, pity_threshold, up_item=up_item
+    )
     if not baseline:
         return 1.0
 
@@ -319,6 +370,7 @@ def max_weight_multiplier_for_probability_budget(
         adjusted = expected_cycle_probabilities(
             items, rarity_of, pity_threshold,
             effect_id="G13", weight_multiplier=multiplier,
+            up_item=up_item,
         )
         for item_id, base_probability in baseline.items():
             if adjusted.get(item_id, 0.0) > base_probability * (1.0 + budget) + 1e-12:
@@ -347,23 +399,28 @@ def max_chance_for_budget(
     pity_threshold: int = 0,
     effect_id: Optional[str] = None,
     weight_multiplier: float = 1.0,
+    up_item: Optional[Any] = None,
 ) -> float:
     """Solve the largest chance whose long-run reference EV fits the budget."""
     requested_chance = min(1.0, max(0.0, float(requested_chance or 0.0)))
     budget = min(0.08, max(0.0, float(budget or 0.0)))
     if requested_chance <= 0 or budget <= 0:
         return 0.0
-    baseline = expected_cycle_value(items, rarity_of, value_of, pity_threshold)
+    baseline = expected_cycle_value(
+        items, rarity_of, value_of, pity_threshold, up_item=up_item
+    )
     if baseline is None or baseline <= 0:
         return max_chance_for_probability_budget(
             items, rarity_of, budget, requested_chance, pity_threshold,
             str(effect_id or ""),
+            up_item,
         )
 
     def fits(chance: float) -> bool:
         adjusted = expected_cycle_value(
             items, rarity_of, value_of, pity_threshold,
             effect_id=effect_id, chance=chance,
+            up_item=up_item,
         )
         return adjusted is not None and adjusted <= baseline * (1.0 + budget + 1e-12)
 
@@ -386,6 +443,7 @@ def max_weight_multiplier_for_budget(
     budget: float,
     requested_multiplier: float,
     pity_threshold: int = 0,
+    up_item: Optional[Any] = None,
 ) -> float:
     requested_multiplier = max(1.0, float(requested_multiplier or 1.0))
     budget = min(0.08, max(0.0, float(budget or 0.0)))
@@ -403,16 +461,20 @@ def max_weight_multiplier_for_budget(
         for item in items
     ):
         return 1.0
-    baseline = expected_cycle_value(items, rarity_of, value_of, pity_threshold)
+    baseline = expected_cycle_value(
+        items, rarity_of, value_of, pity_threshold, up_item=up_item
+    )
     if baseline is None or baseline <= 0:
         return max_weight_multiplier_for_probability_budget(
-            items, rarity_of, budget, requested_multiplier, pity_threshold
+            items, rarity_of, budget, requested_multiplier, pity_threshold,
+            up_item,
         )
 
     def fits(multiplier: float) -> bool:
         adjusted = expected_cycle_value(
             items, rarity_of, value_of, pity_threshold,
             effect_id="G13", weight_multiplier=multiplier,
+            up_item=up_item,
         )
         return adjusted is not None and adjusted <= baseline * (1.0 + budget + 1e-12)
 
@@ -509,14 +571,19 @@ def max_bonus_chance_for_value_budget(
     budget: float,
     requested_chance: float,
     pity_threshold: int = 0,
+    up_item: Optional[Any] = None,
 ) -> float:
     """Bound a value-only random bonus; uses a hard generic bound if unpriced."""
     budget = min(0.08, max(0.0, float(budget or 0.0)))
     requested_chance = min(1.0, max(0.0, float(requested_chance or 0.0)))
     if budget <= 0 or requested_chance <= 0:
         return 0.0
-    baseline = expected_cycle_value(items, rarity_of, value_of, pity_threshold)
-    bonus_value = expected_cycle_value(items, rarity_of, bonus_value_of, pity_threshold)
+    baseline = expected_cycle_value(
+        items, rarity_of, value_of, pity_threshold, up_item=up_item
+    )
+    bonus_value = expected_cycle_value(
+        items, rarity_of, bonus_value_of, pity_threshold, up_item=up_item
+    )
     if baseline is not None and bonus_value is not None and baseline > 0:
         return min(requested_chance, budget * baseline / bonus_value) if bonus_value > 0 else 0.0
     # For coin-only bonuses, use the coins' own expected value as the floor:
@@ -527,6 +594,7 @@ def max_bonus_chance_for_value_budget(
         lambda item: float(_get(item, "quantity", 0) or 0)
         if _get(item, "item_type") == "coins" else 0.0,
         pity_threshold,
+        up_item=up_item,
     )
     if coin_value is not None and coin_value > 0 and bonus_value is not None:
         return min(requested_chance, budget * coin_value / bonus_value) if bonus_value > 0 else 0.0

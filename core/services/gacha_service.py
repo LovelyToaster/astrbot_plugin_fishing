@@ -1,6 +1,7 @@
 import random
 import math
-from typing import Dict, Any, Optional, List
+import threading
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timezone, timedelta
 
 from astrbot.api import logger
@@ -15,6 +16,7 @@ from ..repositories.abstract_repository import (
 )
 from ..domain.models import GachaPool, GachaPoolItem, GachaRecord, UserGachaPity
 from ..utils import get_now
+from .gacha_up import apply_personal_up_to_distribution, apply_personal_up_to_draw
 from .hextech_gacha_balance import (
     GACHA_HEXTECH_IDS,
     TIER_EV_BUDGETS,
@@ -26,6 +28,7 @@ from .hextech_gacha_balance import (
     max_quantity_bonus_chance,
     max_weight_multiplier_for_budget,
     quantity_bonus,
+    draw_probabilities,
 )
 
 
@@ -63,6 +66,8 @@ def _perform_single_weighted_draw(
 class GachaService:
     """封装与抽卡系统相关的业务逻辑"""
 
+    _account_locks = tuple(threading.RLock() for _ in range(257))
+
     def __init__(
         self,
         gacha_repo: AbstractGachaRepository,
@@ -71,7 +76,8 @@ class GachaService:
         item_template_repo: AbstractItemTemplateRepository,
         log_repo: AbstractLogRepository,
         achievement_repo: AbstractAchievementRepository,
-        pity_threshold: int = 80
+        pity_threshold: int = 80,
+        max_draws_per_request: int = 100,
     ):
         self.gacha_repo = gacha_repo
         self.user_repo = user_repo
@@ -80,6 +86,16 @@ class GachaService:
         self.achievement_repo = achievement_repo
         self.log_repo = log_repo
         self.pity_threshold = pity_threshold
+        try:
+            configured_max_draws = int(max_draws_per_request)
+        except (TypeError, ValueError):
+            configured_max_draws = 100
+        self.max_draws_per_request = min(100, max(1, configured_max_draws))
+
+    @classmethod
+    def _account_lock(cls, user_id: str):
+        """Return a bounded, cross-instance lock shared by this account's UP and draws."""
+        return cls._account_locks[hash(str(user_id)) % len(cls._account_locks)]
 
     def get_all_pools(self) -> Dict[str, Any]:
         """提供查看所有卡池信息的功能。"""
@@ -118,19 +134,118 @@ class GachaService:
         pools = self.get_daily_free_pools()
         return pools[0] if pools else None
 
-    def get_pool_details(self, pool_id: int) -> Dict[str, Any]:
+    def get_pool_details(self, pool_id: int, user_id: Optional[str] = None) -> Dict[str, Any]:
         """获取单个卡池的详细信息，包括奖品列表和概率。"""
         pool = self.gacha_repo.get_pool_by_id(pool_id)
         if not pool:
             return {"success": False, "message": "该卡池不存在"}
 
-        total_weight = sum(item.weight for item in pool.items)
+        template_cache: dict = {}
+        up_item = None
+        up_warning = None
+        if user_id is not None:
+            up_item, up_warning = self._resolve_user_up(user_id, pool, template_cache)
+        total_weight = sum(max(0.0, float(item.weight or 0)) for item in pool.items)
         if total_weight == 0:
-            return {"success": True, "pool": pool, "probabilities": {}}
+            return {
+                "success": True,
+                "pool": pool,
+                "probabilities": [],
+                "personal_up": None,
+                "up_warning": up_warning,
+            }
+        base_probabilities = [
+            (item, max(0.0, float(item.weight or 0)) / total_weight)
+            for item in pool.items
+            if max(0.0, float(item.weight or 0)) > 0
+        ]
+        personal_probabilities = apply_personal_up_to_distribution(
+            base_probabilities,
+            pool.items,
+            lambda item: self._get_item_rarity(item, template_cache),
+            up_item,
+        )
+        personal_probability_by_identity = {
+            id(item): probability for item, probability in personal_probabilities
+        }
+        current_hextech_effect_id = None
+        current_hextech_probability_by_identity = None
+        hard_pity_probability_by_identity = None
+        if user_id is not None:
+            free_pool_ids = {
+                int(free_pool.gacha_pool_id)
+                for free_pool in self.gacha_repo.get_free_pools()
+            }
+            daily_free_pool_ids = {
+                int(free_pool.gacha_pool_id)
+                for free_pool in self.get_daily_free_pools()
+            }
+            use_pity = self.pity_threshold > 0 and int(pool_id) not in (
+                free_pool_ids | daily_free_pool_ids
+            )
+            max_rarity = self._get_pool_max_rarity(pool, template_cache)
+            if use_pity and max_rarity > 0:
+                hard_pity_distribution = draw_probabilities(
+                    pool.items,
+                    lambda item: self._get_item_rarity(item, template_cache),
+                    state=self.pity_threshold - 1,
+                    pity_threshold=self.pity_threshold,
+                    up_item=up_item,
+                )
+                hard_pity_probability_by_identity = hard_pity_distribution
+
+            effect = self._get_hextech_gacha_effect(str(user_id))
+            if effect:
+                current_hextech_effect_id = effect["id"]
+                if current_hextech_effect_id in {"C27", "P13", "G13"}:
+                    ev_budget = self._hextech_gacha_budget(effect)
+                    value_of = lambda item: self._hextech_gacha_reward_value(item, template_cache)
+                    effect_params = effect.get("params", {})
+                    if not isinstance(effect_params, dict):
+                        effect_params = {}
+                    chance = self._hextech_gacha_chance(
+                        current_hextech_effect_id,
+                        effect_params,
+                        pool,
+                        template_cache,
+                        use_pity,
+                        max_rarity,
+                        value_of,
+                        ev_budget,
+                        up_item,
+                    )
+                    weight_multiplier = self._hextech_gacha_weight_multiplier(
+                        current_hextech_effect_id,
+                        effect_params,
+                        pool,
+                        template_cache,
+                        use_pity,
+                        value_of,
+                        ev_budget,
+                        up_item,
+                    )
+                    current_hextech_probability_by_identity = draw_probabilities(
+                        pool.items,
+                        lambda item: self._get_item_rarity(item, template_cache),
+                        effect_id=current_hextech_effect_id,
+                        chance=chance,
+                        state=0,
+                        pity_threshold=self.pity_threshold if use_pity else 0,
+                        weight_multiplier=weight_multiplier,
+                        up_item=up_item,
+                    )
+                else:
+                    # C28/S13/S14 alter quantity or currency settlement, not
+                    # which pool entry is selected.
+                    current_hextech_probability_by_identity = personal_probability_by_identity
 
         probabilities = []
         for item in pool.items:
-            probability = float(item.weight / total_weight)
+            base_probability = (
+                max(0.0, float(item.weight or 0)) / total_weight
+                if max(0.0, float(item.weight or 0)) > 0 else 0.0
+            )
+            probability = personal_probability_by_identity.get(id(item), 0.0)
             item_name = "未知物品"
             item_rarity = 1
             if item.item_type == "rod":
@@ -152,17 +267,199 @@ class GachaService:
             elif item.item_type == "coins":
                 item_name = f"{item.quantity} 金币"
             elif item.item_type == "titles":
-                item_name = self.item_template_repo.get_title_by_id(item.item_id).name
+                title = self.item_template_repo.get_title_by_id(item.item_id)
+                item_name = title.name if title else "未知称号"
 
             probabilities.append({
+                "gacha_pool_item_id": item.gacha_pool_item_id,
                 "item_type": item.item_type,
                 "item_id": item.item_id,
                 "item_name": item_name,
                 "item_rarity": item_rarity if item.item_type != "titles" else 0,
                 "weight": item.weight,
-                "probability": 1.0 + round(probability, 4)
+                "base_probability": round(base_probability, 8),
+                "probability": round(probability, 8),
+                "current_hextech_probability": (
+                    round(current_hextech_probability_by_identity.get(id(item), 0.0), 8)
+                    if current_hextech_probability_by_identity is not None else None
+                ),
+                "hard_pity_probability": (
+                    round(hard_pity_probability_by_identity.get(id(item), 0.0), 8)
+                    if hard_pity_probability_by_identity is not None else None
+                ),
+                "is_personal_up": bool(up_item and item is up_item),
             })
-        return {"success": True, "pool": pool, "probabilities": probabilities}
+        personal_up = None
+        if up_item:
+            personal_up = self._format_up_item(up_item, self._get_item_rarity(up_item, template_cache))
+        return {
+            "success": True,
+            "pool": pool,
+            "probabilities": probabilities,
+            "personal_up": personal_up,
+            "up_warning": up_warning,
+            "current_hextech_effect_id": current_hextech_effect_id,
+        }
+
+    def _validate_user_up(
+        self, pool: GachaPool, item_pool_id: int, cache: Optional[dict] = None
+    ) -> Tuple[Optional[GachaPoolItem], Optional[str]]:
+        cache = cache if cache is not None else {}
+        try:
+            target_id = int(item_pool_id)
+        except (TypeError, ValueError):
+            return None, "UP奖品条目编号无效"
+        target = next(
+            (item for item in pool.items
+             if int(getattr(item, "gacha_pool_item_id", -1)) == target_id),
+            None,
+        )
+        if target is None:
+            return None, "该奖品条目不属于此卡池，或已被删除"
+        if target.item_type == "coins":
+            return None, "金币奖励不能设置为UP"
+        if float(getattr(target, "weight", 0) or 0) <= 0:
+            return None, "该奖品权重必须大于0才能设置为UP"
+        rarity = self._get_item_rarity(target, cache)
+        if rarity <= 0:
+            return None, "该奖品模板不存在或没有有效星级"
+        alternatives = [
+            item for item in pool.items
+            if item.item_type != "coins"
+            and (item.item_type, int(item.item_id)) != (target.item_type, int(target.item_id))
+            and float(getattr(item, "weight", 0) or 0) > 0
+            and self._get_item_rarity(item, cache) == rarity
+        ]
+        if not alternatives:
+            return None, f"{rarity}星没有其他正权重奖品，无法满足同星级50%分配"
+        return target, None
+
+    def _resolve_user_up(
+        self, user_id: str, pool: GachaPool, cache: Optional[dict] = None
+    ) -> Tuple[Optional[GachaPoolItem], Optional[str]]:
+        get_choice = getattr(self.gacha_repo, "get_user_up", None)
+        if not callable(get_choice):
+            return None, None
+        choice = get_choice(str(user_id), int(pool.gacha_pool_id))
+        if not choice:
+            take_invalidation = getattr(
+                self.gacha_repo, "take_user_up_invalidation", None
+            )
+            reason = (
+                take_invalidation(str(user_id), int(pool.gacha_pool_id))
+                if callable(take_invalidation)
+                else None
+            )
+            if reason:
+                return None, f"原个人UP已失效并自动关闭：{reason}。请重新选择。"
+            return None, None
+        item_pool_id = getattr(choice, "up_pool_item_id", None)
+        target, error = self._validate_user_up(pool, item_pool_id, cache)
+        if error:
+            invalidate_choice = getattr(self.gacha_repo, "invalidate_user_up", None)
+            take_invalidation = getattr(
+                self.gacha_repo, "take_user_up_invalidation", None
+            )
+            if callable(invalidate_choice):
+                invalidate_choice(str(user_id), int(pool.gacha_pool_id), error)
+                stored_reason = (
+                    take_invalidation(str(user_id), int(pool.gacha_pool_id))
+                    if callable(take_invalidation)
+                    else error
+                )
+                error = stored_reason or error
+            else:
+                delete_choice = getattr(self.gacha_repo, "delete_user_up", None)
+                if callable(delete_choice):
+                    delete_choice(str(user_id), int(pool.gacha_pool_id))
+            return None, f"原个人UP已失效并自动关闭：{error}。请重新选择。"
+        return target, None
+
+    def _format_up_item(self, item: GachaPoolItem, rarity: int) -> Dict[str, Any]:
+        template = self._get_template(item.item_type, item.item_id, {})
+        return {
+            "entry_id": int(item.gacha_pool_item_id),
+            "item_type": item.item_type,
+            "item_id": int(item.item_id),
+            "item_name": getattr(template, "name", "未知物品"),
+            "rarity": int(rarity),
+        }
+
+    def get_user_up_overview(self, user_id: str) -> List[Dict[str, Any]]:
+        """Return this account's currently valid UP choice for every pool."""
+        output = []
+        with self._account_lock(user_id):
+            try:
+                pools = self.gacha_repo.get_all_pools()
+            except Exception:
+                return output
+            cache: dict = {}
+            for pool in pools:
+                item, warning = self._resolve_user_up(user_id, pool, cache)
+                output.append({
+                    "pool_id": int(pool.gacha_pool_id),
+                    "pool_name": pool.name,
+                    "up": self._format_up_item(item, self._get_item_rarity(item, cache)) if item else None,
+                    "warning": warning,
+                })
+        return output
+
+    def set_user_up(self, user_id: str, pool_id: int, item_pool_id: int) -> Dict[str, Any]:
+        """Set the caller's choice in one pool; no global pool state is changed."""
+        user_id = str(user_id)
+        with self._account_lock(user_id):
+            if not self.user_repo.get_by_id(user_id):
+                return {"success": False, "message": "您还没有注册，请先使用 /注册 命令注册。"}
+            pool = self.gacha_repo.get_pool_by_id(int(pool_id))
+            if not pool:
+                return {"success": False, "message": "该卡池不存在"}
+            target, error = self._validate_user_up(pool, item_pool_id)
+            if error:
+                return {"success": False, "message": error}
+            set_choice = getattr(self.gacha_repo, "set_user_up", None)
+            if not callable(set_choice):
+                return {"success": False, "message": "当前抽卡仓储未启用个人UP存储"}
+            set_choice(user_id, int(pool_id), int(item_pool_id))
+            rarity = self._get_item_rarity(target, {})
+            return {
+                "success": True,
+                "pool": pool,
+                "up": self._format_up_item(target, rarity),
+                "message": f"已将「{pool.name}」的个人UP设为「{self._format_up_item(target, rarity)['item_name']}」（{rarity}星）。最终抽到{rarity}星时有50%命中该UP，下一次抽卡生效。",
+            }
+
+    def close_user_up(self, user_id: str, pool_id: int) -> Dict[str, Any]:
+        """Close the caller's choice in one pool. Repeated closes are successful."""
+        user_id = str(user_id)
+        with self._account_lock(user_id):
+            if not self.user_repo.get_by_id(user_id):
+                return {"success": False, "message": "您还没有注册，请先使用 /注册 命令注册。"}
+            if not self.gacha_repo.get_pool_by_id(int(pool_id)):
+                return {"success": False, "message": "该卡池不存在"}
+            delete_choice = getattr(self.gacha_repo, "delete_user_up", None)
+            if not callable(delete_choice):
+                return {"success": False, "message": "当前抽卡仓储未启用个人UP存储"}
+            delete_choice(user_id, int(pool_id))
+            clear_invalidation = getattr(
+                self.gacha_repo, "clear_user_up_invalidation", None
+            )
+            if callable(clear_invalidation):
+                clear_invalidation(user_id, int(pool_id))
+            return {"success": True, "message": f"已关闭卡池 {int(pool_id)} 的个人UP。"}
+
+    def get_user_up(self, user_id: str, pool_id: int) -> Dict[str, Any]:
+        """Query and validate the caller's choice for a pool."""
+        with self._account_lock(user_id):
+            pool = self.gacha_repo.get_pool_by_id(int(pool_id))
+            if not pool:
+                return {"success": False, "message": "该卡池不存在"}
+            item, warning = self._resolve_user_up(str(user_id), pool, {})
+            return {
+                "success": True,
+                "pool": pool,
+                "up": self._format_up_item(item, self._get_item_rarity(item, {})) if item else None,
+                "warning": warning,
+            }
 
     def perform_draw(
         self,
@@ -171,6 +468,25 @@ class GachaService:
         num_draws: int = 1,
         is_daily_free: bool = False,
     ) -> Dict[str, Any]:
+        try:
+            num_draws = int(num_draws)
+        except (TypeError, ValueError):
+            return {"success": False, "message": "抽卡数量无效"}
+        if num_draws <= 0:
+            return {"success": False, "message": "抽卡数量必须大于0"}
+        if num_draws > self.max_draws_per_request:
+            return {
+                "success": False,
+                "message": f"单次最多只能抽 {self.max_draws_per_request} 张",
+            }
+        with self._account_lock(user_id):
+            return self._perform_draw_locked(
+                str(user_id), int(pool_id), num_draws, is_daily_free
+            )
+
+    def _perform_draw_locked(
+        self, user_id: str, pool_id: int, num_draws: int, is_daily_free: bool
+    ) -> Dict[str, Any]:
         user = self.user_repo.get_by_id(user_id)
         if not user:
             return {"success": False, "message": "用户不存在"}
@@ -178,6 +494,12 @@ class GachaService:
         pool = self.gacha_repo.get_pool_by_id(pool_id)
         if not pool or not pool.items:
             return {"success": False, "message": "卡池不存在或卡池为空"}
+
+        # The pool and this account's UP choice form one immutable request snapshot.
+        template_cache: dict = {}
+        up_item, up_warning = self._resolve_user_up(user_id, pool, template_cache)
+        if up_warning:
+            return {"success": False, "message": up_warning}
 
         # 每日补给限制检查。兼容旧库将签到池存成 1 点高级货币的情况，
         # 只有签到/AI显式传入 is_daily_free 才免除该成本。
@@ -238,10 +560,11 @@ class GachaService:
                 return {"success": False, "message": f"金币不足，需要 {total_coin_cost} 金币"}
 
         # 初始化缓存、保底、批量收集器
-        template_cache: dict = {}
         total_coin_reward = 0
         log_records: List[GachaRecord] = []
         granted_rewards = []
+        pending_awards = []
+        up_hit_count = 0
         current_pity = 0
         max_rarity = 0
 
@@ -272,11 +595,11 @@ class GachaService:
         reference_value = lambda item: self._hextech_gacha_reward_value(item, template_cache)
         hextech_chance = self._hextech_gacha_chance(
             effect_id, effect_params, pool, template_cache, use_pity,
-            pool_max_rarity, reference_value, ev_budget,
+            pool_max_rarity, reference_value, ev_budget, up_item,
         )
         hextech_weight_multiplier = self._hextech_gacha_weight_multiplier(
             effect_id, effect_params, pool, template_cache, use_pity,
-            reference_value, ev_budget,
+            reference_value, ev_budget, up_item,
         )
         hextech_quantity_fraction = self._bounded_float(
             effect_params.get("fraction", 0.0), 0.0, 1.0
@@ -291,6 +614,7 @@ class GachaService:
             long_run_value = expected_cycle_value(
                 pool.items, lambda item: self._get_item_rarity(item, template_cache),
                 reference_value, self.pity_threshold if use_pity else 0,
+                up_item=up_item,
             )
             refund_fraction = max_coin_refund_fraction(
                 ev_budget, long_run_value, int(getattr(pool, "cost_coins", 0) or 0),
@@ -310,7 +634,7 @@ class GachaService:
             hextech_s14_bonus_coins = int(math.floor(coin_cost * hextech_s14_bonus_cap + 1e-9))
             hextech_chance = self._bounded_coin_bonus_chance(
                 pool, template_cache, use_pity, ev_budget,
-                hextech_chance, hextech_s14_bonus_coins,
+                hextech_chance, hextech_s14_bonus_coins, up_item,
             )
         elif effect_id == "S14":
             # Do not report an active chance for free or premium-currency draws.
@@ -360,6 +684,17 @@ class GachaService:
                     drawn_item = second
                     hextech_triggered_count += 1
 
+            # UP is applied to the final candidate after pity and C27/P13, but
+            # before reward-type effects such as C28 and S14 are evaluated.
+            drawn_item, is_up = apply_personal_up_to_draw(
+                drawn_item,
+                pool.items,
+                lambda item: self._get_item_rarity(item, template_cache),
+                up_item,
+            )
+            if is_up:
+                up_hit_count += 1
+
             reward_quantity = int(getattr(drawn_item, "quantity", 1) or 1)
             if (
                 effect_id == "C28" and drawn_item.item_type in ("bait", "item")
@@ -378,29 +713,24 @@ class GachaService:
                 hextech_s14_bonus_coins_total += extra_coin_reward
                 hextech_triggered_count += 1
 
-            # 发放奖励 + 收集模板数据
+            # Collect the reward snapshot first. Currency is settled atomically
+            # before any inventory/title grant is written.
             item_name = "未知物品"
             item_rarity = 1
             template = None
 
             if drawn_item.item_type == "rod":
                 template = self._get_template("rod", drawn_item.item_id, template_cache)
-                durability = template.durability if template else None
-                self.inventory_repo.add_rod_instance(user_id, drawn_item.item_id, durability)
             elif drawn_item.item_type == "accessory":
-                self.inventory_repo.add_accessory_instance(user_id, drawn_item.item_id)
                 template = self._get_template("accessory", drawn_item.item_id, template_cache)
             elif drawn_item.item_type == "bait":
-                self.inventory_repo.update_bait_quantity(user_id, drawn_item.item_id, reward_quantity)
                 template = self._get_template("bait", drawn_item.item_id, template_cache)
             elif drawn_item.item_type == "item":
-                self.inventory_repo.update_item_quantity(user_id, drawn_item.item_id, reward_quantity)
                 template = self._get_template("item", drawn_item.item_id, template_cache)
             elif drawn_item.item_type == "coins":
                 total_coin_reward += reward_quantity
                 item_name = f"{reward_quantity} 金币"
             elif drawn_item.item_type == "titles":
-                self.achievement_repo.grant_title_to_user(user_id, drawn_item.item_id)
                 template = self._get_template("titles", drawn_item.item_id, template_cache)
 
             if template:
@@ -418,7 +748,16 @@ class GachaService:
                     "id": drawn_item.item_id,
                     "name": item_name,
                     "rarity": item_rarity,
-                    "quantity": reward_quantity if drawn_item.item_type in ("bait", "item") else 1
+                    "quantity": reward_quantity if drawn_item.item_type in ("bait", "item") else 1,
+                    "is_up": is_up,
+                })
+
+            if drawn_item.item_type not in ("coins",):
+                pending_awards.append({
+                    "item_type": drawn_item.item_type,
+                    "item_id": drawn_item.item_id,
+                    "quantity": reward_quantity,
+                    "durability": getattr(template, "durability", None),
                 })
 
             # 收集日志
@@ -440,16 +779,46 @@ class GachaService:
             return {"success": False, "message": "抽卡失败，请检查卡池配置"}
 
         # 批量结算
-        if use_premium_currency:
-            user.premium_currency -= total_premium_cost
-        else:
-            user.coins -= total_coin_cost
-        if total_coin_reward > 0:
-            user.coins += total_coin_reward
         hextech_refund_coins = hextech_s13_refund_per_draw * num_draws
-        if hextech_refund_coins > 0:
-            user.coins += hextech_refund_coins
-        self.user_repo.update(user)
+        charged_coin_cost = 0 if use_premium_currency else total_coin_cost
+        coin_delta = total_coin_reward + hextech_refund_coins - charged_coin_cost
+        premium_delta = -total_premium_cost if use_premium_currency else 0
+        adjust_balance = getattr(self.user_repo, "adjust_balance", None)
+        if callable(adjust_balance):
+            balance_updated = adjust_balance(
+                user_id,
+                coins_delta=coin_delta,
+                premium_currency_delta=premium_delta,
+                required_coins=charged_coin_cost,
+                required_premium_currency=total_premium_cost,
+            )
+        else:
+            # Compatibility for older repository fakes/adapters. Production
+            # SqliteUserRepository uses the atomic path above.
+            latest_user = self.user_repo.get_by_id(user_id)
+            balance_updated = bool(latest_user)
+            if balance_updated:
+                latest_user.coins += coin_delta
+                latest_user.premium_currency += premium_delta
+                balance_updated = latest_user.coins >= 0 and latest_user.premium_currency >= 0
+                if balance_updated:
+                    self.user_repo.update(latest_user)
+        if not balance_updated:
+            return {"success": False, "message": "余额已变化或不足，本次抽卡未结算，请重试"}
+
+        for award in pending_awards:
+            item_type = award["item_type"]
+            item_id = award["item_id"]
+            if item_type == "rod":
+                self.inventory_repo.add_rod_instance(user_id, item_id, award["durability"])
+            elif item_type == "accessory":
+                self.inventory_repo.add_accessory_instance(user_id, item_id)
+            elif item_type == "bait":
+                self.inventory_repo.update_bait_quantity(user_id, item_id, award["quantity"])
+            elif item_type == "item":
+                self.inventory_repo.update_item_quantity(user_id, item_id, award["quantity"])
+            elif item_type == "titles":
+                self.achievement_repo.grant_title_to_user(user_id, item_id)
 
         if log_records:
             self.log_repo.add_gacha_records_batch(log_records)
@@ -460,6 +829,10 @@ class GachaService:
         return {
             "success": True,
             "results": granted_rewards,
+            "up_hit_count": up_hit_count,
+            "personal_up": self._format_up_item(
+                up_item, self._get_item_rarity(up_item, template_cache)
+            ) if up_item else None,
             "pity": current_pity,
             "pity_threshold": self.pity_threshold if use_pity else 0,
             "hextech_refund_coins": hextech_refund_coins,
@@ -532,7 +905,7 @@ class GachaService:
     def _hextech_gacha_chance(
         self, effect_id: Optional[str], params: Dict[str, Any], pool: GachaPool,
         cache: dict, use_pity: bool, max_rarity: int,
-        value_of, budget: float,
+        value_of, budget: float, up_item: Optional[GachaPoolItem] = None,
     ) -> float:
         requested = self._bounded_float(params.get("chance", 0.0), 0.0, 1.0)
         rarity_of = lambda item: self._get_item_rarity(item, cache)
@@ -540,11 +913,13 @@ class GachaService:
         if effect_id in {"C27", "P13"}:
             return max_chance_for_budget(
                 pool.items, rarity_of, value_of, budget, requested,
-                pity_threshold, effect_id,
+                pity_threshold, effect_id, up_item=up_item,
             )
         if effect_id == "C28":
             fraction = self._bounded_float(params.get("fraction", 0.0), 0.0, 1.0)
-            baseline = expected_cycle_value(pool.items, rarity_of, value_of, pity_threshold)
+            baseline = expected_cycle_value(
+                pool.items, rarity_of, value_of, pity_threshold, up_item=up_item
+            )
             if baseline is None or baseline <= 0:
                 return max_quantity_bonus_chance(
                     pool.items, budget, requested, fraction
@@ -559,7 +934,9 @@ class GachaService:
                 quantity = max(1, int(getattr(item, "quantity", 1) or 1))
                 return float(base) * quantity_bonus(quantity, fraction) / quantity
 
-            bonus_ev = expected_cycle_value(pool.items, rarity_of, bonus_value, pity_threshold)
+            bonus_ev = expected_cycle_value(
+                pool.items, rarity_of, bonus_value, pity_threshold, up_item=up_item
+            )
             if bonus_ev is None or bonus_ev <= 0:
                 return max_quantity_bonus_chance(pool.items, budget, requested, fraction)
             return min(requested, budget * baseline / bonus_ev)
@@ -572,6 +949,7 @@ class GachaService:
     def _hextech_gacha_weight_multiplier(
         self, effect_id: Optional[str], params: Dict[str, Any], pool: GachaPool,
         cache: dict, use_pity: bool, value_of, budget: float,
+        up_item: Optional[GachaPoolItem] = None,
     ) -> float:
         if effect_id != "G13":
             return 1.0
@@ -579,12 +957,13 @@ class GachaService:
         rarity_of = lambda item: self._get_item_rarity(item, cache)
         return max_weight_multiplier_for_budget(
             pool.items, rarity_of, value_of, budget, requested,
-            self.pity_threshold if use_pity else 0,
+            self.pity_threshold if use_pity else 0, up_item=up_item,
         )
 
     def _bounded_coin_bonus_chance(
         self, pool: GachaPool, cache: dict, use_pity: bool, budget: float,
         requested: float, bonus_coins: int,
+        up_item: Optional[GachaPoolItem] = None,
     ) -> float:
         if bonus_coins <= 0 or budget <= 0:
             return 0.0
@@ -598,6 +977,7 @@ class GachaService:
             budget,
             requested,
             pity_threshold,
+            up_item=up_item,
         )
 
     def _get_template(self, item_type: str, item_id: int, cache: dict):

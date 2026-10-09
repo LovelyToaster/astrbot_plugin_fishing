@@ -143,6 +143,14 @@ class UserGachaPity:
     current_pity: int = 0
 
 @dataclass
+class UserGachaUp:
+    """代表用户在一个卡池中选择的个人 UP 奖品条目。"""
+    user_id: str
+    gacha_pool_id: int
+    up_pool_item_id: int
+    updated_at: Optional[str] = None
+
+@dataclass
 class Commodity:
     """代表一种大宗商品的模板信息"""
     commodity_id: str  # e.g., 'dried_fish', 'fish_roe', 'fish_oil'

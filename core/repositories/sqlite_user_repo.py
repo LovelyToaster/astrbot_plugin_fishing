@@ -194,6 +194,68 @@ class SqliteUserRepository(AbstractUserRepository):
             logger.error(f"更新用户 {user.user_id} 数据时发生数据库错误: {e}")
             raise
 
+    def adjust_balance(
+        self,
+        user_id: str,
+        coins_delta: int = 0,
+        premium_currency_delta: int = 0,
+        required_coins: int = 0,
+        required_premium_currency: int = 0,
+    ) -> bool:
+        """Atomically adjust currencies without overwriting unrelated user fields."""
+        coins_delta = int(coins_delta)
+        premium_currency_delta = int(premium_currency_delta)
+        required_coins = max(0, int(required_coins))
+        required_premium_currency = max(0, int(required_premium_currency))
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE users
+                    SET coins = coins + ?,
+                        premium_currency = premium_currency + ?,
+                        max_coins = MAX(COALESCE(max_coins, 0), coins + ?)
+                    WHERE user_id = ?
+                      AND COALESCE(coins, 0) >= ?
+                      AND COALESCE(premium_currency, 0) >= ?
+                      AND coins + ? >= 0
+                      AND premium_currency + ? >= 0
+                    """,
+                    (
+                        coins_delta,
+                        premium_currency_delta,
+                        coins_delta,
+                        str(user_id),
+                        required_coins,
+                        required_premium_currency,
+                        coins_delta,
+                        premium_currency_delta,
+                    ),
+                )
+                updated = cursor.rowcount == 1
+                if updated:
+                    conn.commit()
+            if updated and coins_delta and self.statistics_repo:
+                try:
+                    self.statistics_repo.add_log(
+                        user_id=str(user_id),
+                        action_type="coin_earn" if coins_delta > 0 else "coin_spend",
+                        success=True,
+                        coin_amount=coins_delta,
+                        details={"source": "atomic_balance_adjustment"},
+                    )
+                except Exception as log_error:
+                    # The currency update is already committed; a secondary
+                    # statistics failure must not interrupt reward settlement.
+                    logger.error(
+                        f"已更新用户 {user_id} 余额，但记录货币统计日志失败: {log_error}"
+                    )
+            return updated
+        except sqlite3.Error as e:
+            logger.error(f"原子更新用户 {user_id} 货币余额时发生数据库错误: {e}")
+            raise
+
     def get_all_user_ids(self, auto_fishing_only: bool = False) -> List[str]:
         query = "SELECT user_id FROM users"
         if auto_fishing_only:

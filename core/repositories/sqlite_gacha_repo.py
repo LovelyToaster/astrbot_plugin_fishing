@@ -4,7 +4,7 @@ from typing import Optional, List, Dict, Any
 
 # 导入抽象基类和领域模型
 from .abstract_repository import AbstractGachaRepository
-from ..domain.models import GachaPool, GachaPoolItem, UserGachaPity
+from ..domain.models import GachaPool, GachaPoolItem, UserGachaPity, UserGachaUp
 
 class SqliteGachaRepository(AbstractGachaRepository):
     """抽卡仓储的SQLite实现"""
@@ -266,13 +266,74 @@ class SqliteGachaRepository(AbstractGachaRepository):
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            current = cursor.execute(
+                "SELECT item_type, item_id, weight FROM gacha_pool_items WHERE gacha_pool_item_id = ?",
+                (int(item_pool_id),),
+            ).fetchone()
+            old_identity = (
+                (str(current["item_type"]), int(current["item_id"]))
+                if current else None
+            )
+            new_identity = old_identity
+            if "item_full_id" in data and data["item_full_id"]:
+                parts = str(data["item_full_id"]).split("-", 1)
+                if len(parts) == 2:
+                    try:
+                        new_identity = (parts[0], int(parts[1]))
+                    except ValueError:
+                        pass
+            new_weight = data.get("weight", current["weight"] if current else None)
             cursor.execute(query, tuple(params))
+            invalidation_reason = None
+            if old_identity and new_identity and old_identity != new_identity:
+                invalidation_reason = "所选奖品条目的物品身份已修改"
+            else:
+                try:
+                    if new_weight is not None and float(new_weight) <= 0:
+                        invalidation_reason = "所选奖品权重已不再大于0"
+                except (TypeError, ValueError):
+                    pass
+            if invalidation_reason:
+                rows = cursor.execute(
+                    "SELECT user_id, gacha_pool_id FROM user_gacha_up WHERE up_pool_item_id = ?",
+                    (int(item_pool_id),),
+                ).fetchall()
+                for row in rows:
+                    cursor.execute(
+                        """
+                        INSERT INTO user_gacha_up_invalidations (user_id, gacha_pool_id, reason)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(user_id, gacha_pool_id) DO UPDATE SET
+                            reason = excluded.reason,
+                            created_at = CURRENT_TIMESTAMP
+                        """,
+                        (row["user_id"], row["gacha_pool_id"], invalidation_reason),
+                    )
+                cursor.execute(
+                    "DELETE FROM user_gacha_up WHERE up_pool_item_id = ?",
+                    (int(item_pool_id),),
+                )
             conn.commit()
 
     def delete_pool_item(self, item_pool_id: int) -> None:
         """后台删除一个抽卡池物品"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            rows = cursor.execute(
+                "SELECT user_id, gacha_pool_id FROM user_gacha_up WHERE up_pool_item_id = ?",
+                (int(item_pool_id),),
+            ).fetchall()
+            for row in rows:
+                cursor.execute(
+                    """
+                    INSERT INTO user_gacha_up_invalidations (user_id, gacha_pool_id, reason)
+                    VALUES (?, ?, '所选奖品条目已删除')
+                    ON CONFLICT(user_id, gacha_pool_id) DO UPDATE SET
+                        reason = excluded.reason,
+                        created_at = CURRENT_TIMESTAMP
+                    """,
+                    (row["user_id"], row["gacha_pool_id"]),
+                )
             cursor.execute("DELETE FROM gacha_pool_items WHERE gacha_pool_item_id = ?", (item_pool_id,))
             conn.commit()
 
@@ -295,5 +356,158 @@ class SqliteGachaRepository(AbstractGachaRepository):
             cursor.execute(
                 "INSERT OR REPLACE INTO user_gacha_pity (user_id, gacha_pool_id, current_pity) VALUES (?, ?, ?)",
                 (user_id, pool_id, current_pity)
+            )
+            conn.commit()
+
+    # --- Personal UP Methods ---
+    def get_user_up(self, user_id: str, pool_id: int) -> Optional[UserGachaUp]:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT user_id, gacha_pool_id, up_pool_item_id, updated_at
+                FROM user_gacha_up
+                WHERE user_id = ? AND gacha_pool_id = ?
+                """,
+                (str(user_id), int(pool_id)),
+            ).fetchone()
+            if not row:
+                return None
+            return UserGachaUp(
+                user_id=row["user_id"],
+                gacha_pool_id=row["gacha_pool_id"],
+                up_pool_item_id=row["up_pool_item_id"],
+                updated_at=row["updated_at"],
+            )
+
+    def get_user_up_choices(self, user_id: str) -> List[UserGachaUp]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT user_id, gacha_pool_id, up_pool_item_id, updated_at
+                FROM user_gacha_up
+                WHERE user_id = ?
+                ORDER BY gacha_pool_id
+                """,
+                (str(user_id),),
+            ).fetchall()
+            return [
+                UserGachaUp(
+                    user_id=row["user_id"],
+                    gacha_pool_id=row["gacha_pool_id"],
+                    up_pool_item_id=row["up_pool_item_id"],
+                    updated_at=row["updated_at"],
+                )
+                for row in rows
+            ]
+
+    def get_all_user_up_choices(self) -> List[UserGachaUp]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT user_id, gacha_pool_id, up_pool_item_id, updated_at
+                FROM user_gacha_up
+                ORDER BY user_id, gacha_pool_id
+                """
+            ).fetchall()
+            return [
+                UserGachaUp(
+                    user_id=row["user_id"],
+                    gacha_pool_id=row["gacha_pool_id"],
+                    up_pool_item_id=row["up_pool_item_id"],
+                    updated_at=row["updated_at"],
+                )
+                for row in rows
+            ]
+
+    def set_user_up(self, user_id: str, pool_id: int, item_pool_id: int) -> None:
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_gacha_up (user_id, gacha_pool_id, up_pool_item_id, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id, gacha_pool_id) DO UPDATE SET
+                    up_pool_item_id = excluded.up_pool_item_id,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (str(user_id), int(pool_id), int(item_pool_id)),
+            )
+            conn.execute(
+                "DELETE FROM user_gacha_up_invalidations WHERE user_id = ? AND gacha_pool_id = ?",
+                (str(user_id), int(pool_id)),
+            )
+            conn.commit()
+
+    def delete_user_up(self, user_id: str, pool_id: int) -> None:
+        with self._get_connection() as conn:
+            conn.execute(
+                "DELETE FROM user_gacha_up WHERE user_id = ? AND gacha_pool_id = ?",
+                (str(user_id), int(pool_id)),
+            )
+            conn.commit()
+
+    def invalidate_user_up(self, user_id: str, pool_id: int, reason: str) -> None:
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_gacha_up_invalidations (user_id, gacha_pool_id, reason)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, gacha_pool_id) DO UPDATE SET
+                    reason = excluded.reason,
+                    created_at = CURRENT_TIMESTAMP
+                """,
+                (str(user_id), int(pool_id), str(reason)),
+            )
+            conn.execute(
+                "DELETE FROM user_gacha_up WHERE user_id = ? AND gacha_pool_id = ?",
+                (str(user_id), int(pool_id)),
+            )
+            conn.commit()
+
+    def invalidate_user_ups_by_item(self, item_pool_id: int, reason: str) -> None:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT user_id, gacha_pool_id FROM user_gacha_up WHERE up_pool_item_id = ?",
+                (int(item_pool_id),),
+            ).fetchall()
+            for row in rows:
+                conn.execute(
+                    """
+                    INSERT INTO user_gacha_up_invalidations (user_id, gacha_pool_id, reason)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(user_id, gacha_pool_id) DO UPDATE SET
+                        reason = excluded.reason,
+                        created_at = CURRENT_TIMESTAMP
+                    """,
+                    (row["user_id"], row["gacha_pool_id"], str(reason)),
+                )
+            conn.execute(
+                "DELETE FROM user_gacha_up WHERE up_pool_item_id = ?",
+                (int(item_pool_id),),
+            )
+            conn.commit()
+
+    def take_user_up_invalidation(self, user_id: str, pool_id: int) -> Optional[str]:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT reason FROM user_gacha_up_invalidations
+                WHERE user_id = ? AND gacha_pool_id = ?
+                """,
+                (str(user_id), int(pool_id)),
+            ).fetchone()
+            if not row:
+                return None
+            conn.execute(
+                "DELETE FROM user_gacha_up_invalidations WHERE user_id = ? AND gacha_pool_id = ?",
+                (str(user_id), int(pool_id)),
+            )
+            conn.commit()
+            return str(row["reason"])
+
+    def clear_user_up_invalidation(self, user_id: str, pool_id: int) -> None:
+        with self._get_connection() as conn:
+            conn.execute(
+                "DELETE FROM user_gacha_up_invalidations WHERE user_id = ? AND gacha_pool_id = ?",
+                (str(user_id), int(pool_id)),
             )
             conn.commit()
