@@ -20,6 +20,15 @@ V4_EV_BUDGETS = {"silver": 0.04, "gold": 0.055, "prismatic": 0.07}
 GIFT_STRENGTH = 0.25
 
 TIER_LABELS = {"silver": "白银", "gold": "黄金", "prismatic": "棱彩"}
+OPERATION_LABELS = {
+    "fishing": "钓鱼",
+    "steal": "偷鱼",
+    "electric": "电鱼",
+    "gacha": "抽卡",
+    "wipe": "擦弹",
+    "wheel": "命运之轮",
+    "bonus": "海克斯赠卡",
+}
 
 
 def _entry(effect_id: str, name: str, pool: str, text: str,
@@ -740,7 +749,7 @@ def _expansion_description(effect: Dict[str, Any]) -> str:
     descriptions = {
         "C21": "有机会抽取两条候选，偷走更值钱的一条，每次仍只拿一条鱼",
         "C22": "偷到普通品质鱼时，有机会把同一条鱼变成高品质；鱼种与稀有度不变",
-        "C23": "成功偷鱼后的冷却缩短，按今日收获提升目标调整",
+        "C23": "成功偷鱼后缩短下一次偷鱼的等待时间；不缩短钓鱼或电鱼冷却，实际缩短幅度按收益上限调整",
         "S11": "初选鱼属于目标鱼塘价值最低的四分之一时，有机会再挑一次并保留更值钱的一条",
         "G11": "有机会抽取三条候选，只偷走更值钱的一条",
         "P11": "有机会改从目标鱼塘当前最高档的鱼中挑选，每次仍只拿一条鱼",
@@ -750,12 +759,12 @@ def _expansion_description(effect: Dict[str, Any]) -> str:
         "S12": "电鱼小成功有机会提升为普通成功，再按对应规则决定捕获数量",
         "G12": "成功电鱼后，有机会将捕获中最便宜的鱼与剩余鱼塘再抽的一条择优，总数量不增加",
         "P12": "电鱼小成功或普通成功有机会提升一档，最多提升一次",
-        "C27": "抽到当前卡池最低档奖励时，有机会再抽一次，只发放更高档结果；保底结果不会重抽",
+        "C27": "非保底抽卡抽到当前卡池最低星级奖励时，有机会额外抽取一个候选；星级更高才替换原奖励，仍只发放一份",
         "C28": "抽到鱼饵或可堆叠道具时，有机会增加 " + pct("fraction") + " 数量，至少增加一个",
         "S13": "金币付费抽卡后返还部分实付金币，最多返还 " + pct("fraction") + "，每抽最多 {} 金币；免费及高级货币抽卡不返费".format(coins(params.get("bonus_cap", 0))),
-        "S14": "金币付费抽卡抽中金币奖励时，有机会额外获得最多单抽费用 {:.1f}% 的小红包".format(float(params.get("bonus_cap", 0)) * 100),
-        "G13": "提高当前卡池最高档非金币奖励的权重，最多 ×{:.2f}".format(float(params.get("weight_multiplier", 1))),
-        "P13": "非保底抽取有机会生成两个候选，只发放更高档的一个；同档保留第一个",
+        "S14": "金币付费抽卡抽中金币奖励时，有机会额外获得最多单抽费用 {:.1f}% 的金币；免费抽卡和高级货币抽卡不触发".format(float(params.get("bonus_cap", 0)) * 100),
+        "G13": "提高当前卡池最高星级非金币奖励的抽取权重，最多 ×{:.2f}；权重倍率不是最终概率倍率，也不提高个人UP的同星级50%命中率".format(float(params.get("weight_multiplier", 1))),
+        "P13": "非保底抽卡有机会额外抽取一个候选，比较星级后只发放一份；同星级保留原候选，再按个人UP规则分配物品",
         "C29": "擦弹回报低于投入一半时，有机会重抽一次并择优，新增金额最多为投入的 " + pct("fraction"),
         "C30": "擦弹最终亏损时补回部分损失，最多补回亏损的 " + pct("fraction"),
         "S15": "擦弹回报在投入的80%至100%之间时，有机会补到刚好回本",
@@ -774,14 +783,14 @@ def _expansion_description(effect: Dict[str, Any]) -> str:
     text = descriptions[effect_id]
     operation = EFFECTS[effect_id]["operation"]
     if operation in ("steal", "electric", "gacha"):
-        text += "；额外收益按当前玩法控制，提升目标最多 " + pct("ev_budget")
+        text += "；实际触发概率或加成按当前玩法的收益上限调整"
     elif operation == "wipe":
         text += "；额外补助最多 {} 金币，今日效果的长期返还率最多 {:.1f}%".format(
             coins(params.get("bonus_cap", 20000)), float(params.get("return_cap", 1)) * 100)
     return "{}：{}".format(EFFECTS[effect_id]["name"], text)
 
 
-def _effect_description(effect: Dict[str, Any], tier: str, eligible: Sequence[int],
+def _effect_description_body(effect: Dict[str, Any], tier: str, eligible: Sequence[int],
                         balance_version: int = 1) -> str:
     effect_id = effect.get("id")
     if effect_id == "C33":
@@ -917,6 +926,16 @@ def _effect_description(effect: Dict[str, Any], tier: str, eligible: Sequence[in
         parts.append("每竿随机获得一项：返还已付费用 {}、{}，或额外品质提升机会 {}".format(
             percent("fate_refund"), prices("fate_price"), percent("fate_quality_chance")))
     return "{}：{}".format(name, "；".join(parts) or EFFECTS.get(effect_id, {}).get("description", "效果参数已保存"))
+
+
+def _effect_description(effect: Dict[str, Any], tier: str, eligible: Sequence[int],
+                        balance_version: int = 1) -> str:
+    """Identify the affected game for every effect, including saved gift cards."""
+    definition = EFFECTS.get(effect.get("id"), {})
+    label = OPERATION_LABELS.get(definition.get("operation"), "未知玩法")
+    return "【{}】{}".format(
+        label, _effect_description_body(effect, tier, eligible, balance_version)
+    )
 
 
 def describe_card(card: Dict[str, Any], eligible_rarities: Iterable[int]) -> str:
