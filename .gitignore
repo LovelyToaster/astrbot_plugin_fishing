@@ -19,3 +19,7 @@ astrbot_fishing
 # Python 虚拟环境
 .venv/
 venv/
+
+# 本地文档与 Codex 工作记录
+/docs/
+/.codex/
