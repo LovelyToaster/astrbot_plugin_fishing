@@ -59,6 +59,7 @@ from .core.services.blackjack_service import BlackjackService
 from .core.services.slot_service import SlotService
 from .core.services.showcase_service import ShowcaseService
 from .core.services.hextech_service import HextechService
+from .core.services.operation_limit_service import OperationLimitService
 
 from .core.services.ai_player_service import AIPlayerService
 from .core.services.ai.feature_extractor import FeatureExtractor
@@ -119,30 +120,82 @@ _HEXTECH_ADMIN_COMMANDS = {
 
 
 def _hextech_prompt_after_command(handler):
-    """Append first-time daily offers after the original command has fully replied."""
+    """Apply shared command admission and append first-time Hextech offers."""
     @wraps(handler)
     async def wrapped(self, event, *args, **kwargs):
-        async for result in handler(self, event, *args, **kwargs):
-            yield result
-
-        # /海克斯 is the explicit card UI and handles its own first-use behavior.
+        sender_id = str(event.get_sender_id())
+        is_hextech_reset = False
         if handler.__name__ == "hextech":
-            return
+            command_parts = (getattr(event, "message_str", "") or "").strip().split()
+            if command_parts:
+                first = command_parts[0].lstrip("/")
+                action = command_parts[1] if first == "海克斯" and len(command_parts) > 1 else first
+                is_hextech_reset = action == "重置"
 
-        service = getattr(self, "hextech_service", None)
-        if service is None:
+        if handler.__name__ in _HEXTECH_ADMIN_COMMANDS or is_hextech_reset:
+            effective_user_id = sender_id
+        else:
+            effective_user_id = str(self._get_effective_user_id(event))
+
+        limit_service = getattr(self, "operation_limit_service", None)
+        admission = None
+        if limit_service is not None:
+            try:
+                admission = limit_service.try_acquire(sender_id, effective_user_id)
+            except Exception as exc:
+                logger.error(f"操作限速检查失败，已拒绝本次操作: {exc}")
+                yield event.plain_result("⏳ 当前暂时无法处理操作，请稍后重试。")
+                return
+
+            if not admission.accepted:
+                if admission.should_notify and admission.notice:
+                    yield event.plain_result(admission.notice)
+                return
+
+        async def hextech_followup():
+            # /海克斯 is the explicit card UI and handles its own first-use behavior.
+            if handler.__name__ == "hextech":
+                return
+
+            service = getattr(self, "hextech_service", None)
+            if service is None:
+                return
+
+            try:
+                if handler.__name__ in _HEXTECH_ADMIN_COMMANDS:
+                    actor_id = sender_id
+                else:
+                    actor_id = effective_user_id
+                state, created = service.ensure_daily_state(actor_id)
+                if created and state is not None:
+                    yield event.plain_result(service.render_new_offer_prompt(state, str(actor_id)))
+            except Exception as exc:
+                logger.error(f"触发每日海克斯候选失败: {exc}")
+
+        if admission is None:
+            async for result in handler(self, event, *args, **kwargs):
+                yield result
+            async for result in hextech_followup():
+                yield result
             return
 
         try:
-            if handler.__name__ in _HEXTECH_ADMIN_COMMANDS:
-                actor_id = event.get_sender_id()
-            else:
-                actor_id = self._get_effective_user_id(event)
-            state, created = service.ensure_daily_state(actor_id)
-            if created and state is not None:
-                yield event.plain_result(service.render_new_offer_prompt(state, str(actor_id)))
-        except Exception as exc:
-            logger.error(f"触发每日海克斯候选失败: {exc}")
+            command_iterator = handler(self, event, *args, **kwargs)
+            limited_stream = limit_service.stream_reserved(
+                admission.lease,
+                command_iterator,
+                after=hextech_followup,
+                command_name=handler.__name__,
+            )
+            try:
+                async for result in limited_stream:
+                    yield result
+            finally:
+                await limit_service.close_iterator(limited_stream)
+        finally:
+            # stream_reserved is also responsible for release; this idempotent
+            # guard covers an exception while constructing the handler iterator.
+            admission.lease.release()
 
     return wrapped
 
@@ -153,6 +206,8 @@ class FishingPlugin(Star):
         super().__init__(context)
         self._main_loop = asyncio.get_event_loop()
         self.config = config
+        operation_limit_config = config.get("operation_limit", {})
+        self.operation_limit_service = OperationLimitService(operation_limit_config)
 
         # --- 1. 加载配置 ---
         # 从新的嵌套结构中读取配置
@@ -343,9 +398,11 @@ class FishingPlugin(Star):
 
         # 3.3 实例化其他核心服务
         gacha_config = config.get("gacha", {})
+        operation_limit_config = config.get("operation_limit", {})
         self.gacha_service = GachaService(self.gacha_repo, self.user_repo, self.inventory_repo, self.item_template_repo,
                                          self.log_repo, self.achievement_repo,
-                                         pity_threshold=gacha_config.get("pity_threshold", 80))
+                                         pity_threshold=gacha_config.get("pity_threshold", 80),
+                                         max_draws_per_request=operation_limit_config.get("max_draws_per_request", 100))
         # UserService 依赖 GachaService，因此在 GachaService 之后实例化
         self.user_service = UserService(self.user_repo, self.log_repo, self.inventory_repo, self.item_template_repo, self.gacha_service, self.game_config, self.achievement_repo)
         self.inventory_service = InventoryService(
@@ -1038,6 +1095,7 @@ class FishingPlugin(Star):
     # =========== 基础与核心 ==========
 
     @filter.command("海克斯")
+    @_hextech_prompt_after_command
     async def hextech(self, event: AstrMessageEvent):
         """查看、刷新或选择今日海克斯卡。用法：/海克斯 [刷新/1/2/3/重置]"""
         raw_text = (getattr(event, "message_str", "") or "").strip()

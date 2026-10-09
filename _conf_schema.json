@@ -705,6 +705,66 @@
       }
     }
   },
+  "operation_limit": {
+    "description": "前台游戏指令限速与并发保护",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用用户级操作限速",
+        "type": "bool",
+        "hint": "关闭后仍保留全局并发上限；用户令牌桶和单用户并发上限停用",
+        "default": true
+      },
+      "user_interval_seconds": {
+        "description": "用户令牌补充间隔（秒）",
+        "type": "float",
+        "hint": "默认每2秒补充1个操作令牌；设为0可关闭令牌限速",
+        "default": 2,
+        "min": 0
+      },
+      "user_burst": {
+        "description": "用户令牌桶容量",
+        "type": "int",
+        "hint": "允许短时间连续操作的次数，最少为1",
+        "default": 2,
+        "min": 1
+      },
+      "user_max_inflight": {
+        "description": "每用户最大同时操作数",
+        "type": "int",
+        "hint": "默认1；设为0可关闭用户并发上限。代理操作也会占用目标用户并发槽",
+        "default": 1,
+        "min": 0
+      },
+      "global_max_inflight": {
+        "description": "全局最大同时操作数",
+        "type": "int",
+        "hint": "限制所有前台游戏指令的总并发；设为0可关闭全局上限，即使用户限速关闭也独立生效",
+        "default": 4,
+        "min": 0
+      },
+      "reject_notice_interval_seconds": {
+        "description": "重复拒绝提示间隔（秒）",
+        "type": "int",
+        "hint": "同一用户在此间隔内最多收到一次限速提示；设为0表示每次拒绝都提示",
+        "default": 5,
+        "min": 0
+      },
+      "max_draws_per_request": {
+        "description": "单次抽卡请求最大抽数",
+        "type": "int",
+        "hint": "十连按总抽数计算；默认100抽，超出后请求会被拒绝",
+        "default": 100,
+        "min": 1
+      },
+      "user_overrides": {
+        "description": "单用户限速覆盖（JSON）",
+        "type": "string",
+        "hint": "输入用户ID到覆盖参数的JSON对象，例如 {\"12345\":{\"interval_seconds\":1,\"burst\":3,\"max_inflight\":2}}。interval_seconds=0关闭该用户令牌限速，max_inflight=0关闭该用户并发上限",
+        "default": "{}"
+      }
+    }
+  },
   "gacha": {
     "description": "抽卡系统配置",
     "type": "object",
